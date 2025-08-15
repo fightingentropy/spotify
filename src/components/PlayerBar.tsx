@@ -47,7 +47,7 @@ function PlayerBar(): React.ReactElement | null {
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
 
-  const src = currentSong?.audioUrl ?? null;
+  const src = currentSong?.audioUrl || null;
 
   // Client hydration of crossfade settings to ensure feature works without visiting /settings
   useEffect(() => {
@@ -152,8 +152,8 @@ function PlayerBar(): React.ReactElement | null {
       setDuration(0);
       return;
     }
-    const absolute = location.origin + src;
-    if (audio.src !== absolute) audio.src = absolute;
+    const absolute = src ? location.origin + src : null;
+    if (absolute && audio.src !== absolute) audio.src = absolute;
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
       try { other.pause(); } catch {}
@@ -226,8 +226,8 @@ function PlayerBar(): React.ReactElement | null {
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
-        const absoluteNext = location.origin + nextSong.audioUrl;
-        if (incoming.src !== absoluteNext) incoming.src = absoluteNext;
+        const absoluteNext = nextSong.audioUrl ? location.origin + nextSong.audioUrl : null;
+        if (absoluteNext && incoming.src !== absoluteNext) incoming.src = absoluteNext;
         incoming.currentTime = 0;
         incoming.volume = 0;
 
@@ -461,7 +461,7 @@ function PlayerBar(): React.ReactElement | null {
       />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
         <div className="flex items-center gap-3 sm:gap-4">
-          <img src={currentSong.imageUrl} alt="cover" className="hidden sm:block w-12 h-12 rounded object-cover" />
+          <img src={currentSong.imageUrl || undefined} alt="cover" className="hidden sm:block w-12 h-12 rounded object-cover" />
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">{currentSong.title}</div>
             <div className="text-xs opacity-70 truncate">{currentSong.artist}</div>
