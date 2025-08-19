@@ -1,54 +1,54 @@
 import { NextResponse } from "next/server";
-import { parseFile } from "music-metadata";
-import { readFile, stat } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { parseStream } from "music-metadata";
+import { Readable } from "node:stream";
+import { getObjectStream, statObject } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function safeJoin(baseDir: string, pathSegments: string[]): string | null {
-  const targetPath = resolve(baseDir, ...pathSegments);
-  const normalizedBase = resolve(baseDir) + sep;
-  if (!targetPath.startsWith(normalizedBase)) return null;
-  return targetPath;
-}
-
 export async function GET(_req: Request, { params }: { params: Promise<{ file: string[] }> }) {
-  const baseDir = join(process.cwd(), "public", "uploads", "audio");
   const { file } = await params;
   const segments = Array.isArray(file) ? file : [file];
-  const audioPath = safeJoin(baseDir, segments);
-  if (!audioPath) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
+  const objectKey = ["audio", ...segments].join("/");
 
   try {
-    // Ensure file exists
-    const s = await stat(audioPath);
-    if (!s.isFile()) throw new Error("Not a file");
-
-    const meta = await parseFile(audioPath, { duration: false, skipCovers: false });
-    const picture = meta.common.picture?.[0];
-    if (picture?.data?.length) {
-      const headers = new Headers();
-      headers.set("Content-Type", picture.format || "image/jpeg");
-      headers.set("Cache-Control", "public, max-age=604800, immutable");
-      const arrayBuffer = new ArrayBuffer(picture.data.byteLength);
-      new Uint8Array(arrayBuffer).set(picture.data);
-      return new Response(arrayBuffer, { headers });
+    const st = await statObject(objectKey).catch(() => null);
+    if (!st) throw new Error("not found");
+    const stream = await getObjectStream(objectKey);
+    try {
+      const meta = await parseStream(stream as unknown as Readable, "audio/mpeg", {
+        duration: false,
+        skipCovers: false,
+        fileSize: Number(st.size || 0),
+      } as unknown as { duration?: boolean; skipCovers?: boolean; fileSize?: number });
+      const picture = meta.common.picture?.[0];
+      if (picture?.data?.length) {
+        const headers = new Headers();
+        headers.set("Content-Type", picture.format || "image/jpeg");
+        headers.set("Cache-Control", "public, max-age=604800, immutable");
+        const arrayBuffer = new ArrayBuffer(picture.data.byteLength);
+        new Uint8Array(arrayBuffer).set(picture.data);
+        return new Response(arrayBuffer, { headers });
+      }
+    } finally {
+      // Ensure the audio stream is closed, we only needed the metadata
+      try {
+        (stream as unknown as Readable)?.destroy?.();
+      } catch {}
     }
   } catch {}
 
-  // Fallback to one of our static images for consistent UX
+  // Fallback to a MinIO-hosted image for consistent UX
   try {
-    const fallback = join(process.cwd(), "public", "uploads", "images", "helix-1.jpg");
-    const buf = await readFile(fallback);
+    const fallbackKey = "images/helix-1.jpg";
+    const fallbackStat = await statObject(fallbackKey).catch(() => null);
+    if (!fallbackStat) throw new Error("no fallback");
+    const imgStream = await getObjectStream(fallbackKey);
     const headers = new Headers();
     headers.set("Content-Type", "image/jpeg");
     headers.set("Cache-Control", "public, max-age=604800, immutable");
-    const arrayBuffer = new ArrayBuffer(buf.byteLength);
-    new Uint8Array(arrayBuffer).set(buf);
-    return new Response(arrayBuffer, { headers });
+    // @ts-expect-error Node stream in web Response
+    return new Response(imgStream, { headers });
   } catch {
     return NextResponse.json({ error: "Artwork not found" }, { status: 404 });
   }

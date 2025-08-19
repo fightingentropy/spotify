@@ -13,12 +13,32 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
   });
   if (!playlist) return notFound();
 
+  function toMinioUrl(url: string, kind: "audio" | "images"): string {
+    if (!url) return url;
+    if (url.startsWith("/api/files/")) return url;
+    if (kind === "images") {
+      const prefix = "/uploads/images/";
+      if (url.startsWith(prefix)) {
+        const name = url.slice(prefix.length);
+        return `/api/files/images/${encodeURIComponent(name)}`;
+      }
+    }
+    if (kind === "audio") {
+      const prefix = "/uploads/audio/";
+      if (url.startsWith(prefix)) {
+        const name = url.slice(prefix.length);
+        return `/api/files/audio/${encodeURIComponent(name)}`;
+      }
+    }
+    return url;
+  }
+
   const songs = playlist.songs.map((ps) => ({
     id: ps.song.id,
     title: ps.song.title,
     artist: ps.song.artist,
-    imageUrl: ps.song.imageUrl,
-    audioUrl: ps.song.audioUrl,
+    imageUrl: toMinioUrl(ps.song.imageUrl, "images").replace(/%2F/g, "/"),
+    audioUrl: toMinioUrl(ps.song.audioUrl, "audio").replace(/%2F/g, "/"),
   }));
 
   return (

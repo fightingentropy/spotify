@@ -74,6 +74,29 @@ export async function getPartialObjectStream(key: string, offset: number, length
   return client.getPartialObject(bucket, key, offset, length ?? 0);
 }
 
+export async function listObjects(prefix: string): Promise<Array<{ name: string; size?: number; lastModified?: Date }>> {
+  const bucket = await ensureBucketExists();
+  const client = getMinioClient();
+  const stream = client.listObjectsV2(bucket, prefix, true);
+  const items: Array<{ name: string; size?: number; lastModified?: Date }> = [];
+  return new Promise((resolve, reject) => {
+    stream.on("data", (obj: unknown) => {
+      const o = obj as { name?: unknown; size?: number; lastModified?: Date };
+      if (o && typeof o.name === "string") items.push({ name: o.name, size: o.size, lastModified: o.lastModified });
+    });
+    stream.on("end", () => resolve(items));
+    stream.on("error", (err: unknown) => reject(err));
+  });
+}
+
+export async function putObjectFromFilePath(key: string, filePath: string, contentType?: string): Promise<void> {
+  const bucket = await ensureBucketExists();
+  const client = getMinioClient();
+  const meta: Record<string, string> | undefined = contentType ? { "Content-Type": contentType } : undefined;
+  // fPutObject handles file reading and content-length
+  await client.fPutObject(bucket, key, filePath, meta);
+}
+
 function inferContentTypeFromKey(key: string): string {
   const lower = key.toLowerCase();
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
