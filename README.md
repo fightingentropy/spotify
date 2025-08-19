@@ -1,9 +1,11 @@
-Waveform — a minimal music player built with Next.js 15 (App Router), Tailwind, Prisma (SQLite), and NextAuth.
+Waveform — a minimal music player built with Next.js 15 (App Router), Tailwind, Prisma (Postgres), NextAuth, and MinIO for local object storage.
 
 ### Quick start
 - Install dependencies: `npm install`
-- Environment: `.env` already contains `DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`
-- Generate DB client and migrate: `npx prisma generate && npx prisma migrate dev --name init`
+- Copy env: `cp .env.example .env` and adjust if needed
+- Start infrastructure (Postgres + MinIO via Docker/OrbStack): `docker compose up -d`
+- Generate client and migrate: `npx prisma generate && npx prisma migrate dev --name init`
+- Seed demo data: `node prisma/seed.js` (optional)
 - Start dev server: `npm run dev`
 
 ### Demo sign-in
@@ -27,5 +29,6 @@ Waveform — a minimal music player built with Next.js 15 (App Router), Tailwind
 - `src/store/player.ts`: Player state
 
 ### Notes
-- Local uploads are for dev only; use object storage in production.
-- To reset DB: delete `prisma/dev.db` and re-run migrations.
+- Uploaded files are stored in MinIO (`uploads` bucket). You can browse UI at `http://localhost:9001` (user: `waveform`, pass: `waveformsecret`).
+- Postgres runs at `localhost:5432` (user/pass/db: `waveform`).
+- To reset DB: drop the `waveform` database or run `prisma migrate reset`.

@@ -3,9 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import type { Session } from "next-auth";
 import { authOptions } from "@/auth";
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
+import { putObjectFromBuffer } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,12 +33,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  const uploadDir = join(process.cwd(), "public", "uploads");
-  const imageDir = join(uploadDir, "images");
-  const audioDir = join(uploadDir, "audio");
-  await mkdir(imageDir, { recursive: true });
-  await mkdir(audioDir, { recursive: true });
-
   const imgId = uuidv4();
   const audId = uuidv4();
   const imageFileName = `${imgId}-${image.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
@@ -49,13 +43,16 @@ export async function POST(req: Request) {
     audio.arrayBuffer(),
   ]);
 
+  const [imageBuffer, audioBuffer] = [Buffer.from(imageArrayBuffer), Buffer.from(audioArrayBuffer)];
+  const imageKey = join("images", imageFileName).replaceAll("\\", "/");
+  const audioKey = join("audio", audioFileName).replaceAll("\\", "/");
   await Promise.all([
-    writeFile(join(imageDir, imageFileName), Buffer.from(imageArrayBuffer)),
-    writeFile(join(audioDir, audioFileName), Buffer.from(audioArrayBuffer)),
+    putObjectFromBuffer(imageKey, imageBuffer, image.type || undefined),
+    putObjectFromBuffer(audioKey, audioBuffer, audio.type || undefined),
   ]);
 
-  const imageUrl = `/uploads/images/${imageFileName}`;
-  const audioUrl = `/uploads/audio/${audioFileName}`;
+  const imageUrl = `/api/files/images/${encodeURIComponent(imageFileName)}`;
+  const audioUrl = `/api/files/audio/${encodeURIComponent(audioFileName)}`;
 
   const userId = s.user.id;
   const song = await prisma.song.create({
