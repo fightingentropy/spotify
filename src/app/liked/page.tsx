@@ -26,14 +26,13 @@ export default async function LikedPage() {
     );
   }
 
-  const rows =
-    await db<SongRow & { songId: string }>`
-      SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."userId", s."createdAt", l."songId"
-      FROM "Like" l
-      INNER JOIN "Song" s ON s."id" = l."songId"
-      WHERE l."userId" = ${userId}
-      ORDER BY l."createdAt" DESC
-    `;
+  const rows = await (db`
+    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."userId", s."createdAt", l."songId"
+    FROM "Like" l
+    INNER JOIN "Song" s ON s."id" = l."songId"
+    WHERE l."userId" = ${userId}
+    ORDER BY l."createdAt" DESC
+  ` as any) as (SongRow & { songId: string })[];
 
   const songs = rows.map((row) => songToPlayerSong(row));
   const likedSongIds = rows.map((row) => row.songId);

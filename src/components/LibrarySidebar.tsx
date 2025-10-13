@@ -16,19 +16,19 @@ export default async function LibrarySidebar() {
 
   if (userId) {
     const [likeRows, playlistRows] = await Promise.all([
-      db<{ count: number }>`
+      (db`
         SELECT COUNT(*)::int AS count
         FROM "Like"
         WHERE "userId" = ${userId}
-      `,
-      db<PlaylistRow & { songsCount: number }>`
+      ` as any) as Promise<{ count: number }[]>,
+      (db`
         SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", COUNT(ps."id")::int AS "songsCount"
         FROM "Playlist" p
         LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
         WHERE p."userId" = ${userId}
         GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt"
         ORDER BY p."createdAt" DESC
-      `,
+      ` as any) as Promise<(PlaylistRow & { songsCount: number })[]>,
     ]);
     likesCount = Number(likeRows[0]?.count ?? 0);
     playlists = playlistRows.map((row) => ({ ...row, songsCount: Number(row.songsCount ?? 0) }));

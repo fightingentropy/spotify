@@ -12,13 +12,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Email and password are required" }, { status: 400 });
   }
   const normalizedEmail = String(email).toLowerCase();
-  const existingUsers =
-    await db<UserRow>`
-      SELECT "id"
-      FROM "User"
-      WHERE "email" = ${normalizedEmail}
-      LIMIT 1
-    `;
+  const existingUsers = await (db`
+    SELECT "id"
+    FROM "User"
+    WHERE "email" = ${normalizedEmail}
+    LIMIT 1
+  ` as any) as UserRow[];
   const existing = existingUsers.at(0);
   if (existing) {
     return NextResponse.json({ error: "Email already in use" }, { status: 409 });

@@ -36,60 +36,55 @@ export function PostgresAdapter(): Adapter {
   return {
     async createUser(user: Omit<AdapterUser, "id">) {
       const id = randomUUID();
-      const [created] =
-        await db<UserRow>`
-          INSERT INTO "User" ("id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt")
-          VALUES (${id}, ${user.name ?? null}, ${user.email}, ${user.image ?? null}, ${user.emailVerified ?? null}, NULL, NOW(), NOW())
-          RETURNING "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
-        `;
+      const [created] = await (db`
+        INSERT INTO "User" ("id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt")
+        VALUES (${id}, ${user.name ?? null}, ${user.email}, ${user.image ?? null}, ${user.emailVerified ?? null}, NULL, NOW(), NOW())
+        RETURNING "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
+      ` as any) as UserRow[];
       return mapUser(created);
     },
 
     async getUser(id) {
-      const rows =
-        await db<UserRow>`
-          SELECT "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
-          FROM "User"
-          WHERE "id" = ${id}
-          LIMIT 1
-        `;
+      const rows = await (db`
+        SELECT "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
+        FROM "User"
+        WHERE "id" = ${id}
+        LIMIT 1
+      ` as any) as UserRow[];
       const row = rows.at(0);
       return row ? mapUser(row) : null;
     },
 
     async getUserByEmail(email) {
-      const rows =
-        await db<UserRow>`
-          SELECT "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
-          FROM "User"
-          WHERE "email" = ${email}
-          LIMIT 1
-        `;
+      const rows = await (db`
+        SELECT "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
+        FROM "User"
+        WHERE "email" = ${email}
+        LIMIT 1
+      ` as any) as UserRow[];
       const row = rows.at(0);
       return row ? mapUser(row) : null;
     },
 
     async getUserByAccount(account) {
-      const rows =
-        await db<UserRow>`
-          SELECT u."id", u."name", u."email", u."image", u."emailVerified", u."passwordHash", u."createdAt", u."updatedAt"
-          FROM "Account" a
-          INNER JOIN "User" u ON u."id" = a."userId"
-          WHERE a."provider" = ${account.provider} AND a."providerAccountId" = ${account.providerAccountId}
-          LIMIT 1
-        `;
+      const rows = await (db`
+        SELECT u."id", u."name", u."email", u."image", u."emailVerified", u."passwordHash", u."createdAt", u."updatedAt"
+        FROM "Account" a
+        INNER JOIN "User" u ON u."id" = a."userId"
+        WHERE a."provider" = ${account.provider} AND a."providerAccountId" = ${account.providerAccountId}
+        LIMIT 1
+      ` as any) as UserRow[];
       const row = rows.at(0);
       return row ? mapUser(row) : null;
     },
 
     async updateUser(user: Partial<AdapterUser> & Pick<AdapterUser, "id">) {
-      const existingRows =
-        await db<UserRow>`
-          SELECT "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
-          FROM "User"
-          WHERE "id" = ${user.id}
-          LIMIT 1
-        `;
+      const existingRows = await (db`
+        SELECT "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
+        FROM "User"
+        WHERE "id" = ${user.id}
+        LIMIT 1
+      ` as any) as UserRow[];
       const existing = existingRows.at(0);
       if (!existing) {
         throw new Error(`User with id ${user.id} not found`);
@@ -123,7 +118,11 @@ export function PostgresAdapter(): Adapter {
     },
 
     async linkAccount(account: AdapterAccount) {
-      const id = account.id ?? randomUUID();
+      const id = String(account.id ?? randomUUID());
+      const userId = String(account.userId);
+      const type = String(account.type);
+      const provider = String(account.provider);
+      const providerAccountId = String(account.providerAccountId);
       await db`
         INSERT INTO "Account" (
           "id",
@@ -140,10 +139,10 @@ export function PostgresAdapter(): Adapter {
           "session_state"
         ) VALUES (
           ${id},
-          ${account.userId},
-          ${account.type},
-          ${account.provider},
-          ${account.providerAccountId},
+          ${userId},
+          ${type},
+          ${provider},
+          ${providerAccountId},
           ${account.refresh_token ?? null},
           ${account.access_token ?? null},
           ${account.expires_at ?? null},
@@ -173,43 +172,41 @@ export function PostgresAdapter(): Adapter {
 
     async createSession(session: { sessionToken: string; userId: string; expires: Date }) {
       const id = randomUUID();
-      const [created] =
-        await db<SessionRow>`
-          INSERT INTO "Session" ("id", "sessionToken", "userId", "expires")
-          VALUES (${id}, ${session.sessionToken}, ${session.userId}, ${session.expires})
-          RETURNING "id", "sessionToken", "userId", "expires"
-        `;
+      const [created] = await (db`
+        INSERT INTO "Session" ("id", "sessionToken", "userId", "expires")
+        VALUES (${id}, ${session.sessionToken}, ${session.userId}, ${session.expires})
+        RETURNING "id", "sessionToken", "userId", "expires"
+      ` as any) as SessionRow[];
       return mapSession(created);
     },
 
     async getSessionAndUser(sessionToken: string) {
-      const rows =
-        await db<{
-          session_id: string;
-          session_token: string;
-          session_user_id: string;
-          session_expires: Date;
-          user_id: string;
-          user_name: string | null;
-          user_email: string;
-          user_image: string | null;
-          user_email_verified: Date | null;
-        }>`
-          SELECT
-            s."id" as session_id,
-            s."sessionToken" as session_token,
-            s."userId" as session_user_id,
-            s."expires" as session_expires,
-            u."id" as user_id,
-            u."name" as user_name,
-            u."email" as user_email,
-            u."image" as user_image,
-            u."emailVerified" as user_email_verified
-          FROM "Session" s
-          INNER JOIN "User" u ON u."id" = s."userId"
-          WHERE s."sessionToken" = ${sessionToken}
-          LIMIT 1
-        `;
+      const rows = await (db`
+        SELECT
+          s."id" as session_id,
+          s."sessionToken" as session_token,
+          s."userId" as session_user_id,
+          s."expires" as session_expires,
+          u."id" as user_id,
+          u."name" as user_name,
+          u."email" as user_email,
+          u."image" as user_image,
+          u."emailVerified" as user_email_verified
+        FROM "Session" s
+        INNER JOIN "User" u ON u."id" = s."userId"
+        WHERE s."sessionToken" = ${sessionToken}
+        LIMIT 1
+      ` as any) as {
+        session_id: string;
+        session_token: string;
+        session_user_id: string;
+        session_expires: Date;
+        user_id: string;
+        user_name: string | null;
+        user_email: string;
+        user_image: string | null;
+        user_email_verified: Date | null;
+      }[];
       const row = rows.at(0);
       if (!row) return null;
       const session: AdapterSession = {
@@ -231,13 +228,12 @@ export function PostgresAdapter(): Adapter {
     },
 
     async updateSession(session: Partial<AdapterSession> & Pick<AdapterSession, "sessionToken">) {
-      const existingRows =
-        await db<SessionRow>`
-          SELECT "id", "sessionToken", "userId", "expires"
-          FROM "Session"
-          WHERE "sessionToken" = ${session.sessionToken}
-          LIMIT 1
-        `;
+      const existingRows = await (db`
+        SELECT "id", "sessionToken", "userId", "expires"
+        FROM "Session"
+        WHERE "sessionToken" = ${session.sessionToken}
+        LIMIT 1
+      ` as any) as SessionRow[];
       const existing = existingRows.at(0);
       if (!existing) return null;
       const nextSession: SessionRow = {
@@ -262,12 +258,11 @@ export function PostgresAdapter(): Adapter {
     },
 
     async createVerificationToken(token: VerificationToken) {
-      const [created] =
-        await db<VerificationTokenRow>`
-          INSERT INTO "VerificationToken" ("identifier", "token", "expires")
-          VALUES (${token.identifier}, ${token.token}, ${token.expires})
-          RETURNING "identifier", "token", "expires"
-        `;
+      const [created] = await (db`
+        INSERT INTO "VerificationToken" ("identifier", "token", "expires")
+        VALUES (${token.identifier}, ${token.token}, ${token.expires})
+        RETURNING "identifier", "token", "expires"
+      ` as any) as VerificationTokenRow[];
       return {
         identifier: created.identifier,
         token: created.token,
@@ -276,12 +271,11 @@ export function PostgresAdapter(): Adapter {
     },
 
     async useVerificationToken(token: { identifier: string; token: string }) {
-      const rows =
-        await db<VerificationTokenRow>`
-          DELETE FROM "VerificationToken"
-          WHERE "identifier" = ${token.identifier} AND "token" = ${token.token}
-          RETURNING "identifier", "token", "expires"
-        `;
+      const rows = await (db`
+        DELETE FROM "VerificationToken"
+        WHERE "identifier" = ${token.identifier} AND "token" = ${token.token}
+        RETURNING "identifier", "token", "expires"
+      ` as any) as VerificationTokenRow[];
       const row = rows.at(0);
       if (!row) return null;
       return {

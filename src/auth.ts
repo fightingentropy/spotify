@@ -18,13 +18,12 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
         const normalizedEmail = String(credentials.email).toLowerCase();
-        const users =
-          await db<UserRow>`
-            SELECT "id", "email", "name", "image", "passwordHash"
-            FROM "User"
-            WHERE "email" = ${normalizedEmail}
-            LIMIT 1
-          `;
+        const users = await (db`
+          SELECT "id", "email", "name", "image", "passwordHash"
+          FROM "User"
+          WHERE "email" = ${normalizedEmail}
+          LIMIT 1
+        ` as any) as UserRow[];
         const user = users.at(0);
         if (!user?.passwordHash) {
           return null;

@@ -13,11 +13,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const songs = await db<SongRow>`
+  const songs = await (db`
     SELECT "id", "title", "artist", "imageUrl", "audioUrl", "userId", "createdAt"
     FROM "Song"
     ORDER BY "title" ASC
-  `;
+  ` as any) as SongRow[];
   return NextResponse.json(songs);
 }
 
@@ -62,12 +62,11 @@ export async function POST(req: Request) {
 
   const userId = s.user.id;
   const songId = randomUUID();
-  const [song] =
-    await db<SongRow>`
-      INSERT INTO "Song" ("id", "title", "artist", "imageUrl", "audioUrl", "userId")
-      VALUES (${songId}, ${title}, ${artist}, ${imageUrl}, ${audioUrl}, ${userId})
-      RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "userId", "createdAt"
-    `;
+  const [song] = await (db`
+    INSERT INTO "Song" ("id", "title", "artist", "imageUrl", "audioUrl", "userId")
+    VALUES (${songId}, ${title}, ${artist}, ${imageUrl}, ${audioUrl}, ${userId})
+    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "userId", "createdAt"
+  ` as any) as SongRow[];
 
   return NextResponse.json(song, { status: 201 });
 }

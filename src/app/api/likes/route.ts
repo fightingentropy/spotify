@@ -14,12 +14,11 @@ export async function GET() {
     return NextResponse.json({ likes: [] }, { status: 200 });
   }
 
-  const likes =
-    await db<{ songId: string }>`
-      SELECT "songId"
-      FROM "Like"
-      WHERE "userId" = ${userId}
-    `;
+  const likes = await (db`
+    SELECT "songId"
+    FROM "Like"
+    WHERE "userId" = ${userId}
+  ` as any) as { songId: string }[];
 
   return NextResponse.json({ likes: likes.map((like) => like.songId) });
 }
@@ -37,13 +36,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing songId" }, { status: 400 });
   }
 
-  const song =
-    await db<{ id: string }>`
-      SELECT "id"
-      FROM "Song"
-      WHERE "id" = ${songId}
-      LIMIT 1
-    `;
+  const song = await (db`
+    SELECT "id"
+    FROM "Song"
+    WHERE "id" = ${songId}
+    LIMIT 1
+  ` as any) as { id: string }[];
   if (song.length === 0) {
     return NextResponse.json({ error: "Song not found" }, { status: 404 });
   }
