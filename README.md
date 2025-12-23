@@ -1,6 +1,6 @@
 # Waveform
 
-A minimal music player built with Next.js 15, PostgreSQL, MinIO, and NextAuth.
+A minimal music player built with Next.js 16, PostgreSQL, MinIO, and NextAuth.
 
 ## Quick Start
 
@@ -15,10 +15,25 @@ bun run dev
 
 **Demo login:** `demo@example.com` / `password` at `/signin`
 
+## Environment
+
+Required variables are validated at runtime to avoid missing secrets.
+
+- `DATABASE_URL` - Postgres connection string
+- `NEXTAUTH_SECRET` - session signing secret
+- `ADMIN_SECRET` - header secret for `/api/admin/batch-upload`
+- `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` - MinIO credentials
+- `MINIO_ENDPOINT`, `MINIO_PORT`, `MINIO_USE_SSL`, `MINIO_BUCKET` - MinIO connection settings
+
+Optional tuning:
+
+- `UPLOAD_MAX_IMAGE_BYTES`, `UPLOAD_MAX_AUDIO_BYTES` - upload size limits
+- `RATE_LIMIT_*` - auth/register/admin rate limiting thresholds
+
 ## Architecture
 
 ### Core Stack
-- **Next.js 15** - App Router, React 19, Server Components
+- **Next.js 16** - App Router, React 19, Server Components
 - **PostgreSQL** - Relational data via Bun's native SQL API
 - **MinIO** - S3-compatible local object storage for audio/artwork
 - **NextAuth** - Email/password auth with custom Bun SQL adapter

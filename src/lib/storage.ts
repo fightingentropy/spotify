@@ -1,4 +1,6 @@
 import { Client as MinioClient } from "minio";
+import type { Readable } from "node:stream";
+import { env } from "@/lib/env";
 
 type StorageConfig = {
   endPoint: string;
@@ -14,12 +16,12 @@ let storageConfig: StorageConfig | null = null;
 
 function getConfig(): StorageConfig {
   if (storageConfig) return storageConfig;
-  const endPoint = process.env.MINIO_ENDPOINT || "127.0.0.1";
-  const port = Number(process.env.MINIO_PORT || 9000);
-  const useSSL = String(process.env.MINIO_USE_SSL || "false").toLowerCase() === "true";
-  const accessKey = process.env.MINIO_ACCESS_KEY || "waveform";
-  const secretKey = process.env.MINIO_SECRET_KEY || "waveformsecret";
-  const bucket = process.env.MINIO_BUCKET || "uploads";
+  const endPoint = env.MINIO_ENDPOINT;
+  const port = env.MINIO_PORT;
+  const useSSL = env.MINIO_USE_SSL;
+  const accessKey = env.MINIO_ACCESS_KEY;
+  const secretKey = env.MINIO_SECRET_KEY;
+  const bucket = env.MINIO_BUCKET;
   storageConfig = { endPoint, port, useSSL, accessKey, secretKey, bucket };
   return storageConfig;
 }
@@ -48,10 +50,26 @@ export async function ensureBucketExists(): Promise<string> {
   return bucket;
 }
 
-export async function putObjectFromBuffer(key: string, buffer: Buffer, contentType?: string): Promise<void> {
+export async function putObjectFromBuffer(
+  key: string,
+  buffer: Buffer,
+  contentType?: string,
+): Promise<void> {
   const bucket = await ensureBucketExists();
   const client = getMinioClient();
   await client.putObject(bucket, key, buffer, buffer.length, {
+    "Content-Type": contentType || inferContentTypeFromKey(key),
+  });
+}
+
+export async function putObjectFromStream(
+  key: string,
+  stream: Readable,
+  contentType?: string,
+): Promise<void> {
+  const bucket = await ensureBucketExists();
+  const client = getMinioClient();
+  await client.putObject(bucket, key, stream, undefined, {
     "Content-Type": contentType || inferContentTypeFromKey(key),
   });
 }
@@ -68,13 +86,19 @@ export async function getObjectStream(key: string) {
   return client.getObject(bucket, key);
 }
 
-export async function getPartialObjectStream(key: string, offset: number, length?: number) {
+export async function getPartialObjectStream(
+  key: string,
+  offset: number,
+  length?: number,
+) {
   const bucket = await ensureBucketExists();
   const client = getMinioClient();
   return client.getPartialObject(bucket, key, offset, length ?? 0);
 }
 
-export async function listObjects(prefix: string): Promise<Array<{ name: string; size?: number; lastModified?: Date }>> {
+export async function listObjects(
+  prefix: string,
+): Promise<Array<{ name: string; size?: number; lastModified?: Date }>> {
   const bucket = await ensureBucketExists();
   const client = getMinioClient();
   const stream = client.listObjectsV2(bucket, prefix, true);
@@ -82,17 +106,28 @@ export async function listObjects(prefix: string): Promise<Array<{ name: string;
   return new Promise((resolve, reject) => {
     stream.on("data", (obj: unknown) => {
       const o = obj as { name?: unknown; size?: number; lastModified?: Date };
-      if (o && typeof o.name === "string") items.push({ name: o.name, size: o.size, lastModified: o.lastModified });
+      if (o && typeof o.name === "string")
+        items.push({
+          name: o.name,
+          size: o.size,
+          lastModified: o.lastModified,
+        });
     });
     stream.on("end", () => resolve(items));
     stream.on("error", (err: unknown) => reject(err));
   });
 }
 
-export async function putObjectFromFilePath(key: string, filePath: string, contentType?: string): Promise<void> {
+export async function putObjectFromFilePath(
+  key: string,
+  filePath: string,
+  contentType?: string,
+): Promise<void> {
   const bucket = await ensureBucketExists();
   const client = getMinioClient();
-  const meta: Record<string, string> | undefined = contentType ? { "Content-Type": contentType } : undefined;
+  const meta: Record<string, string> | undefined = contentType
+    ? { "Content-Type": contentType }
+    : undefined;
   // fPutObject handles file reading and content-length
   await client.fPutObject(bucket, key, filePath, meta);
 }
@@ -107,5 +142,3 @@ function inferContentTypeFromKey(key: string): string {
   if (lower.endsWith(".wav")) return "audio/wav";
   return "application/octet-stream";
 }
-
-

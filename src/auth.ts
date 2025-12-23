@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { db } from "@/lib/db";
 import type { UserRow } from "@/lib/db-types";
+import { env } from "@/lib/env";
 
 export const authOptions: NextAuthOptions = {
   // Note: Adapter is not used with Credentials provider (JWT sessions)
@@ -18,17 +19,20 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
         const normalizedEmail = String(credentials.email).toLowerCase();
-        const users = await (db`
+        const users = (await (db`
           SELECT "id", "email", "name", "image", "passwordHash"
           FROM "User"
           WHERE "email" = ${normalizedEmail}
           LIMIT 1
-        ` as any) as UserRow[];
+        ` as any)) as UserRow[];
         const user = users.at(0);
         if (!user?.passwordHash) {
           return null;
         }
-        const valid = await compare(String(credentials.password), user.passwordHash);
+        const valid = await compare(
+          String(credentials.password),
+          user.passwordHash,
+        );
         if (!valid) {
           return null;
         }
@@ -60,12 +64,13 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       // Add user ID from token to session
       if (session?.user && token?.id) {
-        (session.user as Session["user"] & { id?: string }).id = token.id as string;
+        (session.user as Session["user"] & { id?: string }).id =
+          token.id as string;
       }
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: env.NEXTAUTH_SECRET,
   pages: {
     signIn: "/signin",
   },

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { join } from "node:path";
 import { readdir, stat } from "node:fs/promises";
 import { putObjectFromFilePath, statObject } from "@/lib/storage";
+import { env } from "@/lib/env";
+import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,11 +36,32 @@ function inferContentType(fileName: string): string | undefined {
 }
 
 export async function POST(req: Request) {
-  const adminSecret = process.env.ADMIN_SECRET || "";
+  const rate = rateLimit(req, {
+    keyPrefix: "admin-batch-upload",
+    max: env.RATE_LIMIT_ADMIN_MAX,
+    windowMs: env.RATE_LIMIT_ADMIN_WINDOW_MS,
+  });
+  if (!rate.allowed) {
+    console.warn("[security] admin batch upload rate limit exceeded", {
+      ip: rate.ip,
+    });
+    const headers = rateLimitHeaders(rate);
+    return NextResponse.json(
+      { error: "Too many requests" },
+      { status: 429, headers },
+    );
+  }
+
+  const adminSecret = env.ADMIN_SECRET;
   const provided = req.headers.get("x-admin-secret") || "";
-  if (!adminSecret || provided !== adminSecret) {
+  if (!provided || provided !== adminSecret) {
+    console.warn("[security] admin batch upload forbidden", {
+      ip: rate.ip,
+      hasSecret: Boolean(provided),
+    });
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  console.info("[security] admin batch upload accepted", { ip: rate.ip });
 
   const root = join(process.cwd(), "public", "uploads");
   // Confirm root exists
@@ -46,7 +69,10 @@ export async function POST(req: Request) {
     const s = await stat(root);
     if (!s.isDirectory()) throw new Error("uploads not a dir");
   } catch {
-    return NextResponse.json({ error: "Local uploads directory not found" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Local uploads directory not found" },
+      { status: 400 },
+    );
   }
 
   // Collect images
@@ -55,8 +81,16 @@ export async function POST(req: Request) {
 
   let imageFiles: string[] = [];
   let audioFiles: string[] = [];
-  try { imageFiles = await walkFiles(imagesDir); } catch { imageFiles = []; }
-  try { audioFiles = await walkFiles(audioDir); } catch { audioFiles = []; }
+  try {
+    imageFiles = await walkFiles(imagesDir);
+  } catch {
+    imageFiles = [];
+  }
+  try {
+    audioFiles = await walkFiles(audioDir);
+  } catch {
+    audioFiles = [];
+  }
 
   let uploaded = 0;
   let skipped = 0;
@@ -67,12 +101,18 @@ export async function POST(req: Request) {
     const key = `images/${rel.replace(/\\/g, "/")}`;
     const filePath = join(imagesDir, rel);
     const exists = await statObject(key).catch(() => null);
-    if (exists) { skipped++; continue; }
+    if (exists) {
+      skipped++;
+      continue;
+    }
     try {
       await putObjectFromFilePath(key, filePath, inferContentType(rel));
       uploaded++;
     } catch (e) {
-      errors.push({ key, message: e instanceof Error ? e.message : "upload failed" });
+      errors.push({
+        key,
+        message: e instanceof Error ? e.message : "upload failed",
+      });
     }
   }
 
@@ -81,16 +121,25 @@ export async function POST(req: Request) {
     const key = `audio/${rel.replace(/\\/g, "/")}`;
     const filePath = join(audioDir, rel);
     const exists = await statObject(key).catch(() => null);
-    if (exists) { skipped++; continue; }
+    if (exists) {
+      skipped++;
+      continue;
+    }
     try {
       await putObjectFromFilePath(key, filePath, inferContentType(rel));
       uploaded++;
     } catch (e) {
-      errors.push({ key, message: e instanceof Error ? e.message : "upload failed" });
+      errors.push({
+        key,
+        message: e instanceof Error ? e.message : "upload failed",
+      });
     }
   }
 
-  return NextResponse.json({ uploaded, skipped, total: imageFiles.length + audioFiles.length, errors });
+  return NextResponse.json({
+    uploaded,
+    skipped,
+    total: imageFiles.length + audioFiles.length,
+    errors,
+  });
 }
-
-
