@@ -2,33 +2,30 @@
 
 import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
 import Image from "next/image";
+import { Heart, Pause, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
-import { Heart, Pause, Play } from "lucide-react";
 
-type SongCardProps = {
+type SongListItemProps = {
   song: PlayerSong;
   onPlay?: () => void;
   liked?: boolean;
   likePending?: boolean;
   canLike?: boolean;
-  hideIfUnliked?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
   priority?: boolean;
 };
 
-const SongCardComponent = function SongCard({
+const SongListItemComponent = function SongListItem({
   song,
   onPlay,
   liked = false,
   likePending = false,
   canLike = false,
-  hideIfUnliked = false,
   onToggleLike,
   priority = false,
-}: SongCardProps) {
-  // Optimized selector - only subscribes to necessary state changes
+}: SongListItemProps) {
   const setSong = usePlayerStore((state) => state.setSong);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
@@ -46,10 +43,10 @@ const SongCardComponent = function SongCard({
     }
     if (onPlay) {
       onPlay();
-    } else {
-      setSong(song);
-      play();
+      return;
     }
+    setSong(song);
+    play();
   }, [isActive, isPlaying, onPlay, pause, play, setSong, song]);
 
   const handleKeyDown = useCallback(
@@ -59,7 +56,7 @@ const SongCardComponent = function SongCard({
         handlePlay();
       }
     },
-    [handlePlay]
+    [handlePlay],
   );
 
   const handleToggleLike = useCallback(
@@ -68,10 +65,8 @@ const SongCardComponent = function SongCard({
       if (likePending || !onToggleLike) return;
       await onToggleLike(song.id, !liked);
     },
-    [likePending, liked, onToggleLike, song.id]
+    [likePending, liked, onToggleLike, song.id],
   );
-
-  if (hideIfUnliked && !liked) return null;
 
   return (
     <div
@@ -81,20 +76,26 @@ const SongCardComponent = function SongCard({
       onKeyDown={handleKeyDown}
       aria-pressed={isActiveAndPlaying}
       className={cn(
-        "group relative aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-        isActive && "ring-2 ring-emerald-500"
+        "group flex items-center gap-3 px-3 py-2 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+        isActive ? "bg-emerald-500/10 rounded-lg" : "hover:bg-black/5 hover:dark:bg-white/5 rounded-lg",
       )}
     >
-      <Image
-        src={song.imageUrl || "/waveform.svg"}
-        alt={song.title}
-        fill
-        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 33vw, 200px"
-        className="object-cover"
-        priority={priority}
-        loading={priority ? "eager" : "lazy"}
-      />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+      <div className="relative h-12 w-12 rounded overflow-hidden shrink-0">
+        <Image
+          src={song.imageUrl || "/waveform.svg"}
+          alt={song.title}
+          fill
+          sizes="48px"
+          className="object-cover"
+          priority={priority}
+          loading={priority ? "eager" : "lazy"}
+        />
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium truncate">{song.title}</div>
+        <div className="text-xs opacity-70 truncate">{song.artist}</div>
+      </div>
 
       <button
         type="button"
@@ -103,54 +104,37 @@ const SongCardComponent = function SongCard({
         disabled={likePending}
         onClick={handleToggleLike}
         className={cn(
-          "absolute top-2 right-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
-          canLike ? "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500" : "opacity-80",
-          likePending && "opacity-60 cursor-wait"
+          "h-9 w-9 rounded-full grid place-items-center transition",
+          canLike ? "hover:bg-black/10 hover:dark:bg-white/10" : "opacity-80",
+          likePending && "opacity-60 cursor-wait",
         )}
       >
         <Heart
           size={18}
           className={cn(
-            "transition-colors",
-            liked ? "fill-emerald-500 text-emerald-500" : "text-white",
-            likePending && "animate-pulse"
+            liked ? "fill-emerald-500 text-emerald-500" : "text-foreground/80",
+            likePending && "animate-pulse",
           )}
         />
       </button>
 
-      <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between gap-2">
-        <div className="text-left min-w-0 flex-1">
-          <div className="text-white font-medium drop-shadow truncate">{song.title}</div>
-          <div className="text-white/80 text-xs drop-shadow truncate">{song.artist}</div>
-        </div>
-        <div
-          className={cn(
-            "transition-opacity shrink-0",
-            isActive
-              ? "opacity-100"
-              : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-          )}
-        >
-          <div className="h-10 w-10 rounded-full bg-emerald-500 text-white grid place-items-center">
-            {isActiveAndPlaying ? <Pause size={18} /> : <Play size={18} />}
-          </div>
-        </div>
+      <div className="h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
+        {isActiveAndPlaying ? <Pause size={17} /> : <Play size={17} className="translate-x-[1px]" />}
       </div>
     </div>
   );
 };
 
-// Memoize to prevent re-renders when parent re-renders
-export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
-  // Custom comparison for optimal re-render prevention
+export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) => {
   return (
     prevProps.song.id === nextProps.song.id &&
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
-    prevProps.hideIfUnliked === nextProps.hideIfUnliked &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlay === nextProps.onPlay &&
     prevProps.onToggleLike === nextProps.onToggleLike
   );
 });
+
+export default SongListItem;

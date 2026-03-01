@@ -49,7 +49,7 @@ export async function POST(req: Request) {
   const userId = randomUUID();
   await db`
     INSERT INTO "User" ("id", "email", "name", "passwordHash", "image", "emailVerified", "createdAt", "updatedAt")
-    VALUES (${userId}, ${normalizedEmail}, ${name ? String(name) : null}, ${passwordHash}, NULL, NULL, NOW(), NOW())
+    VALUES (${userId}, ${normalizedEmail}, ${name ? String(name) : null}, ${passwordHash}, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `;
   console.info("[security] register success", { ip: rate.ip });
   return NextResponse.json({ ok: true }, { status: 201 });

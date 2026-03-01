@@ -27,7 +27,7 @@ export default async function LikedPage() {
   }
 
   const rows = await (db`
-    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."userId", s."createdAt", l."songId"
+    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."userId", s."createdAt", l."songId"
     FROM "Like" l
     INNER JOIN "Song" s ON s."id" = l."songId"
     WHERE l."userId" = ${userId}
@@ -49,6 +49,7 @@ export default async function LikedPage() {
           hideIfUnliked
           canLike
           emptyLabel="You haven&apos;t liked any songs yet."
+          viewToggleClassName="-mt-14 mb-8"
         />
       )}
       <div className="h-24" />

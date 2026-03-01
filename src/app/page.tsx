@@ -14,7 +14,7 @@ export default async function Home() {
 
   const [songs, liked] = await Promise.all([
     (db`
-      SELECT "id", "title", "artist", "imageUrl", "audioUrl", "userId", "createdAt"
+      SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "userId", "createdAt"
       FROM "Song"
       ORDER BY "title" ASC
     ` as any) as Promise<SongRow[]>,
@@ -32,7 +32,6 @@ export default async function Home() {
 
   return (
     <div className="px-6 py-8 max-w-7xl mx-auto">
-      <div className="mb-6" />
       {playerSongs.length === 0 ? (
         <div className="opacity-70">No songs available yet. Upload your first track to get started.</div>
       ) : (

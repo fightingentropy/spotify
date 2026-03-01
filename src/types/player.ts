@@ -4,5 +4,5 @@ export type PlayerSong = {
   artist: string;
   imageUrl: string;
   audioUrl: string;
+  lyricsUrl?: string;
 };
-

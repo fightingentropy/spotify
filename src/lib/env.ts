@@ -1,13 +1,13 @@
+import { join } from "node:path";
+
 type EnvShape = {
-  DATABASE_URL: string;
+  SQLITE_DB_PATH: string;
   NEXTAUTH_SECRET: string;
   ADMIN_SECRET: string;
-  MINIO_ENDPOINT: string;
-  MINIO_PORT: number;
-  MINIO_USE_SSL: boolean;
-  MINIO_ACCESS_KEY: string;
-  MINIO_SECRET_KEY: string;
-  MINIO_BUCKET: string;
+  LOCAL_MEDIA_ROOT: string;
+  LOCAL_MUSIC_SOURCE_DIR: string;
+  LOCAL_IMPORT_USE_COVER_FILES: boolean;
+  LOCAL_IMPORT_USE_LYRICS_FILES: boolean;
   UPLOAD_MAX_IMAGE_BYTES: number;
   UPLOAD_MAX_AUDIO_BYTES: number;
   RATE_LIMIT_AUTH_MAX: number;
@@ -53,15 +53,28 @@ function optionalEnv(name: keyof EnvShape, fallback: string): string {
 }
 
 export const env: EnvShape = {
-  DATABASE_URL: requireEnv("DATABASE_URL"),
+  SQLITE_DB_PATH: optionalEnv(
+    "SQLITE_DB_PATH",
+    join(process.cwd(), "waveform.sqlite"),
+  ),
   NEXTAUTH_SECRET: requireEnv("NEXTAUTH_SECRET"),
   ADMIN_SECRET: requireEnv("ADMIN_SECRET"),
-  MINIO_ENDPOINT: optionalEnv("MINIO_ENDPOINT", "127.0.0.1"),
-  MINIO_PORT: numberEnv("MINIO_PORT", 9000),
-  MINIO_USE_SSL: booleanEnv("MINIO_USE_SSL", false),
-  MINIO_ACCESS_KEY: requireEnv("MINIO_ACCESS_KEY"),
-  MINIO_SECRET_KEY: requireEnv("MINIO_SECRET_KEY"),
-  MINIO_BUCKET: optionalEnv("MINIO_BUCKET", "uploads"),
+  LOCAL_MEDIA_ROOT: optionalEnv(
+    "LOCAL_MEDIA_ROOT",
+    join(process.cwd(), "local-media"),
+  ),
+  LOCAL_MUSIC_SOURCE_DIR: optionalEnv(
+    "LOCAL_MUSIC_SOURCE_DIR",
+    "/Users/erlinhoxha/Music",
+  ),
+  LOCAL_IMPORT_USE_COVER_FILES: booleanEnv(
+    "LOCAL_IMPORT_USE_COVER_FILES",
+    true,
+  ),
+  LOCAL_IMPORT_USE_LYRICS_FILES: booleanEnv(
+    "LOCAL_IMPORT_USE_LYRICS_FILES",
+    true,
+  ),
   UPLOAD_MAX_IMAGE_BYTES: numberEnv("UPLOAD_MAX_IMAGE_BYTES", 5 * 1024 * 1024),
   UPLOAD_MAX_AUDIO_BYTES: numberEnv("UPLOAD_MAX_AUDIO_BYTES", 50 * 1024 * 1024),
   RATE_LIMIT_AUTH_MAX: numberEnv("RATE_LIMIT_AUTH_MAX", 20),

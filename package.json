@@ -7,43 +7,44 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "docker:up": "bun run scripts/docker.ts up",
-    "docker:down": "bun run scripts/docker.ts down"
+    "import:music": "bun run scripts/import-local-music.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.6.2",
     "busboy": "^1.6.0",
     "clsx": "^2.1.1",
-    "lucide-react": "^0.562.0",
-    "minio": "^8.0.6",
-    "music-metadata": "11.10.3",
-    "next": "16.1.1",
+    "lucide-react": "^0.575.0",
+    "music-metadata": "11.12.1",
+    "next": "16.1.6",
     "next-auth": "^4.24.13",
-    "postgres": "^3.4.7",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "tailwind-merge": "^3.4.0",
-    "zustand": "^5.0.9"
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tailwind-merge": "^3.5.0",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.3.3",
-    "@tailwindcss/postcss": "^4.1.18",
+    "@eslint/eslintrc": "^3.3.4",
+    "@tailwindcss/postcss": "^4.2.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/busboy": "^1.5.4",
-    "@types/node": "^25.0.3",
-    "@types/react": "^19.2.7",
+    "@types/node": "^25.3.3",
+    "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "baseline-browser-mapping": "^2.9.11",
-    "bun-types": "^1.3.5",
-    "eslint": "^9.39.2",
-    "eslint-config-next": "16.1.1",
-    "tailwindcss": "^4.1.18",
+    "baseline-browser-mapping": "^2.10.0",
+    "bun-types": "^1.3.10",
+    "eslint": "^9.39.3",
+    "eslint-config-next": "16.1.6",
+    "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3"
   },
   "overrides": {
-    "baseline-browser-mapping": "^2.9.11"
+    "baseline-browser-mapping": "^2.10.0"
   },
   "trustedDependencies": [
     "@tailwindcss/oxide",
+    "better-sqlite3",
+    "sharp",
     "unrs-resolver"
   ]
 }

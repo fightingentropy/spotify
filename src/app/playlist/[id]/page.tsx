@@ -23,7 +23,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
   if (!playlist) return notFound();
 
   const songRows = await (db`
-    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."userId", s."createdAt", ps."order"
+    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."userId", s."createdAt", ps."order"
     FROM "PlaylistSong" ps
     INNER JOIN "Song" s ON s."id" = ps."songId"
     WHERE ps."playlistId" = ${id}
@@ -50,7 +50,12 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
       {songs.length === 0 ? (
         <div className="opacity-70">This playlist is empty.</div>
       ) : (
-        <SongGrid songs={songs} likedSongIds={likedSongIds} canLike={!!userId} />
+        <SongGrid
+          songs={songs}
+          likedSongIds={likedSongIds}
+          canLike={!!userId}
+          viewToggleClassName="-mt-14 mb-8"
+        />
       )}
       <div className="h-24" />
     </div>

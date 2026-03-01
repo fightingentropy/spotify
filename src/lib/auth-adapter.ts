@@ -32,13 +32,13 @@ function mapSession(row: SessionRow): AdapterSession {
   };
 }
 
-export function PostgresAdapter(): Adapter {
+export function SqliteAdapter(): Adapter {
   return {
     async createUser(user: Omit<AdapterUser, "id">) {
       const id = randomUUID();
       const [created] = await (db`
         INSERT INTO "User" ("id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt")
-        VALUES (${id}, ${user.name ?? null}, ${user.email}, ${user.image ?? null}, ${user.emailVerified ?? null}, NULL, NOW(), NOW())
+        VALUES (${id}, ${user.name ?? null}, ${user.email}, ${user.image ?? null}, ${user.emailVerified ?? null}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         RETURNING "id", "name", "email", "image", "emailVerified", "passwordHash", "createdAt", "updatedAt"
       ` as any) as UserRow[];
       return mapUser(created);
@@ -286,3 +286,6 @@ export function PostgresAdapter(): Adapter {
     },
   };
 }
+
+// Backward-compatible alias for older imports.
+export const PostgresAdapter = SqliteAdapter;

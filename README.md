@@ -1,102 +1,109 @@
 # Waveform
 
-A minimal music player built with Next.js 16, PostgreSQL, MinIO, and NextAuth.
+Local-first music player built with Next.js, SQLite, filesystem media storage, and NextAuth.
+
+## Stack
+
+- Next.js `16.1.6` (App Router)
+- React `19.2.4`
+- SQLite (`better-sqlite3`) for app data
+- Filesystem storage for audio, covers, and lyrics
+- NextAuth credentials auth
+- Zustand for player and likes state
 
 ## Quick Start
 
 ```bash
 bun install
 cp .env.example .env
-bun run docker:up              # Start Postgres + MinIO
-psql "$DATABASE_URL" -f db/schema.sql
-bun run scripts/seed.ts        # Optional: seed demo data
 bun run dev
 ```
 
-**Demo login:** `demo@example.com` / `password` at `/signin`
+The SQLite schema is auto-applied from `db/schema.sql` on startup.
+
+## Local Music Import
+
+Import from your local music folder:
+
+```bash
+bun run import:music --source /Users/erlinhoxha/Music
+```
+
+What import does:
+
+- Scans source folder recursively for supported audio files
+- Converts non-FLAC sources to FLAC via `ffmpeg`
+- Imports artwork from sidecar cover files and embedded metadata
+- Imports lyrics from:
+  - sidecar files near audio (`song.lrc`, `song.txt`, `lyrics.lrc`, `lyrics.txt`)
+  - dedicated lyrics folders (e.g. `lyrics/` or `Lyrics/`) by filename matching
+  - embedded lyrics metadata when available
 
 ## Environment
 
-Required variables are validated at runtime to avoid missing secrets.
+Required:
 
-- `DATABASE_URL` - Postgres connection string
-- `NEXTAUTH_SECRET` - session signing secret
-- `ADMIN_SECRET` - header secret for `/api/admin/batch-upload`
-- `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` - MinIO credentials
-- `MINIO_ENDPOINT`, `MINIO_PORT`, `MINIO_USE_SSL`, `MINIO_BUCKET` - MinIO connection settings
+- `SQLITE_DB_PATH` - path to SQLite database file
+- `NEXTAUTH_SECRET` - NextAuth session secret
+- `ADMIN_SECRET` - secret for `/api/admin/batch-upload`
 
-Optional tuning:
+Local media:
 
-- `UPLOAD_MAX_IMAGE_BYTES`, `UPLOAD_MAX_AUDIO_BYTES` - upload size limits
-- `RATE_LIMIT_*` - auth/register/admin rate limiting thresholds
+- `LOCAL_MEDIA_ROOT` - local storage root for imported/uploaded media
+- `LOCAL_MUSIC_SOURCE_DIR` - default import source directory
+- `LOCAL_IMPORT_USE_COVER_FILES` - enable sidecar cover file usage
+- `LOCAL_IMPORT_USE_LYRICS_FILES` - enable sidecar lyrics file usage
 
-## Architecture
+Optional limits/rate control:
 
-### Core Stack
-- **Next.js 16** - App Router, React 19, Server Components
-- **PostgreSQL** - Relational data via Bun's native SQL API
-- **MinIO** - S3-compatible local object storage for audio/artwork
-- **NextAuth** - Email/password auth with custom Bun SQL adapter
-- **Zustand** - Client state management (player, likes)
-- **Tailwind** - Styling
+- `UPLOAD_MAX_IMAGE_BYTES`
+- `UPLOAD_MAX_AUDIO_BYTES`
+- `RATE_LIMIT_AUTH_MAX`
+- `RATE_LIMIT_AUTH_WINDOW_MS`
+- `RATE_LIMIT_REGISTER_MAX`
+- `RATE_LIMIT_REGISTER_WINDOW_MS`
+- `RATE_LIMIT_ADMIN_MAX`
+- `RATE_LIMIT_ADMIN_WINDOW_MS`
 
-### Database (`db/`)
-- `schema.sql` - Tables for users, songs, playlists, likes
+## Main Features
 
-### API Routes (`src/app/api/`)
-- `auth/[...nextauth]` - NextAuth handlers
-- `songs` - List songs + multipart upload
-- `files/[...key]` - Proxy MinIO objects with cache headers
-- `artwork/[...file]` - Serve artwork files
-- `likes` - Toggle song likes
-- `register` - User registration
-- `admin/batch-upload` - Bulk upload endpoint
+- Upload songs with cover + audio
+- Local library import from filesystem
+- FLAC conversion pipeline for non-FLAC files
+- Lyrics support from sidecar/embedded metadata
+- Per-song cover/lyrics updates from Settings
+- Global player with queue, seek, volume, shuffle/repeat, and crossfade
+- Home/Liked/Playlist song collections with Grid/List view toggle
+- Left library sidebar (collapsible)
+- Right now playing sidebar (collapsible)
+- Expanded now-playing sheet from player bar
+- Likes with optimistic updates
 
-### Pages (`src/app/`)
-- `/` - Home feed with song grid
-- `/upload` - Upload new songs with metadata
-- `/liked` - User's liked songs
-- `/playlist/[id]` - Playlist view
-- `/signin`, `/register` - Auth pages
-- `/settings` - User settings
+## UI Notes
 
-### Components (`src/components/`)
-- `PlayerBar` - Global audio player with crossfade, keyboard shortcuts, persistence
-- `SongCard` - Individual song tile with play/like actions
-- `SongGrid` - Grid layout for song collections
-- `LibrarySidebar` - Navigation sidebar
-- `AuthButtons` - User menu dropdown
-- `CrossfadeSettings` - Crossfade duration control
+- Song collection view mode (`Grid` / `List`) is persisted in localStorage (`wf_song_view_mode`).
+- Left sidebar collapsed state is persisted in localStorage (`wf_left_sidebar_collapsed`).
+- Player state and crossfade settings persist client-side.
 
-### State Management (`src/store/`)
-- `player.ts` - Queue, playback state, volume, crossfade settings
-- `likes.ts` - Optimistic like/unlike state
+## API Endpoints
 
-### Lib (`src/lib/`)
-- `db.ts` - Postgres client with connection pooling
-- `auth-adapter.ts` - NextAuth adapter for Bun SQL
-- `storage.ts` - MinIO client wrapper
-- `song-utils.ts` - Song metadata helpers
-- `db-types.ts` - Database type definitions
+- `GET/POST /api/songs` - list songs and upload songs
+- `POST /api/songs/:id/assets` - update song cover and/or lyrics
+- `GET/POST /api/library/import` - import defaults + authenticated import trigger
+- `POST /api/admin/batch-upload` - admin-secret import trigger
+- `GET /api/files/[...key]` - streams local audio/images/lyrics (range support)
+- `GET /api/likes`, `POST /api/likes`, `DELETE /api/likes` - like management
 
-### Scripts (`scripts/`)
-- `seed.ts` - Seed demo data
-- `docker.ts` - Docker compose management
-- `upload-billboard.ts` - Batch upload Billboard songs
+## Scripts
 
-## Features
+- `bun run dev`
+- `bun run build`
+- `bun run start`
+- `bun run lint`
+- `bun run import:music`
 
-- Email/password authentication
-- Upload songs with cover art and metadata
-- Play queue with crossfade transitions
-- Like/unlike songs (optimistic updates)
-- Playlist management
-- Keyboard shortcuts (space, arrow keys)
-- Volume + seek controls
-- LocalStorage persistence for player state
+## Notes
 
-## Infrastructure
-
-- **Postgres**: `localhost:5432` (user/pass/db: `waveform`)
-- **MinIO Console**: `http://localhost:9001` (user: `waveform`, pass: `waveformsecret`)
-- Files stored in `uploads` bucket with immutable cache headers
+- `ffmpeg` must be installed and available in `PATH` for non-FLAC conversion.
+- Media files are stored under `LOCAL_MEDIA_ROOT` and ignored by git.
+- Runtime SQLite DB files are ignored by git.

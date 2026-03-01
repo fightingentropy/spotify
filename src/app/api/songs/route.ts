@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
 import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
+import { ensureSongLyricsColumn } from "@/lib/db-migrations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +36,7 @@ const IMAGE_EXT_TYPES = new Map<string, string>([
 ]);
 
 const AUDIO_EXT_TYPES = new Map<string, string>([
+  [".flac", "audio/flac"],
   [".mp3", "audio/mpeg"],
   [".mpeg", "audio/mpeg"],
   [".wav", "audio/wav"],
@@ -48,6 +50,8 @@ const IMAGE_MIME_TYPES = new Set<string>([
 ]);
 
 const AUDIO_MIME_TYPES = new Set<string>([
+  "audio/flac",
+  "audio/x-flac",
   "audio/mpeg",
   "audio/mp3",
   "audio/wav",
@@ -109,6 +113,8 @@ function resolveUploadConfig(
     const normalized =
       lower === "audio/mp3"
         ? "audio/mpeg"
+        : lower === "audio/x-flac"
+          ? "audio/flac"
         : lower === "audio/x-wav" || lower === "audio/wave"
           ? "audio/wav"
           : lower;
@@ -265,9 +271,7 @@ async function parseMultipartUpload(req: Request): Promise<{
     });
   });
 
-  const bodyStream = Readable.fromWeb(
-    req.body as unknown as ReadableStream<Uint8Array>,
-  );
+  const bodyStream = Readable.fromWeb(req.body as any);
   bodyStream.pipe(busboy);
 
   await finished;
@@ -290,8 +294,9 @@ async function parseMultipartUpload(req: Request): Promise<{
 }
 
 export async function GET() {
+  await ensureSongLyricsColumn();
   const songs = (await (db`
-    SELECT "id", "title", "artist", "imageUrl", "audioUrl", "userId", "createdAt"
+    SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "userId", "createdAt"
     FROM "Song"
     ORDER BY "title" ASC
   ` as any)) as SongRow[];
@@ -318,13 +323,15 @@ export async function POST(req: Request) {
   const { title, artist, image, audio } = parsed.data!;
   const imageUrl = `/api/files/images/${encodeURIComponent(image.fileName)}`;
   const audioUrl = `/api/files/audio/${encodeURIComponent(audio.fileName)}`;
+  const lyricsUrl: string | null = null;
 
   const userId = s.user.id;
   const songId = randomUUID();
+  await ensureSongLyricsColumn();
   const [song] = (await (db`
-    INSERT INTO "Song" ("id", "title", "artist", "imageUrl", "audioUrl", "userId")
-    VALUES (${songId}, ${title}, ${artist}, ${imageUrl}, ${audioUrl}, ${userId})
-    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "userId", "createdAt"
+    INSERT INTO "Song" ("id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "userId")
+    VALUES (${songId}, ${title}, ${artist}, ${imageUrl}, ${audioUrl}, ${lyricsUrl}, ${userId})
+    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "userId", "createdAt"
   ` as any)) as SongRow[];
 
   return NextResponse.json(song, { status: 201 });

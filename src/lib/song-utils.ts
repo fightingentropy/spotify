@@ -1,14 +1,23 @@
 import type { SongRow } from "@/lib/db-types";
 import type { PlayerSong } from "@/types/player";
 
-export function normalizeMediaUrl(url: string | null | undefined, kind: "image" | "audio"): string {
+export function normalizeMediaUrl(
+  url: string | null | undefined,
+  kind: "image" | "audio" | "lyrics",
+): string {
   if (!url) return "";
   if (url.startsWith("/api/files/")) {
     return url;
   }
 
-  const normalizedKind = kind === "image" ? "images" : "audio";
-  const legacyPrefix = kind === "image" ? "/uploads/images/" : "/uploads/audio/";
+  const normalizedKind =
+    kind === "image" ? "images" : kind === "audio" ? "audio" : "lyrics";
+  const legacyPrefix =
+    kind === "image"
+      ? "/uploads/images/"
+      : kind === "audio"
+        ? "/uploads/audio/"
+        : "/uploads/lyrics/";
 
   if (url.startsWith(legacyPrefix)) {
     const filename = url.slice(legacyPrefix.length);
@@ -25,5 +34,6 @@ export function songToPlayerSong(song: SongRow): PlayerSong {
     artist: song.artist,
     imageUrl: normalizeMediaUrl(song.imageUrl, "image"),
     audioUrl: normalizeMediaUrl(song.audioUrl, "audio"),
+    lyricsUrl: normalizeMediaUrl(song.lyricsUrl, "lyrics"),
   };
 }

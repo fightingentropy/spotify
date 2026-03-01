@@ -7,7 +7,8 @@ import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
-import { Heart, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
+import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
+import NowPlayingSheet from "@/components/NowPlayingSheet";
 
 function PlayerBar(): React.ReactElement | null {
   const {
@@ -74,6 +75,7 @@ function PlayerBar(): React.ReactElement | null {
   const savedSeekRef = useRef<number | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
+  const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
   const src = currentSong?.audioUrl || null;
 
@@ -428,7 +430,16 @@ function PlayerBar(): React.ReactElement | null {
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <>
+      <NowPlayingSheet
+        open={nowPlayingOpen}
+        onClose={() => setNowPlayingOpen(false)}
+        song={currentSong}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
+        duration={duration}
+      />
+      <div className="fixed bottom-0 inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <audio
         ref={audioARef}
         hidden
@@ -514,6 +525,20 @@ function PlayerBar(): React.ReactElement | null {
             </div>
             <button
               type="button"
+              aria-label={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
+              title={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
+              onClick={() => setNowPlayingOpen((open) => !open)}
+              className={cn(
+                "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+                nowPlayingOpen
+                  ? "text-emerald-500 bg-black/10 dark:bg-white/10"
+                  : "text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10"
+              )}
+            >
+              {nowPlayingOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+            </button>
+            <button
+              type="button"
               aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
               title={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
               onClick={handleToggleLike}
@@ -582,7 +607,8 @@ function PlayerBar(): React.ReactElement | null {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

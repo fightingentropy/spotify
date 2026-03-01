@@ -1,0 +1,2 @@
+ALTER TABLE "Song"
+ADD COLUMN "lyricsUrl" TEXT;

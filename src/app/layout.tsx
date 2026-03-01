@@ -7,6 +7,7 @@ import { Providers } from "@/components/Providers";
 import { AuthButtons } from "@/components/AuthButtons";
 import { PlayerBar } from "@/components/PlayerBar";
 import LibrarySidebar from "@/components/LibrarySidebar";
+import NowPlayingSidebar from "@/components/NowPlayingSidebar";
 
 export const runtime = "nodejs";
 
@@ -41,7 +42,7 @@ export default function RootLayout({
     <html lang="en">
       <body suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}>
         <Providers>
-          <header className="relative z-50 border-b border-black/10 dark:border-white/10">
+          <header className="fixed top-0 inset-x-0 z-50 border-b border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
               <Link href="/" className="font-semibold inline-flex items-center gap-2">
                 <Image src="/waveform.svg" alt="Waveform" width={24} height={24} className="h-6 w-6" priority />
@@ -55,7 +56,8 @@ export default function RootLayout({
             </div>
           </header>
           <LibrarySidebar />
-          <main className="lg:pl-64">{children}</main>
+          <NowPlayingSidebar />
+          <main className="wf-main pt-14">{children}</main>
           <PlayerBar />
         </Providers>
       </body>

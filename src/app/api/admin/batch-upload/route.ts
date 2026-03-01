@@ -1,38 +1,105 @@
 import { NextResponse } from "next/server";
-import { join } from "node:path";
-import { readdir, stat } from "node:fs/promises";
-import { putObjectFromFilePath, statObject } from "@/lib/storage";
+import { randomUUID } from "node:crypto";
+import { db } from "@/lib/db";
 import { env } from "@/lib/env";
+import { importLocalLibrary } from "@/lib/local-library";
 import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function walkFiles(baseDir: string, relDir = ""): Promise<string[]> {
-  const dirPath = join(baseDir, relDir);
-  const entries = await readdir(dirPath, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      const nested = await walkFiles(baseDir, relPath);
-      files.push(...nested);
-    } else if (entry.isFile()) {
-      files.push(relPath);
-    }
+type BatchPayload = {
+  sourceDir?: unknown;
+  includeCoverFiles?: unknown;
+  includeLyricsFiles?: unknown;
+  userId?: unknown;
+  userEmail?: unknown;
+};
+
+async function ensureImportUser(userEmail: string): Promise<string> {
+  const existing = (await (db`
+    SELECT "id"
+    FROM "User"
+    WHERE "email" = ${userEmail}
+    LIMIT 1
+  ` as any)) as Array<{ id: string }>;
+  if (existing[0]?.id) {
+    return existing[0].id;
   }
-  return files;
+
+  const userId = randomUUID();
+  await db`
+    INSERT INTO "User" (
+      "id",
+      "email",
+      "name",
+      "passwordHash",
+      "image",
+      "emailVerified",
+      "createdAt",
+      "updatedAt"
+    )
+    VALUES (
+      ${userId},
+      ${userEmail},
+      ${"Local Library"},
+      ${null},
+      ${null},
+      ${null},
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    )
+  `;
+  return userId;
 }
 
-function inferContentType(fileName: string): string | undefined {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".mp3") || lower.endsWith(".mpeg")) return "audio/mpeg";
-  if (lower.endsWith(".wav")) return "audio/wav";
-  return undefined;
+async function resolveTargetUserId(payload: BatchPayload): Promise<string> {
+  const requestedUserId =
+    typeof payload.userId === "string" && payload.userId.trim().length > 0
+      ? payload.userId.trim()
+      : null;
+
+  if (requestedUserId) {
+    const rows = (await (db`
+      SELECT "id"
+      FROM "User"
+      WHERE "id" = ${requestedUserId}
+      LIMIT 1
+    ` as any)) as Array<{ id: string }>;
+    if (rows[0]?.id) {
+      return rows[0].id;
+    }
+  }
+
+  const requestedEmail =
+    typeof payload.userEmail === "string" && payload.userEmail.trim().length > 0
+      ? payload.userEmail.trim().toLowerCase()
+      : null;
+
+  if (requestedEmail) {
+    const rows = (await (db`
+      SELECT "id"
+      FROM "User"
+      WHERE "email" = ${requestedEmail}
+      LIMIT 1
+    ` as any)) as Array<{ id: string }>;
+    if (rows[0]?.id) {
+      return rows[0].id;
+    }
+    return ensureImportUser(requestedEmail);
+  }
+
+  const fallbackRows = (await (db`
+    SELECT "id"
+    FROM "User"
+    ORDER BY "createdAt" ASC
+    LIMIT 1
+  ` as any)) as Array<{ id: string }>;
+
+  if (fallbackRows[0]?.id) {
+    return fallbackRows[0].id;
+  }
+  return ensureImportUser("local-library@waveform.local");
 }
 
 export async function POST(req: Request) {
@@ -42,9 +109,6 @@ export async function POST(req: Request) {
     windowMs: env.RATE_LIMIT_ADMIN_WINDOW_MS,
   });
   if (!rate.allowed) {
-    console.warn("[security] admin batch upload rate limit exceeded", {
-      ip: rate.ip,
-    });
     const headers = rateLimitHeaders(rate);
     return NextResponse.json(
       { error: "Too many requests" },
@@ -52,94 +116,52 @@ export async function POST(req: Request) {
     );
   }
 
-  const adminSecret = env.ADMIN_SECRET;
   const provided = req.headers.get("x-admin-secret") || "";
-  if (!provided || provided !== adminSecret) {
-    console.warn("[security] admin batch upload forbidden", {
-      ip: rate.ip,
-      hasSecret: Boolean(provided),
-    });
+  if (!provided || provided !== env.ADMIN_SECRET) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  console.info("[security] admin batch upload accepted", { ip: rate.ip });
 
-  const root = join(process.cwd(), "public", "uploads");
-  // Confirm root exists
+  let payload: BatchPayload = {};
   try {
-    const s = await stat(root);
-    if (!s.isDirectory()) throw new Error("uploads not a dir");
+    payload = (await req.json()) as BatchPayload;
   } catch {
-    return NextResponse.json(
-      { error: "Local uploads directory not found" },
-      { status: 400 },
-    );
+    payload = {};
   }
 
-  // Collect images
-  const imagesDir = join(root, "images");
-  const audioDir = join(root, "audio");
+  const targetUserId = await resolveTargetUserId(payload);
 
-  let imageFiles: string[] = [];
-  let audioFiles: string[] = [];
+  const sourceDir =
+    typeof payload.sourceDir === "string" && payload.sourceDir.trim().length > 0
+      ? payload.sourceDir.trim()
+      : env.LOCAL_MUSIC_SOURCE_DIR;
+
+  const includeCoverFiles =
+    typeof payload.includeCoverFiles === "boolean"
+      ? payload.includeCoverFiles
+      : env.LOCAL_IMPORT_USE_COVER_FILES;
+
+  const includeLyricsFiles =
+    typeof payload.includeLyricsFiles === "boolean"
+      ? payload.includeLyricsFiles
+      : env.LOCAL_IMPORT_USE_LYRICS_FILES;
+
   try {
-    imageFiles = await walkFiles(imagesDir);
-  } catch {
-    imageFiles = [];
-  }
-  try {
-    audioFiles = await walkFiles(audioDir);
-  } catch {
-    audioFiles = [];
-  }
+    const summary = await importLocalLibrary({
+      userId: targetUserId,
+      sourceDir,
+      includeCoverFiles,
+      includeLyricsFiles,
+    });
 
-  let uploaded = 0;
-  let skipped = 0;
-  const errors: Array<{ key: string; message: string }> = [];
-
-  // Upload images -> images/<name>
-  for (const rel of imageFiles) {
-    const key = `images/${rel.replace(/\\/g, "/")}`;
-    const filePath = join(imagesDir, rel);
-    const exists = await statObject(key).catch(() => null);
-    if (exists) {
-      skipped++;
-      continue;
-    }
-    try {
-      await putObjectFromFilePath(key, filePath, inferContentType(rel));
-      uploaded++;
-    } catch (e) {
-      errors.push({
-        key,
-        message: e instanceof Error ? e.message : "upload failed",
-      });
-    }
+    return NextResponse.json({
+      userId: targetUserId,
+      ...summary,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Batch import failed";
+    const status = message.includes("Source music directory not found")
+      ? 400
+      : 500;
+    return NextResponse.json({ error: message }, { status });
   }
-
-  // Upload audio -> audio/<relative path>
-  for (const rel of audioFiles) {
-    const key = `audio/${rel.replace(/\\/g, "/")}`;
-    const filePath = join(audioDir, rel);
-    const exists = await statObject(key).catch(() => null);
-    if (exists) {
-      skipped++;
-      continue;
-    }
-    try {
-      await putObjectFromFilePath(key, filePath, inferContentType(rel));
-      uploaded++;
-    } catch (e) {
-      errors.push({
-        key,
-        message: e instanceof Error ? e.message : "upload failed",
-      });
-    }
-  }
-
-  return NextResponse.json({
-    uploaded,
-    skipped,
-    total: imageFiles.length + audioFiles.length,
-    errors,
-  });
 }

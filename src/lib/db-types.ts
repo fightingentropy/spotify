@@ -43,6 +43,7 @@ export type SongRow = {
   artist: string;
   imageUrl: string;
   audioUrl: string;
+  lyricsUrl?: string | null;
   userId: string;
   createdAt: Date;
 };

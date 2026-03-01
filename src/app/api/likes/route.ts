@@ -48,7 +48,7 @@ export async function POST(req: Request) {
 
   await db`
     INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
-    VALUES (${randomUUID()}, ${userId}, ${songId}, NOW())
+    VALUES (${randomUUID()}, ${userId}, ${songId}, CURRENT_TIMESTAMP)
     ON CONFLICT ("userId", "songId")
     DO NOTHING
   `;
