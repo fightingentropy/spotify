@@ -412,7 +412,7 @@ function PlayerBar(): React.ReactElement | null {
   }, [next, previous, duration, toggle, getActiveAudio]);
 
   if (!currentSong) return null;
-  // const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
   function onSeek(value: number) {
     const active = getActiveAudio();
@@ -566,6 +566,9 @@ function PlayerBar(): React.ReactElement | null {
                 tabIndex={-1}
                 onFocus={(e) => e.currentTarget.blur()}
                 className="w-full h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500 focus:outline-none focus-visible:outline-none"
+                style={{
+                  background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+                }}
               />
               <span className="text-xs tabular-nums opacity-70 w-10">{formatTime(duration)}</span>
             </div>

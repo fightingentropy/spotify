@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS "Song" (
   "imageUrl" TEXT NOT NULL,
   "audioUrl" TEXT NOT NULL,
   "lyricsUrl" TEXT,
+  "audioBitDepth" INTEGER,
+  "audioSampleRate" INTEGER,
   "userId" TEXT NOT NULL,
   "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -86,3 +88,9 @@ CREATE TABLE IF NOT EXISTS "Like" (
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE,
   FOREIGN KEY ("songId") REFERENCES "Song"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS "idx_song_title" ON "Song" ("title");
+CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playlist_userId_createdAt" ON "Playlist" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order");
+CREATE INDEX IF NOT EXISTS "idx_like_userId_createdAt" ON "Like" ("userId", "createdAt" DESC);

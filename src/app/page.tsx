@@ -1,20 +1,24 @@
 import { getServerSession } from "next-auth";
 import { SongGrid } from "@/components/SongGrid";
+import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
+import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
 export const revalidate = 0;
 export const runtime = "nodejs";
 
 export default async function Home() {
+  await ensureSongLyricsColumn();
+  await ensureSongAudioColumns();
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
   const [songs, liked] = await Promise.all([
     (db`
-      SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "userId", "createdAt"
+      SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
       FROM "Song"
       ORDER BY "title" ASC
     ` as any) as Promise<SongRow[]>,
@@ -32,6 +36,7 @@ export default async function Home() {
 
   return (
     <div className="px-6 py-8 max-w-7xl mx-auto">
+      <HomeSearchCommandPalette songs={playerSongs} />
       {playerSongs.length === 0 ? (
         <div className="opacity-70">No songs available yet. Upload your first track to get started.</div>
       ) : (

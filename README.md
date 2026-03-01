@@ -1,15 +1,16 @@
 # Waveform
 
-Local-first music player built with Next.js, SQLite, filesystem media storage, and NextAuth.
+Waveform is a local-first music player built with Next.js, SQLite, and filesystem media storage.  
+It supports manual uploads and Spotify-link ingestion with automatic provider/quality selection (Tidal/Qobuz/Amazon via backend resolver).
 
-## Stack
+## Tech Stack
 
-- Next.js `16.1.6` (App Router)
-- React `19.2.4`
-- SQLite (`better-sqlite3`) for app data
-- Filesystem storage for audio, covers, and lyrics
-- NextAuth credentials auth
-- Zustand for player and likes state
+- Next.js 16 (App Router)
+- React 19
+- SQLite (`better-sqlite3`)
+- NextAuth (credentials)
+- Zustand (player + likes state)
+- Local filesystem object storage for audio, cover art, and lyrics
 
 ## Quick Start
 
@@ -19,42 +20,59 @@ cp .env.example .env
 bun run dev
 ```
 
-The SQLite schema is auto-applied from `db/schema.sql` on startup.
+SQLite schema is auto-applied from `db/schema.sql` at startup.
 
-## Local Music Import
+## Current App Features
 
-Import from your local music folder:
+- Library views:
+  - Home, Liked Songs, and Playlist pages
+  - Grid/List modes with persisted preference
+  - Upload-date sorting (newest/oldest)
+  - Virtualized list rendering for large libraries
+  - Duplicate rows deduped in song collections/search
+- Upload flow:
+  - Spotify link mode (default)
+  - Manual file upload mode
+  - Spotify fetch card actions: preview, download lyrics, download cover, check availability
+  - Missing cover/lyrics prompts during import with ignore/upload choices
+  - Duplicate song detection with replace confirmation
+  - Automatic folder organization under:
+    - `music/<artist>/<title>/audio`
+    - `music/<artist>/<title>/cover`
+    - `music/<artist>/<title>/lyrics`
+- Playback:
+  - Global player bar (seek, volume, shuffle, repeat, crossfade)
+  - Right now-playing sidebar + mobile sheet
+  - Lyrics hidden by default and toggleable
+- Library management:
+  - Likes with optimistic updates
+  - Per-song edit mode (title/artist/cover/lyrics) from Settings
+  - Song quality metadata support (`bit-depth` / `sample-rate`)
+- Navigation:
+  - Command+K / Ctrl+K search palette on home
 
-```bash
-bun run import:music --source /Users/erlinhoxha/Music
-```
+## Settings (Current UI)
 
-What import does:
+- Crossfade toggle + duration
+- Edit mode toggle (enables per-song edit controls)
+- Download quality profile (`Max`, `24-bit/48kHz`, `16-bit/44.1kHz`)
 
-- Scans source folder recursively for supported audio files
-- Converts non-FLAC sources to FLAC via `ffmpeg`
-- Imports artwork from sidecar cover files and embedded metadata
-- Imports lyrics from:
-  - sidecar files near audio (`song.lrc`, `song.txt`, `lyrics.lrc`, `lyrics.txt`)
-  - dedicated lyrics folders (e.g. `lyrics/` or `Lyrics/`) by filename matching
-  - embedded lyrics metadata when available
-
-## Environment
+## Environment Variables
 
 Required:
 
-- `SQLITE_DB_PATH` - path to SQLite database file
-- `NEXTAUTH_SECRET` - NextAuth session secret
-- `ADMIN_SECRET` - secret for `/api/admin/batch-upload`
+- `SQLITE_DB_PATH`
+- `NEXTAUTH_SECRET`
+- `ADMIN_SECRET`
 
-Local media:
+Storage and import defaults:
 
-- `LOCAL_MEDIA_ROOT` - local storage root for imported/uploaded media
-- `LOCAL_MUSIC_SOURCE_DIR` - default import source directory
-- `LOCAL_IMPORT_USE_COVER_FILES` - enable sidecar cover file usage
-- `LOCAL_IMPORT_USE_LYRICS_FILES` - enable sidecar lyrics file usage
+- `LOCAL_MEDIA_ROOT`
+- `LOCAL_MUSIC_SOURCE_DIR`
+- `LOCAL_IMPORT_USE_COVER_FILES`
+- `LOCAL_IMPORT_USE_LYRICS_FILES`
 
-Optional limits/rate control:
+Upload and rate limits:
 
 - `UPLOAD_MAX_IMAGE_BYTES`
 - `UPLOAD_MAX_AUDIO_BYTES`
@@ -65,34 +83,35 @@ Optional limits/rate control:
 - `RATE_LIMIT_ADMIN_MAX`
 - `RATE_LIMIT_ADMIN_WINDOW_MS`
 
-## Main Features
-
-- Upload songs with cover + audio
-- Local library import from filesystem
-- FLAC conversion pipeline for non-FLAC files
-- Lyrics support from sidecar/embedded metadata
-- Per-song cover/lyrics updates from Settings
-- Global player with queue, seek, volume, shuffle/repeat, and crossfade
-- Home/Liked/Playlist song collections with Grid/List view toggle
-- Left library sidebar (collapsible)
-- Right now playing sidebar (collapsible)
-- Expanded now-playing sheet from player bar
-- Likes with optimistic updates
-
-## UI Notes
-
-- Song collection view mode (`Grid` / `List`) is persisted in localStorage (`wf_song_view_mode`).
-- Left sidebar collapsed state is persisted in localStorage (`wf_left_sidebar_collapsed`).
-- Player state and crossfade settings persist client-side.
-
 ## API Endpoints
 
-- `GET/POST /api/songs` - list songs and upload songs
-- `POST /api/songs/:id/assets` - update song cover and/or lyrics
-- `GET/POST /api/library/import` - import defaults + authenticated import trigger
-- `POST /api/admin/batch-upload` - admin-secret import trigger
-- `GET /api/files/[...key]` - streams local audio/images/lyrics (range support)
-- `GET /api/likes`, `POST /api/likes`, `DELETE /api/likes` - like management
+Core:
+
+- `GET /api/songs` list songs
+- `POST /api/songs` create song (manual upload or Spotify/link mode)
+- `PATCH /api/songs/:id` update song metadata (title/artist)
+- `POST /api/songs/:id/assets` update song cover and/or lyrics
+- `GET /api/files/[...key]` stream local files (supports range requests)
+- `GET/POST/DELETE /api/likes` liked songs management
+
+Spotify helpers:
+
+- `POST /api/songs/spotify` actions: `fetch`, `availability`, `lyrics`
+- `GET /api/songs/spotify/cover` cover proxy/download
+
+Auth:
+
+- `POST /api/register`
+- `GET/POST /api/auth/[...nextauth]`
+
+Import/admin utilities (API-only):
+
+- `GET/POST /api/library/import` local library import defaults + authenticated import
+- `POST /api/admin/batch-upload` admin-secret protected batch import
+
+Misc:
+
+- `GET /api/artwork/[...file]`
 
 ## Scripts
 
@@ -100,10 +119,9 @@ Optional limits/rate control:
 - `bun run build`
 - `bun run start`
 - `bun run lint`
-- `bun run import:music`
 
 ## Notes
 
-- `ffmpeg` must be installed and available in `PATH` for non-FLAC conversion.
-- Media files are stored under `LOCAL_MEDIA_ROOT` and ignored by git.
-- Runtime SQLite DB files are ignored by git.
+- `ffmpeg` is required in `PATH` for local-library conversion/import paths.
+- Media files are stored under `LOCAL_MEDIA_ROOT` and gitignored.
+- Runtime SQLite DB files are gitignored.

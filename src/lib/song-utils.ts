@@ -28,6 +28,11 @@ export function normalizeMediaUrl(
 }
 
 export function songToPlayerSong(song: SongRow): PlayerSong {
+  const createdDate =
+    song.createdAt instanceof Date ? song.createdAt : new Date(String(song.createdAt));
+  const createdAtIso = Number.isFinite(createdDate.getTime())
+    ? createdDate.toISOString()
+    : undefined;
   return {
     id: song.id,
     title: song.title,
@@ -35,5 +40,10 @@ export function songToPlayerSong(song: SongRow): PlayerSong {
     imageUrl: normalizeMediaUrl(song.imageUrl, "image"),
     audioUrl: normalizeMediaUrl(song.audioUrl, "audio"),
     lyricsUrl: normalizeMediaUrl(song.lyricsUrl, "lyrics"),
+    createdAt: createdAtIso,
+    audioBitDepth:
+      typeof song.audioBitDepth === "number" ? song.audioBitDepth : undefined,
+    audioSampleRate:
+      typeof song.audioSampleRate === "number" ? song.audioSampleRate : undefined,
   };
 }

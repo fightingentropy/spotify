@@ -4,11 +4,14 @@ import { songToPlayerSong } from "@/lib/song-utils";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
+import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
 export const revalidate = 0;
 export const runtime = "nodejs";
 
 export default async function LikedPage() {
+  await ensureSongLyricsColumn();
+  await ensureSongAudioColumns();
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
@@ -27,7 +30,7 @@ export default async function LikedPage() {
   }
 
   const rows = await (db`
-    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."userId", s."createdAt", l."songId"
+    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", l."songId"
     FROM "Like" l
     INNER JOIN "Song" s ON s."id" = l."songId"
     WHERE l."userId" = ${userId}

@@ -5,4 +5,7 @@ export type PlayerSong = {
   imageUrl: string;
   audioUrl: string;
   lyricsUrl?: string;
+  createdAt?: string;
+  audioBitDepth?: number;
+  audioSampleRate?: number;
 };

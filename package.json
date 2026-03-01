@@ -6,8 +6,7 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint .",
-    "import:music": "bun run scripts/import-local-music.ts"
+    "lint": "eslint ."
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

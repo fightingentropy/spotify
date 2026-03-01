@@ -2,28 +2,36 @@
 
 import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
 import Image from "next/image";
-import { Heart, Pause, Play } from "lucide-react";
+import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 
 type SongListItemProps = {
   song: PlayerSong;
-  onPlay?: () => void;
+  songIndex?: number;
+  onPlayAt?: (index: number) => void;
   liked?: boolean;
   likePending?: boolean;
   canLike?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
+  editMode?: boolean;
+  canReorder?: boolean;
+  onEdit?: (song: PlayerSong) => void;
   priority?: boolean;
 };
 
 const SongListItemComponent = function SongListItem({
   song,
-  onPlay,
+  songIndex,
+  onPlayAt,
   liked = false,
   likePending = false,
   canLike = false,
   onToggleLike,
+  editMode = false,
+  canReorder = false,
+  onEdit,
   priority = false,
 }: SongListItemProps) {
   const setSong = usePlayerStore((state) => state.setSong);
@@ -41,13 +49,13 @@ const SongListItemComponent = function SongListItem({
       else play();
       return;
     }
-    if (onPlay) {
-      onPlay();
+    if (typeof songIndex === "number" && onPlayAt) {
+      onPlayAt(songIndex);
       return;
     }
     setSong(song);
     play();
-  }, [isActive, isPlaying, onPlay, pause, play, setSong, song]);
+  }, [isActive, isPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -81,6 +89,15 @@ const SongListItemComponent = function SongListItem({
       )}
     >
       <div className="relative h-12 w-12 rounded overflow-hidden shrink-0">
+        {canReorder ? (
+          <div
+            aria-hidden
+            className="absolute -left-6 top-1/2 -translate-y-1/2 text-foreground/45"
+            title="Drag to reorder"
+          >
+            <GripVertical size={15} />
+          </div>
+        ) : null}
         <Image
           src={song.imageUrl || "/waveform.svg"}
           alt={song.title}
@@ -95,7 +112,29 @@ const SongListItemComponent = function SongListItem({
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium truncate">{song.title}</div>
         <div className="text-xs opacity-70 truncate">{song.artist}</div>
+        {editMode ? (
+          <div className="text-[11px] opacity-60 truncate">
+            {song.audioBitDepth && song.audioSampleRate
+              ? `${song.audioBitDepth}-bit/${Math.round(song.audioSampleRate / 100) / 10}kHz`
+              : "Quality: Unknown"}
+          </div>
+        ) : null}
       </div>
+
+      {editMode && onEdit ? (
+        <button
+          type="button"
+          aria-label="Edit song"
+          title="Edit song"
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit(song);
+          }}
+          className="h-9 w-9 rounded-full grid place-items-center transition hover:bg-black/10 hover:dark:bg-white/10"
+        >
+          <Pencil size={17} />
+        </button>
+      ) : null}
 
       <button
         type="button"
@@ -127,13 +166,17 @@ const SongListItemComponent = function SongListItem({
 
 export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) => {
   return (
-    prevProps.song.id === nextProps.song.id &&
+    prevProps.song === nextProps.song &&
+    prevProps.songIndex === nextProps.songIndex &&
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
+    prevProps.editMode === nextProps.editMode &&
+    prevProps.canReorder === nextProps.canReorder &&
     prevProps.priority === nextProps.priority &&
-    prevProps.onPlay === nextProps.onPlay &&
-    prevProps.onToggleLike === nextProps.onToggleLike
+    prevProps.onPlayAt === nextProps.onPlayAt &&
+    prevProps.onToggleLike === nextProps.onToggleLike &&
+    prevProps.onEdit === nextProps.onEdit
   );
 });
 

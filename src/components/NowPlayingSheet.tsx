@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { CheckCircle2, FileText, X } from "lucide-react";
 import type { PlayerSong } from "@/types/player";
@@ -51,17 +51,25 @@ export default function NowPlayingSheet({
   currentTime,
   duration,
 }: NowPlayingSheetProps) {
-  const [showLyrics, setShowLyrics] = useState(true);
+  const [showLyrics, setShowLyrics] = useState(false);
   const [lyricsState, setLyricsState] = useState<LyricsState>({
     status: "idle",
     text: "",
   });
+  const loadedLyricsKeyRef = useRef<string | null>(null);
 
   const credits = useMemo(() => parseCredits(song.artist), [song.artist]);
 
   useEffect(() => {
+    if (!open || !showLyrics) return;
+
     if (!song.lyricsUrl) {
       setLyricsState({ status: "idle", text: "" });
+      loadedLyricsKeyRef.current = null;
+      return;
+    }
+    const lyricsKey = `${song.id}:${song.lyricsUrl}`;
+    if (loadedLyricsKeyRef.current === lyricsKey) {
       return;
     }
 
@@ -79,9 +87,11 @@ export default function NowPlayingSheet({
         const text = (await response.text()).trim();
         if (cancelled) return;
         setLyricsState({ status: "ready", text });
+        loadedLyricsKeyRef.current = lyricsKey;
       } catch {
         if (cancelled) return;
         setLyricsState({ status: "error", text: "" });
+        loadedLyricsKeyRef.current = null;
       }
     }
 
@@ -90,7 +100,7 @@ export default function NowPlayingSheet({
     return () => {
       cancelled = true;
     };
-  }, [song.id, song.lyricsUrl]);
+  }, [open, showLyrics, song.id, song.lyricsUrl]);
 
   useEffect(() => {
     if (!open) return;
@@ -151,6 +161,7 @@ export default function NowPlayingSheet({
                 alt={song.title}
                 width={1200}
                 height={1200}
+                loading="eager"
                 className="w-full aspect-square rounded-xl object-cover"
                 unoptimized
               />
@@ -170,6 +181,7 @@ export default function NowPlayingSheet({
                 <button
                   type="button"
                   onClick={() => setShowLyrics((value) => !value)}
+                  onMouseUp={(event) => event.currentTarget.blur()}
                   className="inline-flex items-center gap-2 h-8 px-3 rounded-full border border-black/15 dark:border-white/20 text-sm hover:bg-black/5 hover:dark:bg-white/5"
                 >
                   <FileText size={14} />

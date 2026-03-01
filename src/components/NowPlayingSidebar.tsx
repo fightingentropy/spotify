@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4 } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
@@ -39,11 +39,12 @@ export default function NowPlayingSidebar() {
   const isPlaying = usePlayerStore((state) => state.isPlaying);
 
   const [collapsed, setCollapsed] = useState(false);
-  const [showLyrics, setShowLyrics] = useState(true);
+  const [showLyrics, setShowLyrics] = useState(false);
   const [lyricsState, setLyricsState] = useState<LyricsState>({
     status: "idle",
     text: "",
   });
+  const loadedLyricsKeyRef = useRef<string | null>(null);
 
   const credits = useMemo(
     () => parseCredits(currentSong?.artist || ""),
@@ -51,9 +52,16 @@ export default function NowPlayingSidebar() {
   );
 
   useEffect(() => {
+    if (!showLyrics) return;
+
     const lyricsUrl = currentSong?.lyricsUrl;
     if (!lyricsUrl) {
       setLyricsState({ status: "idle", text: "" });
+      loadedLyricsKeyRef.current = null;
+      return;
+    }
+    const lyricsKey = `${currentSong?.id ?? ""}:${lyricsUrl}`;
+    if (loadedLyricsKeyRef.current === lyricsKey) {
       return;
     }
     const safeLyricsUrl = lyricsUrl;
@@ -72,9 +80,11 @@ export default function NowPlayingSidebar() {
         const text = (await response.text()).trim();
         if (cancelled) return;
         setLyricsState({ status: "ready", text });
+        loadedLyricsKeyRef.current = lyricsKey;
       } catch {
         if (cancelled) return;
         setLyricsState({ status: "error", text: "" });
+        loadedLyricsKeyRef.current = null;
       }
     }
 
@@ -83,7 +93,7 @@ export default function NowPlayingSidebar() {
     return () => {
       cancelled = true;
     };
-  }, [currentSong?.id, currentSong?.lyricsUrl]);
+  }, [currentSong?.id, currentSong?.lyricsUrl, showLyrics]);
 
   return (
     <aside
@@ -128,6 +138,7 @@ export default function NowPlayingSidebar() {
               alt={currentSong.title}
               width={500}
               height={500}
+              loading="eager"
               className="w-full aspect-square rounded-xl object-cover"
               unoptimized
             />
@@ -146,6 +157,7 @@ export default function NowPlayingSidebar() {
                 <button
                   type="button"
                   onClick={() => setShowLyrics((value) => !value)}
+                  onMouseUp={(event) => event.currentTarget.blur()}
                   className="inline-flex items-center gap-1 h-7 px-2 rounded-full border border-black/15 dark:border-white/20 text-xs hover:bg-black/5 hover:dark:bg-white/5"
                 >
                   <FileText size={13} />

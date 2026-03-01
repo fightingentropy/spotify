@@ -44,6 +44,8 @@ export type SongRow = {
   imageUrl: string;
   audioUrl: string;
   lyricsUrl?: string | null;
+  audioBitDepth?: number | null;
+  audioSampleRate?: number | null;
   userId: string;
   createdAt: Date;
 };

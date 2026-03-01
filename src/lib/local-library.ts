@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, stat } from "node:fs/promises";
-import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { parseFile } from "music-metadata";
 import { db } from "@/lib/db";
-import { ensureSongLyricsColumn } from "@/lib/db-migrations";
+import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 import { env } from "@/lib/env";
 import {
   getObjectAbsolutePath,
@@ -56,21 +56,12 @@ export type ImportLocalLibraryResult = {
 };
 
 function sanitizeSegment(segment: string): string {
-  const safe = segment.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const safe = segment.trim().replace(/[^a-zA-Z0-9._ -]/g, "_").replace(/\s+/g, " ");
   return safe.length > 0 ? safe : "untitled";
 }
 
-function toStorageStem(sourceDir: string, filePath: string): string {
-  const rel = relative(sourceDir, filePath);
-  if (!rel || rel.startsWith("..") || rel.includes(`${sep}..${sep}`)) {
-    throw new Error(`File is outside source directory: ${filePath}`);
-  }
-  const withoutExt = rel.slice(0, Math.max(0, rel.length - extname(rel).length));
-  const parts = withoutExt
-    .split(/[\\/]/)
-    .filter(Boolean)
-    .map(sanitizeSegment);
-  return parts.length > 0 ? parts.join("/") : randomUUID();
+function buildMusicBasePath(artist: string, title: string): string {
+  return join("music", sanitizeSegment(artist), sanitizeSegment(title)).replaceAll("\\", "/");
 }
 
 function toApiFileUrl(key: string): string {
@@ -274,6 +265,7 @@ export async function importLocalLibrary(
   options: ImportLocalLibraryOptions,
 ): Promise<ImportLocalLibraryResult> {
   await ensureSongLyricsColumn();
+  await ensureSongAudioColumns();
 
   const sourceDir = options.sourceDir?.trim() || env.LOCAL_MUSIC_SOURCE_DIR;
   const includeCoverFiles =
@@ -309,28 +301,6 @@ export async function importLocalLibrary(
       const sourceExt = extname(fileName).toLowerCase();
       const sourceBaseName = basename(fileName, sourceExt);
       const sourceFolder = dirname(audioPath);
-      const storageStem = toStorageStem(sourceDir, audioPath);
-
-      const audioKey = `audio/${storageStem}.flac`;
-      const audioPathInStorage = getObjectAbsolutePath(audioKey);
-      const audioUrl = toApiFileUrl(audioKey);
-
-      const existingRows = (await (db`
-        SELECT "id", "imageUrl", "lyricsUrl"
-        FROM "Song"
-        WHERE "audioUrl" = ${audioUrl}
-        LIMIT 1
-      ` as any)) as ExistingSong[];
-      const existing = existingRows[0] ?? null;
-
-      if (!(await exists(audioPathInStorage))) {
-        if (sourceExt === ".flac") {
-          await putObjectFromFilePath(audioKey, audioPath, "audio/flac");
-        } else {
-          await runFfmpegToFlac(audioPath, audioPathInStorage);
-          result.converted += 1;
-        }
-      }
 
       const metadata = await parseFile(audioPath, {
         duration: false,
@@ -344,6 +314,37 @@ export async function importLocalLibrary(
         metadata?.common.artist?.trim() ||
         metadata?.common.albumartist?.trim() ||
         "Unknown Artist";
+      const audioBitDepth =
+        typeof metadata?.format.bitsPerSample === "number" &&
+        Number.isFinite(metadata.format.bitsPerSample)
+          ? Math.round(metadata.format.bitsPerSample)
+          : null;
+      const audioSampleRate =
+        typeof metadata?.format.sampleRate === "number" &&
+        Number.isFinite(metadata.format.sampleRate)
+          ? Math.round(metadata.format.sampleRate)
+          : null;
+      const basePath = buildMusicBasePath(artist, title);
+      const audioKey = `${basePath}/audio/${randomUUID()}.flac`;
+      const audioPathInStorage = getObjectAbsolutePath(audioKey);
+      const audioUrl = toApiFileUrl(audioKey);
+
+      const existingRows = (await (db`
+        SELECT "id", "imageUrl", "lyricsUrl"
+        FROM "Song"
+        WHERE "userId" = ${options.userId}
+          AND lower("title") = lower(${title})
+          AND lower("artist") = lower(${artist})
+        LIMIT 1
+      ` as any)) as ExistingSong[];
+      const existing = existingRows[0] ?? null;
+
+      if (sourceExt === ".flac") {
+        await putObjectFromFilePath(audioKey, audioPath, "audio/flac");
+      } else {
+        await runFfmpegToFlac(audioPath, audioPathInStorage);
+        result.converted += 1;
+      }
 
       let imageUrl = existing?.imageUrl || "/waveform.svg";
       if (includeCoverFiles) {
@@ -352,7 +353,7 @@ export async function importLocalLibrary(
         );
         if (sidecarCover) {
           const coverExt = extname(sidecarCover).toLowerCase();
-          const imageKey = `images/${storageStem}${coverExt === ".jpeg" ? ".jpg" : coverExt}`;
+          const imageKey = `${basePath}/cover/${randomUUID()}${coverExt === ".jpeg" ? ".jpg" : coverExt}`;
           await putObjectFromFilePath(imageKey, sidecarCover);
           imageUrl = toApiFileUrl(imageKey);
         }
@@ -360,7 +361,7 @@ export async function importLocalLibrary(
       if (imageUrl === "/waveform.svg" && metadata?.common.picture?.[0]) {
         const picture = metadata.common.picture[0];
         const pictureExt = extFromMimeType(picture.format || "image/jpeg");
-        const imageKey = `images/${storageStem}${pictureExt}`;
+        const imageKey = `${basePath}/cover/${randomUUID()}${pictureExt}`;
         await putObjectFromBuffer(
           imageKey,
           Buffer.from(picture.data),
@@ -383,13 +384,13 @@ export async function importLocalLibrary(
         }
         if (sidecarLyrics) {
           const lyricsExt = extname(sidecarLyrics).toLowerCase() === ".lrc" ? ".lrc" : ".txt";
-          const lyricsKey = `lyrics/${storageStem}${lyricsExt}`;
+          const lyricsKey = `${basePath}/lyrics/${randomUUID()}${lyricsExt}`;
           await putObjectFromFilePath(lyricsKey, sidecarLyrics, "text/plain; charset=utf-8");
           lyricsUrl = toApiFileUrl(lyricsKey);
         } else {
           const embeddedLyrics = metadata?.common.lyrics?.filter(Boolean).join("\n\n").trim();
           if (embeddedLyrics) {
-            const lyricsKey = `lyrics/${storageStem}.txt`;
+            const lyricsKey = `${basePath}/lyrics/${randomUUID()}.txt`;
             await putObjectFromBuffer(
               lyricsKey,
               Buffer.from(embeddedLyrics, "utf8"),
@@ -406,8 +407,11 @@ export async function importLocalLibrary(
           SET
             "title" = ${title},
             "artist" = ${artist},
+            "audioUrl" = ${audioUrl},
             "imageUrl" = ${imageUrl},
-            "lyricsUrl" = ${lyricsUrl}
+            "lyricsUrl" = ${lyricsUrl},
+            "audioBitDepth" = ${audioBitDepth},
+            "audioSampleRate" = ${audioSampleRate}
           WHERE "id" = ${existing.id}
         `;
         result.updated += 1;
@@ -420,6 +424,8 @@ export async function importLocalLibrary(
             "imageUrl",
             "audioUrl",
             "lyricsUrl",
+            "audioBitDepth",
+            "audioSampleRate",
             "userId"
           )
           VALUES (
@@ -429,6 +435,8 @@ export async function importLocalLibrary(
             ${imageUrl},
             ${audioUrl},
             ${lyricsUrl},
+            ${audioBitDepth},
+            ${audioSampleRate},
             ${options.userId}
           )
         `;

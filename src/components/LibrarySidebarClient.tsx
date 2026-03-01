@@ -13,32 +13,24 @@ type PlaylistEntry = {
 
 type LibrarySidebarClientProps = {
   userId: string | null;
-  likesCount: number;
   playlists: PlaylistEntry[];
+  initialCollapsed: boolean;
 };
 
 const SIDEBAR_STATE_KEY = "wf_left_sidebar_collapsed";
 
 export default function LibrarySidebarClient({
   userId,
-  likesCount,
   playlists,
+  initialCollapsed,
 }: LibrarySidebarClientProps) {
-  const [collapsed, setCollapsed] = useState(false);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(SIDEBAR_STATE_KEY);
-      if (stored === "1") {
-        setCollapsed(true);
-      }
-    } catch {}
-  }, []);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
 
   useEffect(() => {
     try {
       localStorage.setItem(SIDEBAR_STATE_KEY, collapsed ? "1" : "0");
     } catch {}
+    document.cookie = `${SIDEBAR_STATE_KEY}=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
     document.documentElement.style.setProperty(
       "--wf-left-sidebar-width",
       collapsed ? "4rem" : "16rem",
@@ -98,9 +90,6 @@ export default function LibrarySidebarClient({
             {!collapsed && (
               <div className="min-w-0">
                 <div className="text-sm font-medium">Liked Songs</div>
-                <div className="text-xs opacity-70">
-                  {userId ? `${likesCount} liked` : "Sign in to see your likes"}
-                </div>
               </div>
             )}
           </Link>

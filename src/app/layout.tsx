@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import Image from "next/image";
@@ -29,18 +30,28 @@ export const metadata: Metadata = {
   title: "Waveform",
   description: "Waveform — minimal music player",
   icons: {
-    icon: "/waveform.svg",
+    icon: "/waveform.svg?v=2",
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  const leftSidebarCollapsed =
+    cookieStore.get("wf_left_sidebar_collapsed")?.value === "1";
+
   return (
     <html lang="en">
-      <body suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}>
+      <body
+        suppressHydrationWarning
+        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}
+        style={{
+          ["--wf-left-sidebar-width" as any]: leftSidebarCollapsed ? "4rem" : "16rem",
+        }}
+      >
         <Providers>
           <header className="fixed top-0 inset-x-0 z-50 border-b border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
@@ -55,7 +66,7 @@ export default function RootLayout({
               </nav>
             </div>
           </header>
-          <LibrarySidebar />
+          <LibrarySidebar initialCollapsed={leftSidebarCollapsed} />
           <NowPlayingSidebar />
           <main className="wf-main pt-14">{children}</main>
           <PlayerBar />

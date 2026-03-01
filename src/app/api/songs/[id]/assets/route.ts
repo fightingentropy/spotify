@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { basename, extname } from "node:path";
+import { basename, extname, join } from "node:path";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
@@ -29,6 +29,15 @@ const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
 
 function toApiFileUrl(key: string): string {
   return `/api/files/${key.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+
+function sanitizePathSegment(value: string): string {
+  const safe = value.trim().replace(/[^a-zA-Z0-9.\-_ ]/g, "_").replace(/\s+/g, " ");
+  return safe || "unknown";
+}
+
+function buildOrganizedMusicBasePath(title: string, artist: string): string {
+  return join("music", sanitizePathSegment(artist), sanitizePathSegment(title)).replaceAll("\\", "/");
 }
 
 function sanitizeName(fileName: string): string {
@@ -82,11 +91,18 @@ export async function POST(
   }
 
   const songs = (await (db`
-    SELECT "id", "imageUrl", "lyricsUrl", "userId"
+    SELECT "id", "title", "artist", "imageUrl", "lyricsUrl", "userId"
     FROM "Song"
     WHERE "id" = ${songId}
     LIMIT 1
-  ` as any)) as Array<{ id: string; imageUrl: string; lyricsUrl: string | null; userId: string }>;
+  ` as any)) as Array<{
+    id: string;
+    title: string;
+    artist: string;
+    imageUrl: string;
+    lyricsUrl: string | null;
+    userId: string;
+  }>;
   const song = songs[0] ?? null;
   if (!song) {
     return NextResponse.json({ error: "Song not found" }, { status: 404 });
@@ -114,6 +130,7 @@ export async function POST(
 
   let imageUrl = song.imageUrl;
   let lyricsUrl = song.lyricsUrl;
+  const basePath = buildOrganizedMusicBasePath(song.title, song.artist);
 
   if (hasImage && image instanceof File) {
     if (image.size > env.UPLOAD_MAX_IMAGE_BYTES) {
@@ -126,7 +143,7 @@ export async function POST(
     }
 
     const imageBuffer = Buffer.from(await image.arrayBuffer());
-    const imageKey = `images/custom/${song.id}-${randomUUID()}${imageExt}`;
+    const imageKey = `${basePath}/cover/${song.id}-${randomUUID()}${imageExt}`;
     await putObjectFromBuffer(imageKey, imageBuffer, image.type || undefined);
     imageUrl = toApiFileUrl(imageKey);
   }
@@ -142,7 +159,7 @@ export async function POST(
     }
 
     const lyricsBuffer = Buffer.from(await lyricsFile.arrayBuffer());
-    const lyricsKey = `lyrics/custom/${song.id}-${randomUUID()}${lyricsExt}`;
+    const lyricsKey = `${basePath}/lyrics/${song.id}-${randomUUID()}${lyricsExt}`;
     await putObjectFromBuffer(lyricsKey, lyricsBuffer, "text/plain; charset=utf-8");
     lyricsUrl = toApiFileUrl(lyricsKey);
   } else if (hasLyricsText) {
@@ -150,7 +167,7 @@ export async function POST(
     if (textBuffer.byteLength > MAX_LYRICS_BYTES) {
       return NextResponse.json({ error: "Lyrics text is too large" }, { status: 413 });
     }
-    const lyricsKey = `lyrics/custom/${song.id}-${randomUUID()}.txt`;
+    const lyricsKey = `${basePath}/lyrics/${song.id}-${randomUUID()}.txt`;
     await putObjectFromBuffer(lyricsKey, textBuffer, "text/plain; charset=utf-8");
     lyricsUrl = toApiFileUrl(lyricsKey);
   }
@@ -159,7 +176,7 @@ export async function POST(
     UPDATE "Song"
     SET "imageUrl" = ${imageUrl}, "lyricsUrl" = ${lyricsUrl}
     WHERE "id" = ${song.id}
-    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "userId", "createdAt"
+    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
   ` as any)) as Array<{
     id: string;
     title: string;
@@ -167,6 +184,8 @@ export async function POST(
     imageUrl: string;
     audioUrl: string;
     lyricsUrl: string | null;
+    audioBitDepth: number | null;
+    audioSampleRate: number | null;
     userId: string;
     createdAt: string;
   }>;

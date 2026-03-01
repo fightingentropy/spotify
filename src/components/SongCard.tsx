@@ -5,27 +5,33 @@ import Image from "next/image";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
-import { Heart, Pause, Play } from "lucide-react";
+import { Heart, Pause, Pencil, Play } from "lucide-react";
 
 type SongCardProps = {
   song: PlayerSong;
-  onPlay?: () => void;
+  songIndex?: number;
+  onPlayAt?: (index: number) => void;
   liked?: boolean;
   likePending?: boolean;
   canLike?: boolean;
   hideIfUnliked?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
+  editMode?: boolean;
+  onEdit?: (song: PlayerSong) => void;
   priority?: boolean;
 };
 
 const SongCardComponent = function SongCard({
   song,
-  onPlay,
+  songIndex,
+  onPlayAt,
   liked = false,
   likePending = false,
   canLike = false,
   hideIfUnliked = false,
   onToggleLike,
+  editMode = false,
+  onEdit,
   priority = false,
 }: SongCardProps) {
   // Optimized selector - only subscribes to necessary state changes
@@ -44,13 +50,13 @@ const SongCardComponent = function SongCard({
       else play();
       return;
     }
-    if (onPlay) {
-      onPlay();
+    if (typeof songIndex === "number" && onPlayAt) {
+      onPlayAt(songIndex);
     } else {
       setSong(song);
       play();
     }
-  }, [isActive, isPlaying, onPlay, pause, play, setSong, song]);
+  }, [isActive, isPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -118,10 +124,32 @@ const SongCardComponent = function SongCard({
         />
       </button>
 
+      {editMode && onEdit ? (
+        <button
+          type="button"
+          aria-label="Edit song"
+          title="Edit song"
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit(song);
+          }}
+          className="absolute top-2 left-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        >
+          <Pencil size={16} />
+        </button>
+      ) : null}
+
       <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between gap-2">
         <div className="text-left min-w-0 flex-1">
           <div className="text-white font-medium drop-shadow truncate">{song.title}</div>
           <div className="text-white/80 text-xs drop-shadow truncate">{song.artist}</div>
+          {editMode ? (
+            <div className="text-white/80 text-[11px] drop-shadow truncate">
+              {song.audioBitDepth && song.audioSampleRate
+                ? `${song.audioBitDepth}-bit/${Math.round(song.audioSampleRate / 100) / 10}kHz`
+                : "Quality: Unknown"}
+            </div>
+          ) : null}
         </div>
         <div
           className={cn(
@@ -144,13 +172,16 @@ const SongCardComponent = function SongCard({
 export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
   // Custom comparison for optimal re-render prevention
   return (
-    prevProps.song.id === nextProps.song.id &&
+    prevProps.song === nextProps.song &&
+    prevProps.songIndex === nextProps.songIndex &&
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
     prevProps.hideIfUnliked === nextProps.hideIfUnliked &&
+    prevProps.editMode === nextProps.editMode &&
     prevProps.priority === nextProps.priority &&
-    prevProps.onPlay === nextProps.onPlay &&
-    prevProps.onToggleLike === nextProps.onToggleLike
+    prevProps.onPlayAt === nextProps.onPlayAt &&
+    prevProps.onToggleLike === nextProps.onToggleLike &&
+    prevProps.onEdit === nextProps.onEdit
   );
 });

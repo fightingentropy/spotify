@@ -5,11 +5,14 @@ import { songToPlayerSong } from "@/lib/song-utils";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
 import type { PlaylistRow, SongRow } from "@/lib/db-types";
+import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
 export const revalidate = 0;
 export const runtime = "nodejs";
 
 export default async function PlaylistPage({ params }: { params: Promise<{ id: string }> }) {
+  await ensureSongLyricsColumn();
+  await ensureSongAudioColumns();
   const { id } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
@@ -23,25 +26,32 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
   if (!playlist) return notFound();
 
   const songRows = await (db`
-    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."userId", s."createdAt", ps."order"
+    SELECT
+      s."id",
+      s."title",
+      s."artist",
+      s."imageUrl",
+      s."audioUrl",
+      s."lyricsUrl",
+      s."audioBitDepth",
+      s."audioSampleRate",
+      s."userId",
+      s."createdAt",
+      ps."order",
+      l."songId" AS "likedSongId"
     FROM "PlaylistSong" ps
     INNER JOIN "Song" s ON s."id" = ps."songId"
+    LEFT JOIN "Like" l
+      ON l."songId" = s."id"
+      AND l."userId" = ${userId ?? ""}
     WHERE ps."playlistId" = ${id}
     ORDER BY ps."order" ASC
-  ` as any) as (SongRow & { order: number })[];
+  ` as any) as (SongRow & { order: number; likedSongId: string | null })[];
 
   const songs = songRows.map((row) => songToPlayerSong(row));
-  const songIds = songRows.map((row) => row.id);
-  let likedSongIds: string[] = [];
-  if (userId && songIds.length > 0) {
-    const rows = await (db`
-      SELECT "songId"
-      FROM "Like"
-      WHERE "userId" = ${userId}
-    ` as any) as { songId: string }[];
-    const likedSet = new Set(rows.map((like) => like.songId));
-    likedSongIds = songIds.filter((songId) => likedSet.has(songId));
-  }
+  const likedSongIds = userId
+    ? songRows.filter((row) => !!row.likedSongId).map((row) => row.id)
+    : [];
 
   return (
     <div className="px-6 py-8 max-w-7xl mx-auto">
