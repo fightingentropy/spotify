@@ -71,9 +71,9 @@ export default function NowPlayingSidebar() {
     async function loadLyrics() {
       setLyricsState({ status: "loading", text: "" });
       try {
-        const response = await fetch(safeLyricsUrl, {
-          cache: "no-store",
-        });
+        // Lyrics files are served from /api/files with an immutable cache
+        // header, so the browser HTTP cache is the right layer to rely on.
+        const response = await fetch(safeLyricsUrl);
         if (!response.ok) {
           throw new Error("Lyrics unavailable");
         }
@@ -140,7 +140,7 @@ export default function NowPlayingSidebar() {
               height={500}
               loading="eager"
               className="w-full aspect-square rounded-xl object-cover"
-              unoptimized
+              sizes="320px"
             />
 
             <div>

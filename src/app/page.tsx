@@ -17,17 +17,18 @@ export default async function Home() {
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
   const [songs, liked] = await Promise.all([
-    (db`
+    db<SongRow>`
       SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
       FROM "Song"
       ORDER BY "title" ASC
-    ` as any) as Promise<SongRow[]>,
+      LIMIT 5000
+    `,
     userId
-      ? (db`
+      ? db<{ songId: string }>`
           SELECT "songId"
           FROM "Like"
           WHERE "userId" = ${userId}
-        ` as any) as Promise<{ songId: string }[]>
+        `
       : Promise.resolve([] as Array<{ songId: string }>),
   ]);
 

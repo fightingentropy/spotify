@@ -160,12 +160,12 @@ export function SongGrid({
   }, [likedSongIds]);
 
   const likedMap = hydrated ? likedLookup : initialLookup;
-  const visibleSongs = useMemo(() => {
-    const filtered = hideIfUnliked
-      ? localSongs.filter((song) => !!likedMap[song.id])
-      : localSongs;
 
-    const sorted = sortMode === "default" ? filtered : [...filtered];
+  // Sort + dedup is expensive for large libraries but doesn't depend on
+  // likedMap. Keeping it in its own memo prevents every like toggle from
+  // re-running it on pages where `hideIfUnliked` is false.
+  const sortedDedupedSongs = useMemo(() => {
+    const sorted = sortMode === "default" ? localSongs : [...localSongs];
     if (sortMode !== "default") {
       sorted.sort((left, right) => {
         const leftTime = Date.parse(left.createdAt || "");
@@ -185,7 +185,12 @@ export function SongGrid({
       deduped.push(song);
     }
     return deduped;
-  }, [hideIfUnliked, likedMap, localSongs, sortMode]);
+  }, [localSongs, sortMode]);
+
+  const visibleSongs = useMemo(() => {
+    if (!hideIfUnliked) return sortedDedupedSongs;
+    return sortedDedupedSongs.filter((song) => !!likedMap[song.id]);
+  }, [hideIfUnliked, likedMap, sortedDedupedSongs]);
 
   const visibleSongsRef = useRef<PlayerSong[]>([]);
   useEffect(() => {

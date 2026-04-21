@@ -17,12 +17,12 @@ type BatchPayload = {
 };
 
 async function ensureImportUser(userEmail: string): Promise<string> {
-  const existing = (await (db`
+  const existing = await db<{ id: string }>`
     SELECT "id"
     FROM "User"
     WHERE "email" = ${userEmail}
     LIMIT 1
-  ` as any)) as Array<{ id: string }>;
+  `;
   if (existing[0]?.id) {
     return existing[0].id;
   }
@@ -60,12 +60,12 @@ async function resolveTargetUserId(payload: BatchPayload): Promise<string> {
       : null;
 
   if (requestedUserId) {
-    const rows = (await (db`
+    const rows = await db<{ id: string }>`
       SELECT "id"
       FROM "User"
       WHERE "id" = ${requestedUserId}
       LIMIT 1
-    ` as any)) as Array<{ id: string }>;
+    `;
     if (rows[0]?.id) {
       return rows[0].id;
     }
@@ -77,24 +77,24 @@ async function resolveTargetUserId(payload: BatchPayload): Promise<string> {
       : null;
 
   if (requestedEmail) {
-    const rows = (await (db`
+    const rows = await db<{ id: string }>`
       SELECT "id"
       FROM "User"
       WHERE "email" = ${requestedEmail}
       LIMIT 1
-    ` as any)) as Array<{ id: string }>;
+    `;
     if (rows[0]?.id) {
       return rows[0].id;
     }
     return ensureImportUser(requestedEmail);
   }
 
-  const fallbackRows = (await (db`
+  const fallbackRows = await db<{ id: string }>`
     SELECT "id"
     FROM "User"
     ORDER BY "createdAt" ASC
     LIMIT 1
-  ` as any)) as Array<{ id: string }>;
+  `;
 
   if (fallbackRows[0]?.id) {
     return fallbackRows[0].id;

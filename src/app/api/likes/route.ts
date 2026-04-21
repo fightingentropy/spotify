@@ -11,16 +11,32 @@ export async function GET() {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
   if (!userId) {
-    return NextResponse.json({ likes: [] }, { status: 200 });
+    return NextResponse.json(
+      { likes: [] },
+      {
+        status: 200,
+        headers: { "Cache-Control": "private, max-age=0, must-revalidate" },
+      },
+    );
   }
 
-  const likes = await (db`
+  const likes = await db<{ songId: string }>`
     SELECT "songId"
     FROM "Like"
     WHERE "userId" = ${userId}
-  ` as any) as { songId: string }[];
+  `;
 
-  return NextResponse.json({ likes: likes.map((like) => like.songId) });
+  // Short private cache lets back/forward nav reuse the response without
+  // hitting the DB. The likes store already mutates optimistically, so a
+  // 30s staleness window is imperceptible to users.
+  return NextResponse.json(
+    { likes: likes.map((like) => like.songId) },
+    {
+      headers: {
+        "Cache-Control": "private, max-age=30, stale-while-revalidate=60",
+      },
+    },
+  );
 }
 
 export async function POST(req: Request) {
@@ -36,12 +52,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing songId" }, { status: 400 });
   }
 
-  const song = await (db`
+  const song = await db<{ id: string }>`
     SELECT "id"
     FROM "Song"
     WHERE "id" = ${songId}
     LIMIT 1
-  ` as any) as { id: string }[];
+  `;
   if (song.length === 0) {
     return NextResponse.json({ error: "Song not found" }, { status: 404 });
   }

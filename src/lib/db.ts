@@ -5,11 +5,13 @@ import { env } from "@/lib/env";
 
 type TemplateValue = unknown;
 type SqlRow = Record<string, unknown>;
+// Generic tagged template: `db<UserRow>\`SELECT ...\`` narrows the return
+// type at the call site without an `as any` dance.
 type SqlTag = {
-  (
+  <T = SqlRow>(
     strings: TemplateStringsArray,
     ...values: TemplateValue[]
-  ): Promise<SqlRow[]>;
+  ): Promise<T[]>;
   end: (_opts?: { timeout?: number }) => Promise<void>;
 };
 
@@ -119,27 +121,59 @@ function createSqliteDriver(dbPath: string): SqliteLike {
 function createDb(): SqlTag {
   const dbPath = resolve(env.SQLITE_DB_PATH);
   const sqlite = createSqliteDriver(dbPath);
+  // busy_timeout must come first so later pragmas wait if another process
+  // (e.g. a parallel Next.js build worker) holds the DB briefly.
+  sqlite.exec("PRAGMA busy_timeout = 5000;");
+  try {
+    // WAL is a persistent mode; once set on the file it stays. Multiple
+    // processes racing to set it can trigger SQLITE_BUSY — tolerate that.
+    sqlite.exec("PRAGMA journal_mode = WAL;");
+  } catch {}
+  sqlite.exec("PRAGMA synchronous = NORMAL;");
   sqlite.exec("PRAGMA foreign_keys = ON;");
+  sqlite.exec("PRAGMA temp_store = MEMORY;");
 
   const schemaPath = resolve(process.cwd(), "db", "schema.sql");
   const schemaSql = readFileSync(schemaPath, "utf8");
   sqlite.exec(schemaSql);
 
-  const tag = (async function dbTag(
+  // Prepared-statement cache keyed by SQL text. SQLite parses+plans each
+  // prepare; caching avoids that on every hot-path query.
+  const STATEMENT_CACHE_LIMIT = 256;
+  const statementCache = new Map<string, StatementLike>();
+  const getStatement = (sql: string): StatementLike => {
+    const cached = statementCache.get(sql);
+    if (cached) {
+      // LRU touch: re-insert to move to end.
+      statementCache.delete(sql);
+      statementCache.set(sql, cached);
+      return cached;
+    }
+    const prepared = sqlite.prepare(sql);
+    statementCache.set(sql, prepared);
+    if (statementCache.size > STATEMENT_CACHE_LIMIT) {
+      const oldestKey = statementCache.keys().next().value;
+      if (oldestKey !== undefined) statementCache.delete(oldestKey);
+    }
+    return prepared;
+  };
+
+  const tag = (async function dbTag<T = SqlRow>(
     strings: TemplateStringsArray,
     ...values: TemplateValue[]
-  ): Promise<SqlRow[]> {
+  ): Promise<T[]> {
     const { sql, params } = buildSql(strings, values);
-    const bindings = params as any[];
-    const statement = sqlite.prepare(sql);
+    const bindings = params as unknown[];
+    const statement = getStatement(sql);
     if (statementReturnsRows(sql)) {
-      return (statement.all(...bindings) as SqlRow[]) ?? [];
+      return (statement.all(...bindings) as T[]) ?? [];
     }
     statement.run(...bindings);
     return [];
   }) as SqlTag;
 
   tag.end = async () => {
+    statementCache.clear();
     sqlite.close();
   };
 

@@ -2,16 +2,18 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   images: {
-    unoptimized: true, // Disable optimization globally since we serve from API routes
-    formats: ['image/avif', 'image/webp'], // Modern formats for better compression
+    // Covers served from /api/files/[...key] with an immutable cache header —
+    // Next.js's image optimizer proxies them, emits AVIF/WebP variants, and
+    // caches per requested size. This is the thumbnail variant: grid views
+    // download a small format-optimized version instead of the full cover.
+    formats: ["image/avif", "image/webp"],
+    minimumCacheTTL: 60 * 60 * 24 * 30,
   },
-  // Enable React compiler optimizations
   experimental: {
-    optimizePackageImports: ['lucide-react'], // Optimize icon imports
+    optimizePackageImports: ["lucide-react"],
   },
-  // Production optimizations
-  poweredByHeader: false, // Remove X-Powered-By header for security
-  compress: true, // Enable gzip compression
+  poweredByHeader: false,
+  compress: true,
 };
 
 export default nextConfig;

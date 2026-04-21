@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
+import type { SongRow } from "@/lib/db-types";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
 export const runtime = "nodejs";
@@ -51,12 +52,12 @@ export async function PATCH(
     );
   }
 
-  const existing = (await (db`
+  const existing = await db<{ id: string; userId: string }>`
     SELECT "id", "userId"
     FROM "Song"
     WHERE "id" = ${songId}
     LIMIT 1
-  ` as any)) as Array<{ id: string; userId: string }>;
+  `;
   if (!existing[0]) {
     return NextResponse.json({ error: "Song not found" }, { status: 404 });
   }
@@ -64,23 +65,12 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const rows = (await (db`
+  const rows = await db<SongRow>`
     UPDATE "Song"
     SET "title" = ${title}, "artist" = ${artist}
     WHERE "id" = ${songId}
     RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-  ` as any)) as Array<{
-    id: string;
-    title: string;
-    artist: string;
-    imageUrl: string;
-    audioUrl: string;
-    lyricsUrl: string | null;
-    audioBitDepth: number | null;
-    audioSampleRate: number | null;
-    userId: string;
-    createdAt: string;
-  }>;
+  `;
 
   return NextResponse.json(rows[0], { status: 200 });
 }

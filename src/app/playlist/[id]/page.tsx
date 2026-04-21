@@ -16,16 +16,16 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
   const { id } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
-  const playlists = await (db`
+  const playlists = await db<PlaylistRow>`
     SELECT "id", "name", "imageUrl", "userId", "createdAt"
     FROM "Playlist"
     WHERE "id" = ${id}
     LIMIT 1
-  ` as any) as PlaylistRow[];
+  `;
   const playlist = playlists.at(0);
   if (!playlist) return notFound();
 
-  const songRows = await (db`
+  const songRows = await db<SongRow & { order: number; likedSongId: string | null }>`
     SELECT
       s."id",
       s."title",
@@ -46,7 +46,7 @@ export default async function PlaylistPage({ params }: { params: Promise<{ id: s
       AND l."userId" = ${userId ?? ""}
     WHERE ps."playlistId" = ${id}
     ORDER BY ps."order" ASC
-  ` as any) as (SongRow & { order: number; likedSongId: string | null })[];
+  `;
 
   const songs = songRows.map((row) => songToPlayerSong(row));
   const likedSongIds = userId

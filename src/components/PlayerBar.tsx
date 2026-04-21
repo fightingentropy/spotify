@@ -11,30 +11,30 @@ import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuf
 import NowPlayingSheet from "@/components/NowPlayingSheet";
 
 function PlayerBar(): React.ReactElement | null {
-  const {
-    queue,
-    currentIndex,
-    currentSong,
-    isPlaying,
-    toggle,
-    next,
-    previous,
-    volume,
-    setVolume,
-    isMuted,
-    toggleMute,
-    shuffle,
-    toggleShuffle,
-    repeatMode,
-    cycleRepeatMode,
-    setSong,
-    setQueue,
-    pause,
-    crossfadeEnabled,
-    crossfadeSeconds,
-    setCrossfadeEnabled,
-    setCrossfadeSeconds,
-  } = usePlayerStore();
+  // Individual selectors so we only re-render when each specific value changes
+  // (instead of on every store mutation, as a full destructure would cause).
+  const queue = usePlayerStore((s) => s.queue);
+  const currentIndex = usePlayerStore((s) => s.currentIndex);
+  const currentSong = usePlayerStore((s) => s.currentSong);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const volume = usePlayerStore((s) => s.volume);
+  const isMuted = usePlayerStore((s) => s.isMuted);
+  const shuffle = usePlayerStore((s) => s.shuffle);
+  const repeatMode = usePlayerStore((s) => s.repeatMode);
+  const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
+  const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
+  const toggle = usePlayerStore((s) => s.toggle);
+  const next = usePlayerStore((s) => s.next);
+  const previous = usePlayerStore((s) => s.previous);
+  const setVolume = usePlayerStore((s) => s.setVolume);
+  const toggleMute = usePlayerStore((s) => s.toggleMute);
+  const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
+  const cycleRepeatMode = usePlayerStore((s) => s.cycleRepeatMode);
+  const setSong = usePlayerStore((s) => s.setSong);
+  const setQueue = usePlayerStore((s) => s.setQueue);
+  const pause = usePlayerStore((s) => s.pause);
+  const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
+  const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
 
   const router = useRouter();
   const toggleLike = useLikesStore((state) => state.toggleLike);
@@ -516,7 +516,7 @@ function PlayerBar(): React.ReactElement | null {
                 width={48}
                 height={48}
                 className="w-12 h-12 rounded object-cover"
-                unoptimized
+                sizes="48px"
               />
             </div>
             <div className="min-w-0">

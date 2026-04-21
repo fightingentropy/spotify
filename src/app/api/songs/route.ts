@@ -5,6 +5,7 @@ import { authOptions } from "@/auth";
 import { basename, extname, join } from "node:path";
 import { PassThrough, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { parseFile } from "music-metadata";
 import {
   getObjectAbsolutePath,
@@ -154,10 +155,25 @@ function parseStorageKeyFromApiUrl(url: string): string | null {
     .join("/");
 }
 
-async function readAudioQualityFromStorageKey(key: string): Promise<{
+type AudioQuality = {
   audioBitDepth: number | null;
   audioSampleRate: number | null;
-}> {
+};
+
+// In-memory LRU cache for parsed audio metadata keyed by storage key.
+// The underlying file is immutable (upload writes a fresh key) so the parse
+// result is safe to cache for the lifetime of the process.
+const AUDIO_QUALITY_CACHE_LIMIT = 512;
+const audioQualityCache = new Map<string, AudioQuality>();
+
+async function readAudioQualityFromStorageKey(key: string): Promise<AudioQuality> {
+  const cached = audioQualityCache.get(key);
+  if (cached) {
+    audioQualityCache.delete(key);
+    audioQualityCache.set(key, cached);
+    return cached;
+  }
+  let result: AudioQuality;
   try {
     const absolutePath = getObjectAbsolutePath(key);
     const metadata = await parseFile(absolutePath, {
@@ -166,7 +182,7 @@ async function readAudioQualityFromStorageKey(key: string): Promise<{
     });
     const bits = metadata.format.bitsPerSample;
     const sampleRate = metadata.format.sampleRate;
-    return {
+    result = {
       audioBitDepth:
         typeof bits === "number" && Number.isFinite(bits) ? Math.round(bits) : null,
       audioSampleRate:
@@ -175,8 +191,14 @@ async function readAudioQualityFromStorageKey(key: string): Promise<{
           : null,
     };
   } catch {
-    return { audioBitDepth: null, audioSampleRate: null };
+    result = { audioBitDepth: null, audioSampleRate: null };
   }
+  audioQualityCache.set(key, result);
+  if (audioQualityCache.size > AUDIO_QUALITY_CACHE_LIMIT) {
+    const oldestKey = audioQualityCache.keys().next().value;
+    if (oldestKey !== undefined) audioQualityCache.delete(oldestKey);
+  }
+  return result;
 }
 
 function extensionForStoredFile(
@@ -489,7 +511,7 @@ async function uploadFromRemoteUrl(
         fileName,
       ).replaceAll("\\", "/")
     : join(uploadConfig.prefix, fileName).replaceAll("\\", "/");
-  const nodeStream = Readable.fromWeb(response.body as any);
+  const nodeStream = Readable.fromWeb(response.body as unknown as WebReadableStream);
   const label = fieldName === "image" ? "Image file" : "Audio file";
 
   await uploadStreamWithLimit(
@@ -1036,14 +1058,27 @@ async function parseMultipartUpload(req: Request): Promise<{
     const imageExt = extensionForStoredFile("image", imageConfig.contentType, imageOriginalName);
     const imageFileName = `${randomUUID()}${imageExt}`;
     const imageKey = join(basePath, "cover", imageFileName).replaceAll("\\", "/");
-    const imageBuffer = Buffer.from(await imageInput.arrayBuffer());
-    await putObjectFromBuffer(imageKey, imageBuffer, imageConfig.contentType);
+    // Stream file parts directly to storage rather than buffering the whole
+    // file in memory (a single concurrent 50 MB audio upload otherwise pins
+    // ~50 MB of RSS per request).
+    await uploadStreamWithLimit(
+      Readable.fromWeb(imageInput.stream() as unknown as WebReadableStream),
+      imageKey,
+      imageConfig.contentType,
+      imageConfig.maxBytes,
+      "Image file",
+    );
 
     const audioExt = extensionForStoredFile("audio", audioConfig.contentType, audioOriginalName);
     const audioFileName = `${randomUUID()}${audioExt}`;
     const audioKey = join(basePath, "audio", audioFileName).replaceAll("\\", "/");
-    const audioBuffer = Buffer.from(await audioInput.arrayBuffer());
-    await putObjectFromBuffer(audioKey, audioBuffer, audioConfig.contentType);
+    await uploadStreamWithLimit(
+      Readable.fromWeb(audioInput.stream() as unknown as WebReadableStream),
+      audioKey,
+      audioConfig.contentType,
+      audioConfig.maxBytes,
+      "Audio file",
+    );
     const audioQuality = await readAudioQualityFromStorageKey(audioKey);
 
     return {
@@ -1075,11 +1110,12 @@ async function parseMultipartUpload(req: Request): Promise<{
 export async function GET() {
   await ensureSongLyricsColumn();
   await ensureSongAudioColumns();
-  const songs = (await (db`
+  const songs = await db<SongRow>`
     SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
     FROM "Song"
     ORDER BY "title" ASC
-  ` as any)) as SongRow[];
+    LIMIT 5000
+  `;
 
   // Backfill missing quality metadata opportunistically, but keep request latency bounded.
   const BACKFILL_PER_REQUEST = 6;
@@ -1182,14 +1218,14 @@ export async function POST(req: Request) {
   }
 
   const userId = s.user.id;
-  const duplicateRows = (await (db`
+  const duplicateRows = await db<{ id: string; title: string; artist: string }>`
     SELECT "id", "title", "artist"
     FROM "Song"
     WHERE "userId" = ${userId}
       AND lower("title") = lower(${title})
       AND lower("artist") = lower(${artist})
     LIMIT 1
-  ` as any)) as Array<{ id: string; title: string; artist: string }>;
+  `;
   const existingSong = duplicateRows[0] ?? null;
 
   if (existingSong && !replaceExisting) {
@@ -1219,7 +1255,7 @@ export async function POST(req: Request) {
     lyricsUrl = toApiFileUrl(lyricsKey);
   }
   const [song] = existingSong
-    ? ((await (db`
+    ? await db<SongRow>`
         UPDATE "Song"
         SET "title" = ${title},
             "artist" = ${artist},
@@ -1230,12 +1266,12 @@ export async function POST(req: Request) {
             "audioSampleRate" = ${audioSampleRate}
         WHERE "id" = ${songId}
         RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-      ` as any)) as SongRow[])
-    : ((await (db`
+      `
+    : await db<SongRow>`
         INSERT INTO "Song" ("id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId")
         VALUES (${songId}, ${title}, ${artist}, ${imageUrl}, ${audioUrl}, ${lyricsUrl}, ${audioBitDepth}, ${audioSampleRate}, ${userId})
         RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-      ` as any)) as SongRow[]);
+      `;
 
   return NextResponse.json(song, { status: existingSong ? 200 : 201 });
 }

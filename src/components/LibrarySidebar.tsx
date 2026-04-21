@@ -19,14 +19,14 @@ export default async function LibrarySidebar({
   let playlists: Array<PlaylistRow & { songsCount: number }> = [];
 
   if (userId) {
-    const playlistRows = (await db`
+    const playlistRows = await db<PlaylistRow & { songsCount: number }>`
         SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", COUNT(ps."id") AS "songsCount"
         FROM "Playlist" p
         LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
         WHERE p."userId" = ${userId}
         GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt"
         ORDER BY p."createdAt" DESC
-      ` as any) as (PlaylistRow & { songsCount: number })[];
+      `;
     playlists = playlistRows.map((row) => ({ ...row, songsCount: Number(row.songsCount ?? 0) }));
   }
 

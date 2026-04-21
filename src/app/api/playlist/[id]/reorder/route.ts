@@ -20,12 +20,12 @@ export async function POST(
   }
 
   const { id } = await params;
-  const playlistRows = (await (db`
+  const playlistRows = await db<{ id: string; userId: string }>`
     SELECT "id", "userId"
     FROM "Playlist"
     WHERE "id" = ${id}
     LIMIT 1
-  ` as any)) as Array<{ id: string; userId: string }>;
+  `;
   const playlist = playlistRows[0] ?? null;
   if (!playlist) {
     return NextResponse.json({ error: "Playlist not found" }, { status: 404 });
@@ -49,26 +49,33 @@ export async function POST(
     .map((value) => value.trim());
   const uniqueRequestedIds = [...new Set(requestedIds)];
 
-  const existingRows = (await (db`
+  const existingRows = await db<{ songId: string; order: number }>`
     SELECT "songId", "order"
     FROM "PlaylistSong"
     WHERE "playlistId" = ${id}
     ORDER BY "order" ASC
-  ` as any)) as Array<{ songId: string; order: number }>;
+  `;
   const existingIds = existingRows.map((row) => row.songId);
   const existingSet = new Set(existingIds);
 
   const orderedRequested = uniqueRequestedIds.filter((songId) => existingSet.has(songId));
-  const remaining = existingIds.filter((songId) => !orderedRequested.includes(songId));
+  const orderedRequestedSet = new Set(orderedRequested);
+  const remaining = existingIds.filter((songId) => !orderedRequestedSet.has(songId));
   const finalOrder = [...orderedRequested, ...remaining];
 
-  for (let index = 0; index < finalOrder.length; index += 1) {
-    const songId = finalOrder[index];
+  if (finalOrder.length > 0) {
+    // Single atomic UPDATE using json_each to map each song to its new index.
+    // Replaces an N-query loop; fully parameterized to keep the db tag's
+    // placeholder substitution safe.
+    const orderJson = JSON.stringify(finalOrder);
     await db`
       UPDATE "PlaylistSong"
-      SET "order" = ${index}
+      SET "order" = (
+        SELECT key FROM json_each(${orderJson})
+        WHERE value = "PlaylistSong"."songId"
+      )
       WHERE "playlistId" = ${id}
-        AND "songId" = ${songId}
+        AND "songId" IN (SELECT value FROM json_each(${orderJson}))
     `;
   }
 

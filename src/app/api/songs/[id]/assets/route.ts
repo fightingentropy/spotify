@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
+import type { SongRow } from "@/lib/db-types";
 import { ensureSongLyricsColumn } from "@/lib/db-migrations";
 import { env } from "@/lib/env";
 import { putObjectFromBuffer } from "@/lib/storage";
@@ -90,19 +91,19 @@ export async function POST(
     return NextResponse.json({ error: "Missing song id" }, { status: 400 });
   }
 
-  const songs = (await (db`
-    SELECT "id", "title", "artist", "imageUrl", "lyricsUrl", "userId"
-    FROM "Song"
-    WHERE "id" = ${songId}
-    LIMIT 1
-  ` as any)) as Array<{
+  const songs = await db<{
     id: string;
     title: string;
     artist: string;
     imageUrl: string;
     lyricsUrl: string | null;
     userId: string;
-  }>;
+  }>`
+    SELECT "id", "title", "artist", "imageUrl", "lyricsUrl", "userId"
+    FROM "Song"
+    WHERE "id" = ${songId}
+    LIMIT 1
+  `;
   const song = songs[0] ?? null;
   if (!song) {
     return NextResponse.json({ error: "Song not found" }, { status: 404 });
@@ -172,23 +173,12 @@ export async function POST(
     lyricsUrl = toApiFileUrl(lyricsKey);
   }
 
-  const rows = (await (db`
+  const rows = await db<SongRow>`
     UPDATE "Song"
     SET "imageUrl" = ${imageUrl}, "lyricsUrl" = ${lyricsUrl}
     WHERE "id" = ${song.id}
     RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-  ` as any)) as Array<{
-    id: string;
-    title: string;
-    artist: string;
-    imageUrl: string;
-    audioUrl: string;
-    lyricsUrl: string | null;
-    audioBitDepth: number | null;
-    audioSampleRate: number | null;
-    userId: string;
-    createdAt: string;
-  }>;
+  `;
 
   return NextResponse.json(rows[0], { status: 200 });
 }

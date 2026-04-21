@@ -329,14 +329,14 @@ export async function importLocalLibrary(
       const audioPathInStorage = getObjectAbsolutePath(audioKey);
       const audioUrl = toApiFileUrl(audioKey);
 
-      const existingRows = (await (db`
+      const existingRows = await db<ExistingSong>`
         SELECT "id", "imageUrl", "lyricsUrl"
         FROM "Song"
         WHERE "userId" = ${options.userId}
           AND lower("title") = lower(${title})
           AND lower("artist") = lower(${artist})
         LIMIT 1
-      ` as any)) as ExistingSong[];
+      `;
       const existing = existingRows[0] ?? null;
 
       if (sourceExt === ".flac") {

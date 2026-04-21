@@ -94,3 +94,5 @@ CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "cre
 CREATE INDEX IF NOT EXISTS "idx_playlist_userId_createdAt" ON "Playlist" ("userId", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order");
 CREATE INDEX IF NOT EXISTS "idx_like_userId_createdAt" ON "Like" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_account_userId" ON "Account" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");

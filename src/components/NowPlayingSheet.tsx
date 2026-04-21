@@ -78,9 +78,9 @@ export default function NowPlayingSheet({
     async function loadLyrics() {
       setLyricsState({ status: "loading", text: "" });
       try {
-        const response = await fetch(song.lyricsUrl as string, {
-          cache: "no-store",
-        });
+        // Lyrics files are served from /api/files with an immutable cache
+        // header — rely on the browser HTTP cache instead of bypassing it.
+        const response = await fetch(song.lyricsUrl as string);
         if (!response.ok) {
           throw new Error("Lyrics unavailable");
         }
@@ -163,7 +163,7 @@ export default function NowPlayingSheet({
                 height={1200}
                 loading="eager"
                 className="w-full aspect-square rounded-xl object-cover"
-                unoptimized
+                sizes="(max-width: 768px) 100vw, 448px"
               />
             </div>
 
