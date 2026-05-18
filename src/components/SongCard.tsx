@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
-import Image from "next/image";
+import { CoverImage } from "@/components/CoverImage";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
@@ -91,8 +91,8 @@ const SongCardComponent = function SongCard({
         isActive && "ring-2 ring-emerald-500"
       )}
     >
-      <Image
-        src={song.imageUrl || "/waveform.svg"}
+      <CoverImage
+        src={song.imageUrl}
         alt={song.title}
         fill
         sizes="(max-width: 640px) 100vw, (max-width: 1024px) 33vw, 200px"

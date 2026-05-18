@@ -17,7 +17,7 @@ export default async function LikedPage() {
 
   if (!userId) {
     return (
-      <div className="px-6 py-8 max-w-7xl mx-auto">
+      <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
         <h1 className="text-2xl font-semibold mb-6">Liked Songs</h1>
         <div className="opacity-70">
           <a className="underline" href="/signin">
@@ -41,7 +41,7 @@ export default async function LikedPage() {
   const likedSongIds = rows.map((row) => row.songId);
 
   return (
-    <div className="px-6 py-8 max-w-7xl mx-auto">
+    <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
       <h1 className="text-2xl font-semibold mb-6">Liked Songs</h1>
       {songs.length === 0 ? (
         <div className="opacity-70">You haven&apos;t liked any songs yet.</div>
@@ -55,7 +55,7 @@ export default async function LikedPage() {
           viewToggleClassName="-mt-14 mb-8"
         />
       )}
-      <div className="h-24" />
+      <div className="h-8 lg:h-24" />
     </div>
   );
 }

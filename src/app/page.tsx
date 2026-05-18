@@ -7,10 +7,13 @@ import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
+import { ensureMusicLibrarySynced } from "@/lib/music-sync";
+
 export const revalidate = 0;
 export const runtime = "nodejs";
 
 export default async function Home() {
+  await ensureMusicLibrarySynced();
   await ensureSongLyricsColumn();
   await ensureSongAudioColumns();
   const session = await getServerSession(authOptions);
@@ -36,14 +39,14 @@ export default async function Home() {
   const playerSongs = songs.map(songToPlayerSong);
 
   return (
-    <div className="px-6 py-8 max-w-7xl mx-auto">
+    <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
       <HomeSearchCommandPalette songs={playerSongs} />
       {playerSongs.length === 0 ? (
         <div className="opacity-70">No songs available yet. Upload your first track to get started.</div>
       ) : (
         <SongGrid songs={playerSongs} likedSongIds={likedSongIds} canLike={!!userId} />
       )}
-      <div className="h-24" />
+      <div className="h-8 lg:h-24" />
     </div>
   );
 }

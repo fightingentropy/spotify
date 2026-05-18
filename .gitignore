@@ -43,5 +43,6 @@ next-env.d.ts
 
 # local media + sqlite runtime data
 /local-media/
+/music/
 /waveform.sqlite
 /waveform.sqlite-*

@@ -6,6 +6,7 @@ type EnvShape = {
   ADMIN_SECRET: string;
   LOCAL_MEDIA_ROOT: string;
   LOCAL_MUSIC_SOURCE_DIR: string;
+  LOCAL_MUSIC_COPY_FILES: boolean;
   LOCAL_IMPORT_USE_COVER_FILES: boolean;
   LOCAL_IMPORT_USE_LYRICS_FILES: boolean;
   UPLOAD_MAX_IMAGE_BYTES: number;
@@ -65,8 +66,9 @@ export const env: EnvShape = {
   ),
   LOCAL_MUSIC_SOURCE_DIR: optionalEnv(
     "LOCAL_MUSIC_SOURCE_DIR",
-    "/Users/erlinhoxha/Music",
+    join(process.cwd(), "music"),
   ),
+  LOCAL_MUSIC_COPY_FILES: booleanEnv("LOCAL_MUSIC_COPY_FILES", false),
   LOCAL_IMPORT_USE_COVER_FILES: booleanEnv(
     "LOCAL_IMPORT_USE_COVER_FILES",
     true,

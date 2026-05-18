@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
-import Image from "next/image";
+import { CoverImage } from "@/components/CoverImage";
 import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
@@ -98,8 +98,8 @@ const SongListItemComponent = function SongListItem({
             <GripVertical size={15} />
           </div>
         ) : null}
-        <Image
-          src={song.imageUrl || "/waveform.svg"}
+        <CoverImage
+          src={song.imageUrl}
           alt={song.title}
           fill
           sizes="48px"

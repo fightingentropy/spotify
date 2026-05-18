@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
@@ -9,6 +9,9 @@ import { AuthButtons } from "@/components/AuthButtons";
 import { PlayerBar } from "@/components/PlayerBar";
 import LibrarySidebar from "@/components/LibrarySidebar";
 import NowPlayingSidebar from "@/components/NowPlayingSidebar";
+import MobileNav from "@/components/MobileNav";
+import PwaRegister from "@/components/PwaRegister";
+import InstallPrompt from "@/components/InstallPrompt";
 
 export const runtime = "nodejs";
 
@@ -28,10 +31,32 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Waveform",
-  description: "Waveform — minimal music player",
-  icons: {
-    icon: "/waveform.svg?v=2",
+  description: "Local-first music player for your library",
+  applicationName: "Waveform",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Waveform",
   },
+  formatDetection: {
+    telephone: false,
+  },
+  icons: {
+    icon: [{ url: "/icon", type: "image/png", sizes: "512x512" }],
+    apple: [{ url: "/apple-icon", type: "image/png", sizes: "180x180" }],
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
 };
 
 export default async function RootLayout({
@@ -49,27 +74,35 @@ export default async function RootLayout({
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}
         style={{
-          ["--wf-left-sidebar-width" as any]: leftSidebarCollapsed ? "4rem" : "16rem",
+          ["--wf-left-sidebar-width" as string]: leftSidebarCollapsed ? "4rem" : "16rem",
         }}
       >
         <Providers>
-          <header className="fixed top-0 inset-x-0 z-50 border-b border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-            <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
-              <Link href="/" className="font-semibold inline-flex items-center gap-2">
+          <PwaRegister />
+          <InstallPrompt />
+          <header className="fixed top-0 inset-x-0 z-50 border-b border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 pt-[env(safe-area-inset-top)]">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+              <Link href="/" className="font-semibold inline-flex items-center gap-2 touch-manipulation">
                 <Image src="/waveform.svg" alt="Waveform" width={24} height={24} className="h-6 w-6" priority />
                 <span>Waveform</span>
               </Link>
-              <nav className="flex items-center gap-6">
+              <nav className="hidden lg:flex items-center gap-6">
                 <Link href="/" className="opacity-80 hover:opacity-100">Home</Link>
+                <Link href="/search" className="opacity-80 hover:opacity-100">Search</Link>
+                <Link href="/library" className="opacity-80 hover:opacity-100">Library</Link>
                 <Link href="/upload" className="opacity-80 hover:opacity-100">Upload</Link>
                 <AuthButtons />
               </nav>
+              <div className="lg:hidden">
+                <AuthButtons />
+              </div>
             </div>
           </header>
           <LibrarySidebar initialCollapsed={leftSidebarCollapsed} />
           <NowPlayingSidebar />
-          <main className="wf-main pt-14">{children}</main>
+          <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">{children}</main>
           <PlayerBar />
+          <MobileNav />
         </Providers>
       </body>
     </html>

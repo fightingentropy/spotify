@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { env } from "@/lib/env";
-import { importLocalLibrary } from "@/lib/local-library";
+import { discoverMusicLibrary } from "@/lib/local-library";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +16,7 @@ type ImportPayload = {
 export async function GET() {
   return NextResponse.json({
     sourceDir: env.LOCAL_MUSIC_SOURCE_DIR,
+    copyFiles: env.LOCAL_MUSIC_COPY_FILES,
     includeCoverFiles: env.LOCAL_IMPORT_USE_COVER_FILES,
     includeLyricsFiles: env.LOCAL_IMPORT_USE_LYRICS_FILES,
   });
@@ -49,14 +50,24 @@ export async function POST(req: Request) {
       : env.LOCAL_IMPORT_USE_LYRICS_FILES;
 
   try {
-    const summary = await importLocalLibrary({
+    const summary = await discoverMusicLibrary({
       userId,
       sourceDir,
       includeCoverFiles,
       includeLyricsFiles,
     });
 
-    return NextResponse.json(summary);
+    if (summary.mode === "organized" && summary.organized) {
+      return NextResponse.json({
+        mode: "organized",
+        ...summary.organized,
+      });
+    }
+
+    return NextResponse.json({
+      mode: "import",
+      ...(summary.imported ?? {}),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Import failed";
     const status = message.includes("Source music directory not found")

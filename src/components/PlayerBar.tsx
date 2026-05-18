@@ -438,8 +438,9 @@ function PlayerBar(): React.ReactElement | null {
         isPlaying={isPlaying}
         currentTime={currentTime}
         duration={duration}
+        onSeek={onSeek}
       />
-      <div className="fixed bottom-0 inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="fixed inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
       <audio
         ref={audioARef}
         hidden
@@ -506,7 +507,63 @@ function PlayerBar(): React.ReactElement | null {
           next();
         }}
       />
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+      {/* Mobile mini player */}
+      <div className="lg:hidden relative">
+        <div
+          className="absolute inset-x-0 top-0 h-0.5 bg-black/10 dark:bg-white/10"
+          aria-hidden
+        >
+          <div
+            className="h-full bg-emerald-500 transition-[width] duration-150"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <div className="h-[var(--wf-mobile-player-height)] px-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setNowPlayingOpen(true)}
+            className="flex items-center gap-3 min-w-0 flex-1 text-left touch-manipulation"
+            aria-label="Open now playing"
+          >
+            <Image
+              src={currentSong.imageUrl || "/waveform.svg"}
+              alt="cover"
+              width={48}
+              height={48}
+              className="w-12 h-12 rounded-md object-cover shrink-0"
+              sizes="48px"
+            />
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate">{currentSong.title}</div>
+              <div className="text-xs opacity-70 truncate">{currentSong.artist}</div>
+            </div>
+          </button>
+          <button
+            type="button"
+            aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+            onClick={handleToggleLike}
+            disabled={!likesHydrated || likePending || !currentSongId}
+            className={cn(
+              "h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
+              likePending ? "opacity-60" : "",
+              songIsLiked ? "text-emerald-500" : "text-foreground/70",
+            )}
+          >
+            <Heart size={20} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+          </button>
+          <button
+            type="button"
+            aria-label={isPlaying ? "Pause" : "Play"}
+            onClick={toggle}
+            className="h-11 w-11 rounded-full grid place-items-center bg-foreground text-background touch-manipulation shrink-0"
+          >
+            {isPlaying ? <Pause size={20} /> : <Play size={20} className="translate-x-[1px]" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Desktop player */}
+      <div className="hidden lg:block max-w-7xl mx-auto px-4 sm:px-6 py-3">
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <div className="hidden sm:block">
@@ -532,7 +589,7 @@ function PlayerBar(): React.ReactElement | null {
                 "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
                 nowPlayingOpen
                   ? "text-emerald-500 bg-black/10 dark:bg-white/10"
-                  : "text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10"
+                  : "text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10",
               )}
             >
               {nowPlayingOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
@@ -546,7 +603,7 @@ function PlayerBar(): React.ReactElement | null {
               className={cn(
                 "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
                 likePending ? "opacity-60 cursor-wait" : "hover:bg-black/10 hover:dark:bg-white/10",
-                songIsLiked ? "text-emerald-500" : "text-foreground/70"
+                songIsLiked ? "text-emerald-500" : "text-foreground/70",
               )}
             >
               <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />

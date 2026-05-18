@@ -23,7 +23,7 @@ const COVER_FILES_KEY = "wf_import_covers";
 const LYRICS_FILES_KEY = "wf_import_lyrics";
 
 export default function LocalMediaSettings() {
-  const [sourceDir, setSourceDir] = useState("/Users/erlinhoxha/Music");
+  const [sourceDir, setSourceDir] = useState("./music");
   const [includeCoverFiles, setIncludeCoverFiles] = useState(true);
   const [includeLyricsFiles, setIncludeLyricsFiles] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -43,14 +43,14 @@ export default function LocalMediaSettings() {
         const defaults = (res.ok
           ? ((await res.json()) as ImportDefaults)
           : {
-              sourceDir: "/Users/erlinhoxha/Music",
+              sourceDir: "./music",
               includeCoverFiles: true,
               includeLyricsFiles: true,
             }) as ImportDefaults;
 
         if (cancelled) return;
 
-        setSourceDir(localSource || defaults.sourceDir || "/Users/erlinhoxha/Music");
+        setSourceDir(localSource || defaults.sourceDir || "./music");
         setIncludeCoverFiles(
           localCover === null ? !!defaults.includeCoverFiles : localCover === "1",
         );
@@ -59,7 +59,7 @@ export default function LocalMediaSettings() {
         );
       } catch {
         if (!cancelled) {
-          setSourceDir(localStorage.getItem(SOURCE_DIR_KEY) || "/Users/erlinhoxha/Music");
+          setSourceDir(localStorage.getItem(SOURCE_DIR_KEY) || "./music");
           setIncludeCoverFiles(localStorage.getItem(COVER_FILES_KEY) !== "0");
           setIncludeLyricsFiles(localStorage.getItem(LYRICS_FILES_KEY) !== "0");
         }
@@ -117,6 +117,11 @@ export default function LocalMediaSettings() {
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-medium mb-2">Local Library Import</h2>
+        <p className="text-sm opacity-70 mb-4">
+          Waveform reads audio directly from your music folder — it does not duplicate your
+          library unless you enable copying below. Album art is cached locally in{" "}
+          <code className="opacity-80">local-media/</code> (small files only).
+        </p>
         <div className="rounded border border-black/10 dark:border-white/10 p-4 space-y-4">
           <div>
             <label className="block text-sm mb-1">Music source directory</label>
@@ -124,7 +129,7 @@ export default function LocalMediaSettings() {
               value={sourceDir}
               onChange={(event) => setSourceDir(event.target.value)}
               className="w-full border rounded px-3 py-2 bg-transparent"
-              placeholder="/Users/erlinhoxha/Music"
+              placeholder="./music"
             />
           </div>
 

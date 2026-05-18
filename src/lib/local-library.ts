@@ -1,15 +1,19 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, stat } from "node:fs/promises";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { parseFile } from "music-metadata";
 import { db } from "@/lib/db";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 import { env } from "@/lib/env";
 import {
+  absolutePathToStorageKey,
+  getMusicDirectoryCandidates,
+  getMusicSourceDirectoryCandidates,
   getObjectAbsolutePath,
   putObjectFromBuffer,
   putObjectFromFilePath,
+  storageKeyExists,
 } from "@/lib/storage";
 
 const AUDIO_EXTENSIONS = new Set([
@@ -261,13 +265,341 @@ function lyricsCandidates(dirPath: string, stem: string): string[] {
   ];
 }
 
+export type IndexOrganizedMusicResult = {
+  musicRoot: string;
+  scanned: number;
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ file: string; message: string }>;
+};
+
+export function resolveMusicDirectory(): string {
+  return join(process.cwd(), "music");
+}
+
+async function directoryHasOrganizedLayout(musicRoot: string): Promise<boolean> {
+  const entries = await readdir(musicRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const artistPath = join(musicRoot, entry.name);
+    const titleEntries = await readdir(artistPath, { withFileTypes: true }).catch(() => []);
+    for (const titleEntry of titleEntries) {
+      if (!titleEntry.isDirectory()) continue;
+      const audioDir = join(artistPath, titleEntry.name, "audio");
+      if (!(await exists(audioDir))) continue;
+      const audioEntries = await readdir(audioDir, { withFileTypes: true }).catch(() => []);
+      if (audioEntries.some((item) => item.isFile() && AUDIO_EXTENSIONS.has(extname(item.name).toLowerCase()))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function findFirstFileInDir(dirPath: string, extensions: string[]): Promise<string | null> {
+  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const ext = extname(entry.name).toLowerCase();
+    if (extensions.includes(ext)) {
+      return join(dirPath, entry.name);
+    }
+  }
+  return null;
+}
+
+export async function indexOrganizedMusicLibrary(
+  options: ImportLocalLibraryOptions & { musicRoot?: string },
+): Promise<IndexOrganizedMusicResult> {
+  await ensureSongLyricsColumn();
+  await ensureSongAudioColumns();
+
+  const candidates = options.musicRoot
+    ? [resolve(options.musicRoot)]
+    : getMusicDirectoryCandidates();
+
+  let musicRoot: string | null = null;
+  for (const candidate of candidates) {
+    const candidateStat = await stat(candidate).catch(() => null);
+    if (candidateStat?.isDirectory() && (await directoryHasOrganizedLayout(candidate))) {
+      musicRoot = candidate;
+      break;
+    }
+  }
+
+  if (!musicRoot) {
+    throw new Error(
+      `Organized music folder not found. Expected music/<artist>/<title>/audio under ${resolve(process.cwd(), "music")}`,
+    );
+  }
+
+  const result: IndexOrganizedMusicResult = {
+    musicRoot,
+    scanned: 0,
+    imported: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  const artistEntries = await readdir(musicRoot, { withFileTypes: true });
+  for (const artistEntry of artistEntries) {
+    if (!artistEntry.isDirectory()) continue;
+    const artist = artistEntry.name;
+    const artistPath = join(musicRoot, artistEntry.name);
+    const titleEntries = await readdir(artistPath, { withFileTypes: true }).catch(() => []);
+    for (const titleEntry of titleEntries) {
+      if (!titleEntry.isDirectory()) continue;
+      const title = titleEntry.name;
+      const titlePath = join(artistPath, titleEntry.name);
+      const audioDir = join(titlePath, "audio");
+      if (!(await exists(audioDir))) continue;
+
+      const audioEntries = await readdir(audioDir, { withFileTypes: true }).catch(() => []);
+      const audioFiles = audioEntries
+        .filter((entry) => entry.isFile() && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+        .map((entry) => join(audioDir, entry.name))
+        .sort((left, right) => left.localeCompare(right));
+
+      if (audioFiles.length === 0) continue;
+
+      const audioPath = audioFiles[0];
+      result.scanned += 1;
+
+      try {
+        const storageKey = absolutePathToStorageKey(audioPath);
+        if (!storageKey) {
+          throw new Error("Unable to resolve storage key for audio file");
+        }
+
+        const metadata = await parseFile(audioPath, {
+          duration: false,
+          skipCovers: false,
+        }).catch(() => null);
+
+        const resolvedTitle = metadata?.common.title?.trim() || title;
+        const resolvedArtist = metadata?.common.artist?.trim() || artist;
+        const audioBitDepth =
+          typeof metadata?.format.bitsPerSample === "number" &&
+          Number.isFinite(metadata.format.bitsPerSample)
+            ? Math.round(metadata.format.bitsPerSample)
+            : null;
+        const audioSampleRate =
+          typeof metadata?.format.sampleRate === "number" &&
+          Number.isFinite(metadata.format.sampleRate)
+            ? Math.round(metadata.format.sampleRate)
+            : null;
+        const audioUrl = toApiFileUrl(storageKey);
+
+        const coverDir = join(titlePath, "cover");
+        const lyricsDir = join(titlePath, "lyrics");
+        const coverPath = (await exists(coverDir))
+          ? await findFirstFileInDir(coverDir, COVER_EXTENSIONS)
+          : null;
+        const lyricsPath = (await exists(lyricsDir))
+          ? await findFirstFileInDir(lyricsDir, LYRICS_EXTENSIONS)
+          : null;
+
+        const coverKey = coverPath ? absolutePathToStorageKey(coverPath) : null;
+        const lyricsKey = lyricsPath ? absolutePathToStorageKey(lyricsPath) : null;
+        let imageUrl = coverKey ? toApiFileUrl(coverKey) : "/waveform.svg";
+        const lyricsUrl = lyricsKey ? toApiFileUrl(lyricsKey) : null;
+
+        if (imageUrl === "/waveform.svg" && metadata?.common.picture?.[0]) {
+          const picture = metadata.common.picture[0];
+          const pictureExt = extFromMimeType(picture.format || "image/jpeg");
+          const basePath = buildMusicBasePath(resolvedArtist, resolvedTitle);
+          const imageKey = `${basePath}/cover/${randomUUID()}${pictureExt}`;
+          await putObjectFromBuffer(
+            imageKey,
+            Buffer.from(picture.data),
+            picture.format || "image/jpeg",
+          );
+          imageUrl = toApiFileUrl(imageKey);
+        }
+
+        const existingRows = await db<ExistingSong>`
+          SELECT "id", "imageUrl", "lyricsUrl"
+          FROM "Song"
+          WHERE "userId" = ${options.userId}
+            AND lower("title") = lower(${resolvedTitle})
+            AND lower("artist") = lower(${resolvedArtist})
+          LIMIT 1
+        `;
+        const existing = existingRows[0] ?? null;
+
+        if (existing) {
+          await db`
+            UPDATE "Song"
+            SET
+              "title" = ${resolvedTitle},
+              "artist" = ${resolvedArtist},
+              "audioUrl" = ${audioUrl},
+              "imageUrl" = ${imageUrl !== "/waveform.svg" ? imageUrl : existing.imageUrl},
+              "lyricsUrl" = ${lyricsKey ? lyricsUrl : existing.lyricsUrl},
+              "audioBitDepth" = ${audioBitDepth},
+              "audioSampleRate" = ${audioSampleRate}
+            WHERE "id" = ${existing.id}
+          `;
+          result.updated += 1;
+        } else {
+          await db`
+            INSERT INTO "Song" (
+              "id",
+              "title",
+              "artist",
+              "imageUrl",
+              "audioUrl",
+              "lyricsUrl",
+              "audioBitDepth",
+              "audioSampleRate",
+              "userId"
+            )
+            VALUES (
+              ${randomUUID()},
+              ${resolvedTitle},
+              ${resolvedArtist},
+              ${imageUrl},
+              ${audioUrl},
+              ${lyricsUrl},
+              ${audioBitDepth},
+              ${audioSampleRate},
+              ${options.userId}
+            )
+          `;
+          result.imported += 1;
+        }
+      } catch (error) {
+        result.errors.push({
+          file: audioPath,
+          message: error instanceof Error ? error.message : "Index failed",
+        });
+        result.skipped += 1;
+      }
+    }
+  }
+
+  return result;
+}
+
+function toReferenceStorageKey(sourceDir: string, absolutePath: string): string {
+  return absolutePathToStorageKey(absolutePath)
+    ?? relative(resolve(sourceDir), absolutePath).split(sep).join("/");
+}
+
+export async function resolveMusicSourceDir(preferred?: string): Promise<string | null> {
+  const candidates: string[] = [];
+  if (preferred?.trim()) {
+    candidates.push(resolve(preferred.trim()));
+  }
+  for (const candidate of getMusicSourceDirectoryCandidates()) {
+    if (!candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const candidateStat = await stat(candidate).catch(() => null);
+    if (!candidateStat?.isDirectory()) continue;
+    if (await directoryHasOrganizedLayout(candidate)) {
+      return candidate;
+    }
+    const audioFiles: string[] = [];
+    await walkAudioFiles(candidate, audioFiles);
+    if (audioFiles.length > 0) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+export async function discoverMusicLibrary(
+  options: ImportLocalLibraryOptions,
+): Promise<{
+  mode: "organized" | "import";
+  organized?: IndexOrganizedMusicResult;
+  imported?: ImportLocalLibraryResult;
+}> {
+  const sourceDir =
+    options.sourceDir?.trim() || (await resolveMusicSourceDir()) || env.LOCAL_MUSIC_SOURCE_DIR;
+  const resolvedOptions = { ...options, sourceDir };
+
+  if (await directoryHasOrganizedLayout(sourceDir)) {
+    const organized = await indexOrganizedMusicLibrary({
+      ...resolvedOptions,
+      musicRoot: sourceDir,
+    });
+    return { mode: "organized", organized };
+  }
+
+  const imported = await importLocalLibrary(resolvedOptions);
+  return { mode: "import", imported };
+}
+
+function apiUrlToStorageKey(url: string): string | null {
+  if (!url.startsWith("/api/files/")) return null;
+  return decodeURIComponent(url.slice("/api/files/".length));
+}
+
+async function resolveImageUrl(
+  existingImageUrl: string | null | undefined,
+  sourceFolder: string,
+  sourceBaseName: string,
+  metadata: Awaited<ReturnType<typeof parseFile>> | null,
+  basePath: string,
+  includeCoverFiles: boolean,
+): Promise<string> {
+  const existingKey = existingImageUrl ? apiUrlToStorageKey(existingImageUrl) : null;
+  if (existingKey && (await storageKeyExists(existingKey))) {
+    return existingImageUrl as string;
+  }
+
+  let imageUrl = "/waveform.svg";
+  if (includeCoverFiles) {
+    const sidecarCover = await findFirstExisting(
+      coverCandidates(sourceFolder, sourceBaseName),
+    );
+    if (sidecarCover) {
+      if (!env.LOCAL_MUSIC_COPY_FILES) {
+        const refKey = absolutePathToStorageKey(sidecarCover);
+        if (refKey) {
+          return toApiFileUrl(refKey);
+        }
+      }
+      const coverExt = extname(sidecarCover).toLowerCase();
+      const imageKey = `${basePath}/cover/${randomUUID()}${coverExt === ".jpeg" ? ".jpg" : coverExt}`;
+      await putObjectFromFilePath(imageKey, sidecarCover);
+      imageUrl = toApiFileUrl(imageKey);
+    }
+  }
+
+  if (imageUrl === "/waveform.svg" && metadata?.common.picture?.[0]) {
+    const picture = metadata.common.picture[0];
+    const pictureExt = extFromMimeType(picture.format || "image/jpeg");
+    const imageKey = `${basePath}/cover/${randomUUID()}${pictureExt}`;
+    await putObjectFromBuffer(
+      imageKey,
+      Buffer.from(picture.data),
+      picture.format || "image/jpeg",
+    );
+    imageUrl = toApiFileUrl(imageKey);
+  }
+
+  return imageUrl;
+}
+
 export async function importLocalLibrary(
   options: ImportLocalLibraryOptions,
 ): Promise<ImportLocalLibraryResult> {
   await ensureSongLyricsColumn();
   await ensureSongAudioColumns();
 
-  const sourceDir = options.sourceDir?.trim() || env.LOCAL_MUSIC_SOURCE_DIR;
+  const sourceDir =
+    options.sourceDir?.trim() ||
+    (await resolveMusicSourceDir()) ||
+    env.LOCAL_MUSIC_SOURCE_DIR;
   const includeCoverFiles =
     options.includeCoverFiles ?? env.LOCAL_IMPORT_USE_COVER_FILES;
   const includeLyricsFiles =
@@ -325,10 +657,6 @@ export async function importLocalLibrary(
           ? Math.round(metadata.format.sampleRate)
           : null;
       const basePath = buildMusicBasePath(artist, title);
-      const audioKey = `${basePath}/audio/${randomUUID()}.flac`;
-      const audioPathInStorage = getObjectAbsolutePath(audioKey);
-      const audioUrl = toApiFileUrl(audioKey);
-
       const existingRows = await db<ExistingSong>`
         SELECT "id", "imageUrl", "lyricsUrl"
         FROM "Song"
@@ -339,36 +667,36 @@ export async function importLocalLibrary(
       `;
       const existing = existingRows[0] ?? null;
 
-      if (sourceExt === ".flac") {
-        await putObjectFromFilePath(audioKey, audioPath, "audio/flac");
+      let audioUrl: string;
+      if (env.LOCAL_MUSIC_COPY_FILES) {
+        const audioKey = `${basePath}/audio/${randomUUID()}.flac`;
+        const audioPathInStorage = getObjectAbsolutePath(audioKey);
+        audioUrl = toApiFileUrl(audioKey);
+        if (sourceExt === ".flac") {
+          await putObjectFromFilePath(audioKey, audioPath, "audio/flac");
+        } else {
+          await runFfmpegToFlac(audioPath, audioPathInStorage);
+          result.converted += 1;
+        }
+      } else if (sourceExt === ".flac") {
+        const audioKey = toReferenceStorageKey(sourceDir, audioPath);
+        audioUrl = toApiFileUrl(audioKey);
       } else {
+        const audioKey = `${basePath}/audio/${randomUUID()}.flac`;
+        const audioPathInStorage = getObjectAbsolutePath(audioKey);
+        audioUrl = toApiFileUrl(audioKey);
         await runFfmpegToFlac(audioPath, audioPathInStorage);
         result.converted += 1;
       }
 
-      let imageUrl = existing?.imageUrl || "/waveform.svg";
-      if (includeCoverFiles) {
-        const sidecarCover = await findFirstExisting(
-          coverCandidates(sourceFolder, sourceBaseName),
-        );
-        if (sidecarCover) {
-          const coverExt = extname(sidecarCover).toLowerCase();
-          const imageKey = `${basePath}/cover/${randomUUID()}${coverExt === ".jpeg" ? ".jpg" : coverExt}`;
-          await putObjectFromFilePath(imageKey, sidecarCover);
-          imageUrl = toApiFileUrl(imageKey);
-        }
-      }
-      if (imageUrl === "/waveform.svg" && metadata?.common.picture?.[0]) {
-        const picture = metadata.common.picture[0];
-        const pictureExt = extFromMimeType(picture.format || "image/jpeg");
-        const imageKey = `${basePath}/cover/${randomUUID()}${pictureExt}`;
-        await putObjectFromBuffer(
-          imageKey,
-          Buffer.from(picture.data),
-          picture.format || "image/jpeg",
-        );
-        imageUrl = toApiFileUrl(imageKey);
-      }
+      const imageUrl = await resolveImageUrl(
+        existing?.imageUrl,
+        sourceFolder,
+        sourceBaseName,
+        metadata,
+        basePath,
+        includeCoverFiles,
+      );
 
       let lyricsUrl: string | null = existing?.lyricsUrl || null;
       if (includeLyricsFiles) {
@@ -383,10 +711,18 @@ export async function importLocalLibrary(
           );
         }
         if (sidecarLyrics) {
-          const lyricsExt = extname(sidecarLyrics).toLowerCase() === ".lrc" ? ".lrc" : ".txt";
-          const lyricsKey = `${basePath}/lyrics/${randomUUID()}${lyricsExt}`;
-          await putObjectFromFilePath(lyricsKey, sidecarLyrics, "text/plain; charset=utf-8");
-          lyricsUrl = toApiFileUrl(lyricsKey);
+          if (!env.LOCAL_MUSIC_COPY_FILES) {
+            const refKey = absolutePathToStorageKey(sidecarLyrics);
+            if (refKey) {
+              lyricsUrl = toApiFileUrl(refKey);
+            }
+          }
+          if (!lyricsUrl) {
+            const lyricsExt = extname(sidecarLyrics).toLowerCase() === ".lrc" ? ".lrc" : ".txt";
+            const lyricsKey = `${basePath}/lyrics/${randomUUID()}${lyricsExt}`;
+            await putObjectFromFilePath(lyricsKey, sidecarLyrics, "text/plain; charset=utf-8");
+            lyricsUrl = toApiFileUrl(lyricsKey);
+          }
         } else {
           const embeddedLyrics = metadata?.common.lyrics?.filter(Boolean).join("\n\n").trim();
           if (embeddedLyrics) {
