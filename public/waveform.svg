@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <defs>
     <linearGradient id="tile" x1="8" y1="56" x2="56" y2="8" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#06B6D4"/>
-      <stop offset="1" stop-color="#14B8A6"/>
+      <stop stop-color="#059669"/>
+      <stop offset="1" stop-color="#10B981"/>
     </linearGradient>
     <linearGradient id="wave" x1="18" y1="18" x2="46" y2="46" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#F8FAFC"/>
-      <stop offset="1" stop-color="#E2E8F0"/>
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#ECFDF5"/>
     </linearGradient>
   </defs>
   <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#tile)"/>
@@ -19,4 +19,3 @@
     stroke-linejoin="round"
   />
 </svg>
-
