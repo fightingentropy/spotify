@@ -788,7 +788,7 @@ async function songFromAudioHandle(input: {
   });
 
   const audioUrl = createTrackedObjectUrl(file);
-  let imageUrl = "/waveform.svg";
+  let imageUrl = "/apple-icon.png";
   if (coverHandle) {
     imageUrl = createTrackedObjectUrl(await coverHandle.getFile());
   } else if (embedded.imageUrl) {
@@ -980,7 +980,7 @@ async function songFromPickedFolderFile(
   });
 
   const audioUrl = createTrackedObjectUrl(file);
-  let imageUrl = "/waveform.svg";
+  let imageUrl = "/apple-icon.png";
   if (coverFile) {
     imageUrl = createTrackedObjectUrl(coverFile);
   } else if (embedded.imageUrl) {
@@ -1077,7 +1077,7 @@ function pickedFileSong(file: File): LocalSongEntry {
     id,
     title: parsed.title,
     artist: parsed.artist,
-    imageUrl: "/waveform.svg",
+    imageUrl: "/apple-icon.png",
     audioUrl: createTrackedObjectUrl(file),
     createdAt: new Date(file.lastModified || Date.now()).toISOString(),
     source: "picked-file",
@@ -1173,7 +1173,7 @@ async function ensureWritableFolder(): Promise<BrowserDirectoryHandle> {
 
   const writable = await requestDirectoryPermission(activeDirectoryHandle, "readwrite");
   if (!writable) {
-    throw new Error("Waveform needs folder write permission to save there");
+    throw new Error("This folder needs write permission to save songs");
   }
   return activeDirectoryHandle;
 }
@@ -1189,7 +1189,7 @@ export async function saveBrowserLocalSongEdits(
 
   const canWrite = await requestDirectoryPermission(entry.parentDirectoryHandle, "readwrite");
   if (!canWrite) {
-    throw new Error("Waveform needs folder write permission to save changes");
+    throw new Error("This folder needs write permission to save edits");
   }
 
   const title = edits.title.trim();
@@ -1452,7 +1452,7 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
           await persistPickedFolderSnapshot(result.files);
         } catch {
           snapshotError =
-            "Folder loaded, but this device did not allow Waveform to save it for offline use";
+            "Folder loaded, but this device did not allow Spotify to save it for offline use";
         }
         writeCachedFolderName(result.directoryName);
         writeCachedFolderAccessKind("webkit");

@@ -33,6 +33,7 @@ const AUDIO_EXTENSIONS = new Set([
 const COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const LYRICS_EXTENSIONS = [".lrc", ".txt"];
 const LYRICS_EXTENSION_SET = new Set(LYRICS_EXTENSIONS);
+const FALLBACK_COVER_URL = "/apple-icon.png";
 
 type ExistingSong = {
   id: string;
@@ -69,7 +70,25 @@ function buildMusicBasePath(artist: string, title: string): string {
 }
 
 function toApiFileUrl(key: string): string {
-  return `/api/files/${key.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+  const parts = key
+    .split("/")
+    .filter(Boolean)
+    .map((part) => {
+      let decoded = part;
+      for (let i = 0; i < 2; i++) {
+        try {
+          const next = decodeURIComponent(decoded);
+          if (next === decoded) {
+            break;
+          }
+          decoded = next;
+        } catch {
+          break;
+        }
+      }
+      return decoded;
+    });
+  return `/api/files/${parts.join("/")}`;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -403,10 +422,10 @@ export async function indexOrganizedMusicLibrary(
 
         const coverKey = coverPath ? await absolutePathToStorageKey(coverPath) : null;
         const lyricsKey = lyricsPath ? await absolutePathToStorageKey(lyricsPath) : null;
-        let imageUrl = coverKey ? toApiFileUrl(coverKey) : "/waveform.svg";
+        let imageUrl = coverKey ? toApiFileUrl(coverKey) : FALLBACK_COVER_URL;
         const lyricsUrl = lyricsKey ? toApiFileUrl(lyricsKey) : null;
 
-        if (imageUrl === "/waveform.svg" && metadata?.common.picture?.[0]) {
+        if (imageUrl === FALLBACK_COVER_URL && metadata?.common.picture?.[0]) {
           const picture = metadata.common.picture[0];
           const pictureExt = extFromMimeType(picture.format || "image/jpeg");
           const basePath = buildMusicBasePath(resolvedArtist, resolvedTitle);
@@ -436,7 +455,7 @@ export async function indexOrganizedMusicLibrary(
               "title" = ${resolvedTitle},
               "artist" = ${resolvedArtist},
               "audioUrl" = ${audioUrl},
-              "imageUrl" = ${imageUrl !== "/waveform.svg" ? imageUrl : existing.imageUrl},
+              "imageUrl" = ${imageUrl !== FALLBACK_COVER_URL ? imageUrl : existing.imageUrl},
               "lyricsUrl" = ${lyricsKey ? lyricsUrl : existing.lyricsUrl},
               "audioBitDepth" = ${audioBitDepth},
               "audioSampleRate" = ${audioSampleRate}
@@ -540,7 +559,19 @@ export async function discoverMusicLibrary(
 
 function apiUrlToStorageKey(url: string): string | null {
   if (!url.startsWith("/api/files/")) return null;
-  return decodeURIComponent(url.slice("/api/files/".length));
+  let decoded = url.slice("/api/files/".length);
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) {
+        break;
+      }
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  return decoded;
 }
 
 async function resolveImageUrl(
@@ -556,7 +587,7 @@ async function resolveImageUrl(
     return existingImageUrl as string;
   }
 
-  let imageUrl = "/waveform.svg";
+  let imageUrl = FALLBACK_COVER_URL;
   if (includeCoverFiles) {
     const sidecarCover = await findFirstExisting(
       coverCandidates(sourceFolder, sourceBaseName),
@@ -575,7 +606,7 @@ async function resolveImageUrl(
     }
   }
 
-  if (imageUrl === "/waveform.svg" && metadata?.common.picture?.[0]) {
+  if (imageUrl === FALLBACK_COVER_URL && metadata?.common.picture?.[0]) {
     const picture = metadata.common.picture[0];
     const pictureExt = extFromMimeType(picture.format || "image/jpeg");
     const imageKey = `${basePath}/cover/${randomUUID()}${pictureExt}`;

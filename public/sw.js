@@ -1,7 +1,8 @@
-const CACHE_VERSION = "waveform-v6";
+const CACHE_VERSION = "spotify-v6";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
+const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE]);
 
 const SHELL_URLS = [
   "/",
@@ -13,9 +14,6 @@ const SHELL_URLS = [
   "/icon.svg",
   "/icon-512.png",
   "/apple-icon.png",
-  "/waveform-pwa-icon-512.png",
-  "/waveform-pwa-icon-180.png",
-  "/waveform.svg",
   "/favicon.ico",
 ];
 
@@ -89,7 +87,7 @@ async function navigationResponse(event, request) {
       return cached;
     }
 
-    return new Response("<!doctype html><title>Waveform</title><body>Waveform is offline.</body>", {
+    return new Response("<!doctype html><title>Spotify</title><body>Spotify is offline.</body>", {
       headers: { "Content-Type": "text/html; charset=utf-8" },
       status: 503,
     });
@@ -112,11 +110,7 @@ self.addEventListener("activate", (event) => {
       Promise.all(
         keys
           .filter(
-            (key) =>
-              key.startsWith("waveform-") &&
-              key !== SHELL_CACHE &&
-              key !== STATIC_CACHE &&
-              key !== RUNTIME_CACHE,
+            (key) => !CURRENT_CACHES.has(key),
           )
           .map((key) => caches.delete(key)),
       ),
@@ -157,10 +151,7 @@ self.addEventListener("fetch", (event) => {
     url.pathname === "/icon.svg" ||
     url.pathname === "/icon-512.png" ||
     url.pathname === "/apple-icon.png" ||
-    url.pathname === "/waveform-pwa-icon-512.png" ||
-    url.pathname === "/waveform-pwa-icon-180.png" ||
-    url.pathname === "/favicon.ico" ||
-    url.pathname === "/waveform.svg"
+    url.pathname === "/favicon.ico"
   ) {
     event.respondWith(cacheFirst(request, STATIC_CACHE));
     return;

@@ -28,7 +28,25 @@ const LYRICS_MIME_TYPES = new Set([
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
 
 function toApiFileUrl(key: string): string {
-  return `/api/files/${key.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+  const parts = key
+    .split("/")
+    .filter(Boolean)
+    .map((part) => {
+      let decoded = part;
+      for (let i = 0; i < 2; i++) {
+        try {
+          const next = decodeURIComponent(decoded);
+          if (next === decoded) {
+            break;
+          }
+          decoded = next;
+        } catch {
+          break;
+        }
+      }
+      return decoded;
+    });
+  return `/api/files/${parts.join("/")}`;
 }
 
 function sanitizePathSegment(value: string): string {

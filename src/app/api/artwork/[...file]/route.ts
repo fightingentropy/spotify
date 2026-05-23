@@ -35,6 +35,5 @@ export async function GET(
     }
   } catch {}
 
-  return NextResponse.redirect(new URL("/waveform.svg", req.url), 302);
+  return NextResponse.redirect(new URL("/apple-icon.png", req.url), 302);
 }
-

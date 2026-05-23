@@ -1,13 +1,37 @@
 import type { SongRow } from "@/lib/db-types";
 import type { PlayerSong } from "@/types/player";
 
+const LEGACY_WAVEFORM_COVER = "/waveform.svg";
+const SPOTIFY_FALLBACK_COVER = "/apple-icon.png";
+
+export function normalizeCoverImageUrl(url: string | null | undefined): string {
+  if (!url || url === LEGACY_WAVEFORM_COVER) return SPOTIFY_FALLBACK_COVER;
+  return url;
+}
+
 export function normalizeMediaUrl(
   url: string | null | undefined,
   kind: "image" | "audio" | "lyrics",
 ): string {
   if (!url) return "";
+  if (kind === "image" && url === LEGACY_WAVEFORM_COVER) {
+    return SPOTIFY_FALLBACK_COVER;
+  }
   if (url.startsWith("/api/files/")) {
-    return url;
+    const encoded = url.slice("/api/files/".length);
+    let decoded = encoded;
+    for (let i = 0; i < 2; i++) {
+      try {
+        const next = decodeURIComponent(decoded);
+        if (next === decoded) {
+          break;
+        }
+        decoded = next;
+      } catch {
+        break;
+      }
+    }
+    return `/api/files/${decoded}`;
   }
 
   const normalizedKind =

@@ -240,7 +240,7 @@ export default function NowPlayingSheet({
             <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">
               <div className="mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
                 <CoverImage
-                  src={song.imageUrl || "/waveform.svg"}
+                  src={song.imageUrl || "/apple-icon.png"}
                   alt={song.title}
                   width={1200}
                   height={1200}

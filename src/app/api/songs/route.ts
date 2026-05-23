@@ -23,6 +23,10 @@ import {
   QobuzDownloadError,
   resolveQobuzStreamUrl as resolveQobuzProviderStreamUrl,
 } from "@/lib/qobuz-download";
+import {
+  TidalDownloadError,
+  resolveTidalStreamUrl as resolveTidalProviderStreamUrl,
+} from "@/lib/tidal-download";
 import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
 import { randomUUID } from "node:crypto";
@@ -120,13 +124,6 @@ const MAX_IMAGE_BYTES = env.UPLOAD_MAX_IMAGE_BYTES;
 const MAX_AUDIO_BYTES = env.UPLOAD_MAX_AUDIO_BYTES;
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
 const REMOTE_FETCH_TIMEOUT_MS = 120_000;
-const TIDAL_API_BASES = [
-  "https://api.monochrome.tf",
-  "https://arran.monochrome.tf",
-  "https://triton.squid.wtf",
-  "https://hifi-one.spotisaver.net",
-  "https://hifi-two.spotisaver.net",
-];
 
 class UploadError extends Error {
   status: number;
@@ -159,7 +156,25 @@ function buildOrganizedMusicBasePath(title: string, artist: string): string {
 }
 
 function toApiFileUrl(key: string): string {
-  return `/api/files/${key.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+  const parts = key
+    .split("/")
+    .filter(Boolean)
+    .map((part) => {
+      let decoded = part;
+      for (let i = 0; i < 2; i++) {
+        try {
+          const next = decodeURIComponent(decoded);
+          if (next === decoded) {
+            break;
+          }
+          decoded = next;
+        } catch {
+          break;
+        }
+      }
+      return decoded;
+    });
+  return `/api/files/${parts.join("/")}`;
 }
 
 function parseStorageKeyFromApiUrl(url: string): string | null {
@@ -172,7 +187,21 @@ function parseStorageKeyFromApiUrl(url: string): string | null {
   }
   return encoded
     .split("/")
-    .map((part) => decodeURIComponent(part))
+    .map((part) => {
+      let decoded = part;
+      for (let i = 0; i < 2; i++) {
+        try {
+          const next = decodeURIComponent(decoded);
+          if (next === decoded) {
+            break;
+          }
+          decoded = next;
+        } catch {
+          break;
+        }
+      }
+      return decoded;
+    })
     .join("/");
 }
 
@@ -342,37 +371,6 @@ function tryParsePlatformIdFromEntity(
 function tryParseTrackIdFromUrl(url: string): string | null {
   const match = url.match(/\/track\/([A-Za-z0-9]+)/i);
   return match?.[1] ?? null;
-}
-
-function decodeBase64Loose(value: string): string | null {
-  try {
-    const normalized = value
-      .trim()
-      .replaceAll("-", "+")
-      .replaceAll("_", "/");
-    const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
-    return Buffer.from(normalized + padding, "base64").toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-function extractTidalStreamFromManifest(manifestValue: string): string | null {
-  const decoded = decodeBase64Loose(manifestValue);
-  if (!decoded) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(decoded) as Record<string, unknown>;
-    const urls = parsed.urls;
-    if (Array.isArray(urls)) {
-      const first = urls.find((entry) => typeof entry === "string");
-      return typeof first === "string" && first.startsWith("http") ? first : null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
@@ -705,87 +703,33 @@ async function fetchSongLinkPayload(
 async function resolveTidalStreamUrl(
   songLinkPayload: Record<string, unknown>,
   quality: string,
+  options: {
+    title?: string;
+    artist?: string;
+    album?: string;
+  },
 ): Promise<string> {
   const tidalPlatform = getPlatformLink(songLinkPayload, "tidal");
-  if (!tidalPlatform) {
-    throw new UploadError("No Tidal mapping found for this Spotify track", 400);
-  }
-
-  const entityTrackId = tryParsePlatformIdFromEntity(
-    tidalPlatform.entityUniqueId,
-    "TIDAL_SONG::",
-  );
-  const urlTrackId = tidalPlatform.url ? tryParseTrackIdFromUrl(tidalPlatform.url) : null;
+  const entityTrackId = tidalPlatform
+    ? tryParsePlatformIdFromEntity(tidalPlatform.entityUniqueId, "TIDAL_SONG::")
+    : null;
+  const urlTrackId = tidalPlatform?.url ? tryParseTrackIdFromUrl(tidalPlatform.url) : null;
   const tidalTrackId = entityTrackId || urlTrackId;
-  if (!tidalTrackId || !/^\d+$/.test(tidalTrackId)) {
-    throw new UploadError("Could not resolve Tidal track ID", 400);
-  }
 
-  const requestedQuality = quality || "LOSSLESS";
-  let lastError: string | null = null;
-
-  for (const apiBase of TIDAL_API_BASES) {
-    const apiUrl = `${apiBase}/track/?id=${tidalTrackId}&quality=${encodeURIComponent(requestedQuality)}`;
-    try {
-      const response = await fetchWithTimeout(apiUrl, REMOTE_FETCH_TIMEOUT_MS);
-      if (!response.ok) {
-        lastError = `${apiBase} returned ${response.status}`;
-        continue;
-      }
-      const bodyText = await response.text();
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(bodyText);
-      } catch {
-        lastError = `${apiBase} returned non-JSON data`;
-        continue;
-      }
-
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          const row = toObject(item);
-          if (!row) continue;
-          const directUrl = toStringValue(row.OriginalTrackUrl);
-          if (directUrl.startsWith("http")) {
-            return directUrl;
-          }
-        }
-      }
-
-      const objectPayload = toObject(parsed);
-      if (!objectPayload) {
-        lastError = `${apiBase} response shape is unsupported`;
-        continue;
-      }
-
-      const directUrl = toStringValue(objectPayload.OriginalTrackUrl);
-      if (directUrl.startsWith("http")) {
-        return directUrl;
-      }
-
-      const data = toObject(objectPayload.data);
-      const manifest = data ? toStringValue(data.manifest || data.Manifest) : "";
-      const manifestUrl = manifest ? extractTidalStreamFromManifest(manifest) : null;
-      if (manifestUrl) {
-        return manifestUrl;
-      }
-
-      lastError = `${apiBase} had no stream URL`;
-    } catch (error) {
-      if (error instanceof UploadError) {
-        lastError = error.message;
-      } else {
-        lastError = `${apiBase} request failed`;
-      }
+  try {
+    return await resolveTidalProviderStreamUrl({
+      tidalTrackId: tidalTrackId ?? "",
+      title: options.title,
+      artist: options.artist,
+      album: options.album,
+      quality: quality || "LOSSLESS",
+    });
+  } catch (error) {
+    if (error instanceof TidalDownloadError) {
+      throw new UploadError(error.message, error.status);
     }
+    throw new UploadError("Failed to resolve Tidal stream", 502);
   }
-
-  throw new UploadError(
-    lastError
-      ? `Failed to resolve Tidal stream (${lastError})`
-      : "Failed to resolve Tidal stream",
-    502,
-  );
 }
 
 async function resolveDeezerIsrc(songLinkPayload: Record<string, unknown>): Promise<string> {
@@ -908,6 +852,7 @@ async function parseSpotifySongRequest(payload: LinkSongPayload): Promise<{
   const qualityProfileRaw = toStringValue(payload.qualityProfile).toLowerCase();
   const region = toStringValue(payload.region).toUpperCase();
   const lyricsText = toStringValue(payload.lyricsText);
+  const requestedImageUrl = toStringValue(payload.imageUrl);
   const quality = qualityRaw;
 
   const qualityProfile = ["cd", "hires48", "max"].includes(qualityProfileRaw)
@@ -944,7 +889,11 @@ async function parseSpotifySongRequest(payload: LinkSongPayload): Promise<{
         try {
           audioDownload = {
             service: "tidal",
-            streamUrl: await resolveTidalStreamUrl(songLinkPayload, q),
+            streamUrl: await resolveTidalStreamUrl(songLinkPayload, q, {
+              title,
+              artist,
+              album,
+            }),
           };
           break;
         } catch (error) {
@@ -1013,7 +962,11 @@ async function parseSpotifySongRequest(payload: LinkSongPayload): Promise<{
             try {
               audioDownload = {
                 service: "tidal",
-                streamUrl: await resolveTidalStreamUrl(songLinkPayload, q),
+                streamUrl: await resolveTidalStreamUrl(songLinkPayload, q, {
+                  title,
+                  artist,
+                  album,
+                }),
               };
               break;
             } catch (error) {
@@ -1046,9 +999,10 @@ async function parseSpotifySongRequest(payload: LinkSongPayload): Promise<{
     const audioQuality = await readAudioQualityFromStorageKey(audio.key);
 
     let image: UploadedFile | null = null;
-    if (metadata.thumbnailUrl) {
+    const coverUrl = requestedImageUrl || metadata.thumbnailUrl;
+    if (coverUrl) {
       try {
-        image = await uploadFromRemoteUrl("image", metadata.thumbnailUrl, {
+        image = await uploadFromRemoteUrl("image", coverUrl, {
           fileNameHint: `${trackId}.jpg`,
           basePath,
         });
@@ -1232,7 +1186,7 @@ export async function POST(req: Request) {
   const contentType = req.headers.get("content-type") || "";
   let title = "";
   let artist = "";
-  let imageUrl = "/waveform.svg";
+  let imageUrl = "/apple-icon.png";
   let audioUrl = "";
   let lyricsText = "";
   let audioBitDepth: number | null = null;
@@ -1268,7 +1222,7 @@ export async function POST(req: Request) {
     audioUrl = toApiFileUrl(linkData.audio.key);
     imageUrl = linkData.image
       ? toApiFileUrl(linkData.image.key)
-      : "/waveform.svg";
+      : "/apple-icon.png";
     lyricsText = linkData.lyricsText?.trim() || "";
     audioBitDepth = linkData.audioBitDepth;
     audioSampleRate = linkData.audioSampleRate;

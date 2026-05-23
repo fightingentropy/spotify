@@ -4,6 +4,7 @@ import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
+import { songToPlayerSong } from "@/lib/song-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,33 @@ type UpdateSongPayload = {
 
 function toStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  await ensureSongLyricsColumn();
+  await ensureSongAudioColumns();
+
+  const { id } = await params;
+  const songId = typeof id === "string" ? id : "";
+  if (!songId) {
+    return NextResponse.json({ error: "Missing song id" }, { status: 400 });
+  }
+
+  const rows = await db<SongRow>`
+    SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+    FROM "Song"
+    WHERE "id" = ${songId}
+    LIMIT 1
+  `;
+
+  if (!rows[0]) {
+    return NextResponse.json({ error: "Song not found" }, { status: 404 });
+  }
+
+  return NextResponse.json(songToPlayerSong(rows[0]), { status: 200 });
 }
 
 export async function PATCH(

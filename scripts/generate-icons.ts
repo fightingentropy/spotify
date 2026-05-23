@@ -23,10 +23,12 @@ async function applePng(size: number) {
 const png16 = await png(16);
 const png32 = await png(32);
 const png48 = await png(48);
+const png180 = await png(180);
+const png512 = await png(512);
 
 writeFileSync(join(root, "src/app/apple-icon.png"), await applePng(180));
 writeFileSync(join(root, "public/apple-icon.png"), await applePng(180));
-writeFileSync(join(root, "public/icon-512.png"), await png(512));
+writeFileSync(join(root, "public/icon-512.png"), png512);
 
 // ICO: PNG entries in a minimal ICO container (Windows Vista+ format).
 function buildIco(images: Array<{ size: number; data: Buffer }>) {
@@ -66,4 +68,4 @@ writeFileSync(
   ]),
 );
 
-console.log("Generated src/app/favicon.ico, apple-icon.png (Spotify), public/icon-512.png");
+console.log("Generated src/app/favicon.ico, src/app/apple-icon.png, public/apple-icon.png, public/icon-512.png");

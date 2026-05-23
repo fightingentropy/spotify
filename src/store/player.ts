@@ -18,6 +18,7 @@ type PlayerState = {
   crossfadeSeconds: number; // 0..12
   setQueue: (songs: PlayerSong[], startIndex: number) => void;
   setSong: (song: PlayerSong | null) => void;
+  replaceSong: (song: PlayerSong) => void;
   play: () => void;
   pause: () => void;
   toggle: () => void;
@@ -51,6 +52,14 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       isPlaying: true,
     })),
   setSong: (song) => set({ currentSong: song }),
+  replaceSong: (song) =>
+    set((s) => {
+      const queue = s.queue.map((item) => (item.id === song.id ? song : item));
+      return {
+        queue,
+        currentSong: s.currentSong?.id === song.id ? song : s.currentSong,
+      };
+    }),
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
   toggle: () => set((s) => ({ isPlaying: !s.isPlaying })),
@@ -123,4 +132,3 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     set({ crossfadeSeconds: clamped });
   },
 }));
-

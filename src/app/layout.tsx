@@ -29,13 +29,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Waveform",
+  title: "Spotify",
   description: "Local-first music player for your library",
-  applicationName: "Waveform",
+  applicationName: "Spotify",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Waveform",
+    title: "Spotify",
   },
   formatDetection: {
     telephone: false,
@@ -45,7 +45,7 @@ export const metadata: Metadata = {
       { url: "/icon.svg", type: "image/svg+xml" },
       { url: "/icon-512.png", type: "image/png", sizes: "512x512" },
     ],
-    apple: [{ url: "/waveform-pwa-icon-180.png", type: "image/png", sizes: "180x180" }],
+    apple: [{ url: "/apple-icon.png", type: "image/png", sizes: "180x180" }],
     shortcut: [{ url: "/favicon.ico", sizes: "48x48" }],
   },
 };
@@ -89,21 +89,22 @@ export default async function RootLayout({
               <Link href="/" className="font-semibold inline-flex items-center gap-2 touch-manipulation">
                 <Image
                   src="/apple-icon.png"
-                  alt="Waveform"
+                  alt="Spotify logo"
                   width={24}
                   height={24}
                   className="h-6 w-6 rounded-md lg:hidden"
                   priority
                 />
                 <Image
-                  src="/waveform.svg"
-                  alt="Waveform"
+                  src="/icon.svg"
+                  alt="Spotify logo"
                   width={24}
                   height={24}
                   className="h-6 w-6 hidden lg:block"
+                  loading="eager"
                   priority
                 />
-                <span className="hidden sm:inline">Waveform</span>
+                <span className="hidden sm:inline">Spotify</span>
               </Link>
               <nav className="hidden lg:flex items-center gap-6">
                 <Link href="/" className="opacity-80 hover:opacity-100">Home</Link>

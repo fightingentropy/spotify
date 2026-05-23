@@ -45,17 +45,17 @@ export default function InstallPrompt() {
         <div className="h-10 w-10 rounded-xl overflow-hidden shrink-0 shadow-sm">
           <Image
             src="/apple-icon.png"
-            alt="Waveform"
+            alt="Spotify icon"
             width={40}
             height={40}
             className="h-full w-full object-cover"
           />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-sm">Install Waveform</div>
+          <div className="font-medium text-sm">Install Spotify</div>
           <p className="text-xs opacity-80 mt-1 leading-relaxed">
             Tap the share button in Safari, then &ldquo;Add to Home Screen&rdquo; for a full-screen app
-            experience. If you already have a Waveform icon, remove the old one first.
+            experience. If you already have a Spotify icon, remove the old one first.
           </p>
         </div>
         <button

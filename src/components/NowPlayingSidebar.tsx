@@ -5,6 +5,7 @@ import Image from "next/image";
 import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4 } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
+import { normalizeCoverImageUrl } from "@/lib/song-utils";
 
 type LyricsState = {
   status: "idle" | "loading" | "ready" | "error";
@@ -134,7 +135,7 @@ export default function NowPlayingSidebar() {
         ) : (
           <div className="space-y-4 pb-4">
             <Image
-              src={currentSong.imageUrl || "/waveform.svg"}
+              src={normalizeCoverImageUrl(currentSong.imageUrl)}
               alt={currentSong.title}
               width={500}
               height={500}

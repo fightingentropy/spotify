@@ -17,19 +17,13 @@ const nextConfig: NextConfig = {
         pathname: "/apple-icon.png",
       },
       {
+        pathname: "/favicon.ico",
+      },
+      {
         pathname: "/icon.svg",
       },
       {
         pathname: "/icon-512.png",
-      },
-      {
-        pathname: "/waveform-pwa-icon-180.png",
-      },
-      {
-        pathname: "/waveform-pwa-icon-512.png",
-      },
-      {
-        pathname: "/waveform.svg",
       },
     ],
     formats: ["image/avif", "image/webp"],

@@ -5,6 +5,7 @@ import Image from "next/image";
 import { Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
+import { normalizeCoverImageUrl } from "@/lib/song-utils";
 
 type HomeSearchCommandPaletteProps = {
   songs: PlayerSong[];
@@ -152,10 +153,10 @@ export function HomeSearchCommandPalette({ songs }: HomeSearchCommandPaletteProp
                 }`}
               >
                 <div className="relative h-10 w-10 rounded-md overflow-hidden shrink-0">
-                  <Image
-                    src={song.imageUrl || "/waveform.svg"}
-                    alt={song.title}
-                    fill
+                <Image
+                  src={normalizeCoverImageUrl(song.imageUrl)}
+                  alt={song.title}
+                  fill
                     sizes="40px"
                     className="object-cover"
                   />

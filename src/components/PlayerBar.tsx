@@ -40,6 +40,7 @@ function PlayerBar(): React.ReactElement | null {
   const cycleRepeatMode = usePlayerStore((s) => s.cycleRepeatMode);
   const setSong = usePlayerStore((s) => s.setSong);
   const setQueue = usePlayerStore((s) => s.setQueue);
+  const replaceSong = usePlayerStore((s) => s.replaceSong);
   const pause = usePlayerStore((s) => s.pause);
   const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
   const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
@@ -51,6 +52,7 @@ function PlayerBar(): React.ReactElement | null {
   const likesHydrated = useLikesStore((state) => state.hydrated);
 
   const currentSongId = currentSong?.id ?? null;
+  const currentSongIsBrowserLocal = isBrowserLocalSong(currentSong);
   const songIsLiked = currentSongId ? !!likedLookup[currentSongId] : false;
   const likePending = currentSongId ? !!pendingLookup[currentSongId] : false;
 
@@ -213,6 +215,31 @@ function PlayerBar(): React.ReactElement | null {
       }
     } catch {}
   }, [setSong, setQueue, pause]);
+
+  useEffect(() => {
+    if (!currentSongId || currentSongIsBrowserLocal) return;
+
+    let cancelled = false;
+    const songId = currentSongId;
+
+    async function refreshCurrentSong() {
+      try {
+        const response = await fetch(`/api/songs/${encodeURIComponent(songId)}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const song = (await response.json()) as PlayerSong;
+        if (cancelled || !song?.id || song.id !== songId) return;
+        replaceSong(song);
+      } catch {}
+    }
+
+    refreshCurrentSong();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSongId, currentSongIsBrowserLocal, replaceSong]);
 
   // Load current song into the ACTIVE element when not crossfading
   useEffect(() => {
@@ -560,7 +587,7 @@ function PlayerBar(): React.ReactElement | null {
             aria-label="Open now playing"
           >
             <CoverImage
-              src={currentSong.imageUrl || "/waveform.svg"}
+              src={currentSong.imageUrl || "/apple-icon.png"}
               alt="cover"
               width={48}
               height={48}
@@ -602,7 +629,7 @@ function PlayerBar(): React.ReactElement | null {
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <div className="hidden sm:block">
               <CoverImage
-                src={currentSong.imageUrl || "/waveform.svg"}
+                src={currentSong.imageUrl || "/apple-icon.png"}
                 alt="cover"
                 width={48}
                 height={48}

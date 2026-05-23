@@ -14,6 +14,10 @@ import {
   QobuzDownloadError,
   resolveQobuzStreamUrl as resolveQobuzProviderStreamUrl,
 } from "@/lib/qobuz-download";
+import {
+  TidalDownloadError,
+  resolveTidalStreamUrl as resolveTidalProviderStreamUrl,
+} from "@/lib/tidal-download";
 
 export const dynamic = "force-dynamic";
 
@@ -39,14 +43,6 @@ type ResolvedAudioDownload =
     };
 
 const REQUEST_TIMEOUT_MS = 120_000;
-const TIDAL_API_BASES = [
-  "https://api.monochrome.tf",
-  "https://arran.monochrome.tf",
-  "https://triton.squid.wtf",
-  "https://hifi-one.spotisaver.net",
-  "https://hifi-two.spotisaver.net",
-];
-
 class DownloadError extends Error {
   status: number;
 
@@ -107,30 +103,6 @@ function tryParsePlatformIdFromEntity(entityUniqueId: string, prefix: string): s
 
 function tryParseTrackIdFromUrl(url: string): string | null {
   return url.match(/\/track\/([A-Za-z0-9]+)/i)?.[1] ?? null;
-}
-
-function decodeBase64Loose(value: string): string | null {
-  try {
-    const normalized = value.trim().replaceAll("-", "+").replaceAll("_", "/");
-    const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
-    return Buffer.from(normalized + padding, "base64").toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-function extractTidalStreamFromManifest(manifestValue: string): string | null {
-  const decoded = decodeBase64Loose(manifestValue);
-  if (!decoded) return null;
-  try {
-    const parsed = JSON.parse(decoded) as Record<string, unknown>;
-    const urls = parsed.urls;
-    if (!Array.isArray(urls)) return null;
-    const first = urls.find((entry) => typeof entry === "string");
-    return typeof first === "string" && first.startsWith("http") ? first : null;
-  } catch {
-    return null;
-  }
 }
 
 async function fetchWithTimeout(url: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
@@ -213,74 +185,29 @@ async function resolveAmazonDownload(
 async function resolveTidalStreamUrl(
   songLinkPayload: Record<string, unknown>,
   quality: string,
+  payload: RequestPayload,
 ): Promise<string> {
   const tidalPlatform = getPlatformLink(songLinkPayload, "tidal");
-  if (!tidalPlatform) {
-    throw new DownloadError("No Tidal mapping found for this Spotify track", 400);
-  }
-
-  const entityTrackId = tryParsePlatformIdFromEntity(
-    tidalPlatform.entityUniqueId,
-    "TIDAL_SONG::",
-  );
-  const urlTrackId = tidalPlatform.url ? tryParseTrackIdFromUrl(tidalPlatform.url) : null;
+  const entityTrackId = tidalPlatform
+    ? tryParsePlatformIdFromEntity(tidalPlatform.entityUniqueId, "TIDAL_SONG::")
+    : null;
+  const urlTrackId = tidalPlatform?.url ? tryParseTrackIdFromUrl(tidalPlatform.url) : null;
   const tidalTrackId = entityTrackId || urlTrackId;
-  if (!tidalTrackId || !/^\d+$/.test(tidalTrackId)) {
-    throw new DownloadError("Could not resolve Tidal track ID", 400);
-  }
 
-  const requestedQuality = quality || "LOSSLESS";
-  let lastError = "";
-
-  for (const apiBase of TIDAL_API_BASES) {
-    const apiUrl = `${apiBase}/track/?id=${tidalTrackId}&quality=${encodeURIComponent(requestedQuality)}`;
-    try {
-      const response = await fetchWithTimeout(apiUrl);
-      if (!response.ok) {
-        lastError = `${apiBase} returned ${response.status}`;
-        continue;
-      }
-      const bodyText = await response.text();
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(bodyText);
-      } catch {
-        lastError = `${apiBase} returned non-JSON data`;
-        continue;
-      }
-
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          const row = toObject(item);
-          const directUrl = row ? toStringValue(row.OriginalTrackUrl) : "";
-          if (directUrl.startsWith("http")) return directUrl;
-        }
-      }
-
-      const objectPayload = toObject(parsed);
-      if (!objectPayload) {
-        lastError = `${apiBase} response shape is unsupported`;
-        continue;
-      }
-
-      const directUrl = toStringValue(objectPayload.OriginalTrackUrl);
-      if (directUrl.startsWith("http")) return directUrl;
-
-      const data = toObject(objectPayload.data);
-      const manifest = data ? toStringValue(data.manifest || data.Manifest) : "";
-      const manifestUrl = manifest ? extractTidalStreamFromManifest(manifest) : null;
-      if (manifestUrl) return manifestUrl;
-
-      lastError = `${apiBase} had no stream URL`;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : `${apiBase} request failed`;
+  try {
+    return await resolveTidalProviderStreamUrl({
+      tidalTrackId: tidalTrackId ?? "",
+      title: toStringValue(payload.title),
+      artist: toStringValue(payload.artist),
+      album: toStringValue(payload.album),
+      quality: quality || "LOSSLESS",
+    });
+  } catch (error) {
+    if (error instanceof TidalDownloadError) {
+      throw new DownloadError(error.message, error.status);
     }
+    throw new DownloadError("Failed to resolve Tidal stream", 502);
   }
-
-  throw new DownloadError(
-    lastError ? `Failed to resolve Tidal stream (${lastError})` : "Failed to resolve Tidal stream",
-    502,
-  );
 }
 
 async function resolveDeezerIsrc(songLinkPayload: Record<string, unknown>): Promise<string> {
@@ -378,7 +305,7 @@ async function resolveStreamUrl(payload: RequestPayload): Promise<ResolvedAudioD
       try {
         return {
           service: "tidal",
-          streamUrl: await resolveTidalStreamUrl(songLinkPayload, quality),
+          streamUrl: await resolveTidalStreamUrl(songLinkPayload, quality, payload),
         };
       } catch (error) {
         errors.push(error instanceof Error ? error.message : `quality ${quality} failed`);
@@ -428,7 +355,7 @@ async function resolveStreamUrl(payload: RequestPayload): Promise<ResolvedAudioD
     try {
       return {
         service: "tidal",
-        streamUrl: await resolveTidalStreamUrl(songLinkPayload, quality),
+        streamUrl: await resolveTidalStreamUrl(songLinkPayload, quality, payload),
       };
     } catch (error) {
       tidalErrors.push(error instanceof Error ? error.message : `quality ${quality} failed`);

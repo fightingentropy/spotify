@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    id: "/waveform-music-player/v2",
-    name: "Waveform",
-    short_name: "Waveform",
+    id: "/spotify-music-player/v2",
+    name: "Spotify",
+    short_name: "Spotify",
     description: "Local-first music player for your library",
     lang: "en",
     dir: "ltr",
@@ -22,30 +22,30 @@ export default function manifest(): MetadataRoute.Manifest {
         name: "Library",
         short_name: "Library",
         url: "/library",
-        icons: [{ src: "/waveform-pwa-icon-512.png", sizes: "512x512", type: "image/png" }],
+        icons: [{ src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
       },
       {
         name: "Add Song",
         short_name: "Add",
         url: "/upload",
-        icons: [{ src: "/waveform-pwa-icon-512.png", sizes: "512x512", type: "image/png" }],
+        icons: [{ src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
       },
     ],
     icons: [
       {
-        src: "/waveform-pwa-icon-512.png",
+        src: "/icon-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/waveform-pwa-icon-180.png",
+        src: "/apple-icon.png",
         sizes: "180x180",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/waveform-pwa-icon-512.png",
+        src: "/icon-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",

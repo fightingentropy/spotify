@@ -132,7 +132,7 @@ export default function LocalMediaSettings() {
       <div>
         <h2 className="text-lg font-medium mb-2">Server Library Import</h2>
         <p className="text-sm opacity-70 mb-4">
-          When running Waveform on your own machine, import tracks from a folder on disk into the
+          When running Spotify on your own machine, import tracks from a folder on disk into the
           server library. On the hosted site, use Local Folder above instead — the server cannot
           read files from your computer.
         </p>

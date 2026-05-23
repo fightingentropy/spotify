@@ -22,8 +22,8 @@ type UseMediaSessionOptions = {
   audioRefs: Array<RefObject<HTMLAudioElement | null>>;
 };
 
-const FALLBACK_ARTWORK = "/waveform-pwa-icon-512.png";
-const FALLBACK_ARTWORK_SMALL = "/waveform-pwa-icon-180.png";
+const FALLBACK_ARTWORK = "/icon-512.png";
+const FALLBACK_ARTWORK_SMALL = "/apple-icon.png";
 
 function resolveArtworkUrl(imageUrl: string): string {
   if (!imageUrl || /^blob:|^data:/i.test(imageUrl) || /\.svg(?:[?#]|$)/i.test(imageUrl)) {

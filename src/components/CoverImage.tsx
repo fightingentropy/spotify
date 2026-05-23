@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Image, { type ImageProps } from "next/image";
+import { normalizeCoverImageUrl } from "@/lib/song-utils";
 
 type CoverImageProps = Omit<ImageProps, "src" | "onError"> & {
   src: string | null | undefined;
@@ -10,12 +11,14 @@ type CoverImageProps = Omit<ImageProps, "src" | "onError"> & {
 
 export function CoverImage({
   src,
-  fallbackSrc = "/waveform.svg",
+  fallbackSrc = "/apple-icon.png",
   alt,
   ...props
 }: CoverImageProps) {
   const [failed, setFailed] = useState(false);
-  const resolvedSrc = failed || !src || src.trim().length === 0 ? fallbackSrc : src;
+  const resolvedSrc = normalizeCoverImageUrl(
+    failed || !src || src.trim().length === 0 ? fallbackSrc : src,
+  );
   const isBrowserUrl =
     resolvedSrc.startsWith("blob:") || resolvedSrc.startsWith("data:");
 
