@@ -55,7 +55,7 @@ export default function InstallPrompt() {
           <div className="font-medium text-sm">Install Waveform</div>
           <p className="text-xs opacity-80 mt-1 leading-relaxed">
             Tap the share button in Safari, then &ldquo;Add to Home Screen&rdquo; for a full-screen app
-            experience.
+            experience. If you already have a Waveform icon, remove the old one first.
           </p>
         </div>
         <button

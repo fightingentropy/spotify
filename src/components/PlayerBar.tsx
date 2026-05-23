@@ -111,6 +111,7 @@ function PlayerBar(): React.ReactElement | null {
     onPrevious: previous,
     onNext: next,
     onSeek,
+    getActiveAudio,
     audioRefs: [audioARef, audioBRef],
   });
 

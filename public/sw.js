@@ -1,4 +1,4 @@
-const CACHE_VERSION = "waveform-v4";
+const CACHE_VERSION = "waveform-v5";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -10,10 +10,11 @@ const SHELL_URLS = [
   "/library",
   "/settings",
   "/upload",
-  "/manifest.webmanifest",
   "/icon.svg",
   "/icon-512.png",
   "/apple-icon.png",
+  "/waveform-pwa-icon-512.png",
+  "/waveform-pwa-icon-180.png",
   "/waveform.svg",
   "/favicon.ico",
 ];
@@ -50,6 +51,18 @@ async function cacheFirst(request, cacheName) {
   return response;
 }
 
+async function networkFirst(request, cacheName) {
+  try {
+    const response = await fetch(request);
+    await putCache(cacheName, request, response);
+    return response;
+  } catch {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    throw new Error("network and cache miss");
+  }
+}
+
 async function staleWhileRevalidate(event, request, cacheName) {
   const cached = await caches.match(request);
   const refreshed = refreshCache(cacheName, request);
@@ -63,26 +76,24 @@ async function staleWhileRevalidate(event, request, cacheName) {
 }
 
 async function navigationResponse(event, request) {
-  const cache = await caches.open(SHELL_CACHE);
-  const cached =
-    (await cache.match(request, { ignoreSearch: true })) ||
-    (await cache.match("/", { ignoreSearch: true }));
-  const refreshed = refreshCache(SHELL_CACHE, request);
-  event.waitUntil(refreshed.then(() => undefined));
-
-  if (cached) {
-    return cached;
-  }
-
-  const response = await refreshed;
-  if (response) {
+  try {
+    const response = await fetch(request);
+    event.waitUntil(putCache(SHELL_CACHE, request, response.clone()));
     return response;
-  }
+  } catch {
+    const cache = await caches.open(SHELL_CACHE);
+    const cached =
+      (await cache.match(request, { ignoreSearch: true })) ||
+      (await cache.match("/", { ignoreSearch: true }));
+    if (cached) {
+      return cached;
+    }
 
-  return new Response("<!doctype html><title>Waveform</title><body>Waveform is offline.</body>", {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-    status: 503,
-  });
+    return new Response("<!doctype html><title>Waveform</title><body>Waveform is offline.</body>", {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+      status: 503,
+    });
+  }
 }
 
 self.addEventListener("install", (event) => {
@@ -136,12 +147,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  if (url.pathname === "/manifest.webmanifest") {
+    event.respondWith(networkFirst(request, STATIC_CACHE));
+    return;
+  }
+
   if (
     url.pathname.startsWith("/_next/static/") ||
-    url.pathname === "/manifest.webmanifest" ||
     url.pathname === "/icon.svg" ||
     url.pathname === "/icon-512.png" ||
     url.pathname === "/apple-icon.png" ||
+    url.pathname === "/waveform-pwa-icon-512.png" ||
+    url.pathname === "/waveform-pwa-icon-180.png" ||
     url.pathname === "/favicon.ico" ||
     url.pathname === "/waveform.svg"
   ) {

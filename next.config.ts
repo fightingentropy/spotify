@@ -50,6 +50,27 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      {
+        source: "/manifest.webmanifest",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "no-cache, no-store, must-revalidate",
+          },
+        ],
+      },
+    ];
+  },
+  async rewrites() {
+    return [
+      {
+        source: "/waveform-pwa-icon-512.png",
+        destination: "/icon-512.png",
+      },
+      {
+        source: "/waveform-pwa-icon-180.png",
+        destination: "/apple-icon.png",
+      },
     ];
   },
 };

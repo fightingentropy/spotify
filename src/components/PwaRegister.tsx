@@ -25,7 +25,14 @@ export default function PwaRegister() {
       }
     };
 
+    const refreshServiceWorker = () => {
+      if (document.visibilityState !== "visible") return;
+      void register();
+    };
+
     navigator.serviceWorker.addEventListener("controllerchange", reloadOnControllerChange);
+    document.addEventListener("visibilitychange", refreshServiceWorker);
+    window.addEventListener("pageshow", refreshServiceWorker);
 
     if (document.readyState === "complete") {
       void register();
@@ -36,6 +43,8 @@ export default function PwaRegister() {
     return () => {
       window.removeEventListener("load", register);
       navigator.serviceWorker.removeEventListener("controllerchange", reloadOnControllerChange);
+      document.removeEventListener("visibilitychange", refreshServiceWorker);
+      window.removeEventListener("pageshow", refreshServiceWorker);
     };
   }, []);
 
