@@ -7,7 +7,6 @@ import type { SongRow } from "@/lib/db-types";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
 export const revalidate = 0;
-export const runtime = "nodejs";
 
 export default async function LikedPage() {
   await ensureSongLyricsColumn();

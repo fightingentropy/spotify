@@ -3,7 +3,6 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
 
-export const runtime = "nodejs";
 
 type ReorderPayload = {
   songIds?: unknown;

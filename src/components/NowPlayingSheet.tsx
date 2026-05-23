@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
-import Image from "next/image";
 import {
   CheckCircle2,
   ChevronDown,
@@ -19,6 +18,7 @@ import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
+import { CoverImage } from "@/components/CoverImage";
 
 type NowPlayingSheetProps = {
   open: boolean;
@@ -239,7 +239,7 @@ export default function NowPlayingSheet({
 
             <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">
               <div className="mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
-                <Image
+                <CoverImage
                   src={song.imageUrl || "/waveform.svg"}
                   alt={song.title}
                   width={1200}

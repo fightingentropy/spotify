@@ -1,0 +1,42 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"main": ".open-next/worker.js",
+	"name": "waveform",
+	"compatibility_date": "2026-05-23",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"services": [
+		{
+			"binding": "WORKER_SELF_REFERENCE",
+			"service": "waveform"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "waveform-db",
+			"database_id": "3adeabe3-c179-4fad-b270-cd409ec9be78"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "waveform-media"
+		}
+	],
+	"images": {
+		"binding": "IMAGES"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"AUTH_TRUST_HOST": "true"
+	}
+}

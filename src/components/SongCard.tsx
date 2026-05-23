@@ -16,6 +16,7 @@ type SongCardProps = {
   canLike?: boolean;
   hideIfUnliked?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
+  showLike?: boolean;
   editMode?: boolean;
   onEdit?: (song: PlayerSong) => void;
   priority?: boolean;
@@ -30,6 +31,7 @@ const SongCardComponent = function SongCard({
   canLike = false,
   hideIfUnliked = false,
   onToggleLike,
+  showLike = true,
   editMode = false,
   onEdit,
   priority = false,
@@ -102,27 +104,29 @@ const SongCardComponent = function SongCard({
       />
       <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
 
-      <button
-        type="button"
-        aria-label={liked ? "Remove from liked songs" : "Save to liked songs"}
-        title={!canLike ? "Sign in to like songs" : liked ? "Remove from liked songs" : "Save to liked songs"}
-        disabled={likePending}
-        onClick={handleToggleLike}
-        className={cn(
-          "absolute top-2 right-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
-          canLike ? "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500" : "opacity-80",
-          likePending && "opacity-60 cursor-wait"
-        )}
-      >
-        <Heart
-          size={18}
+      {showLike ? (
+        <button
+          type="button"
+          aria-label={liked ? "Remove from liked songs" : "Save to liked songs"}
+          title={!canLike ? "Sign in to like songs" : liked ? "Remove from liked songs" : "Save to liked songs"}
+          disabled={likePending}
+          onClick={handleToggleLike}
           className={cn(
-            "transition-colors",
-            liked ? "fill-emerald-500 text-emerald-500" : "text-white",
-            likePending && "animate-pulse"
+            "absolute top-2 right-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
+            canLike ? "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500" : "opacity-80",
+            likePending && "opacity-60 cursor-wait"
           )}
-        />
-      </button>
+        >
+          <Heart
+            size={18}
+            className={cn(
+              "transition-colors",
+              liked ? "fill-emerald-500 text-emerald-500" : "text-white",
+              likePending && "animate-pulse"
+            )}
+          />
+        </button>
+      ) : null}
 
       {editMode && onEdit ? (
         <button
@@ -178,6 +182,7 @@ export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
     prevProps.hideIfUnliked === nextProps.hideIfUnliked &&
+    prevProps.showLike === nextProps.showLike &&
     prevProps.editMode === nextProps.editMode &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&

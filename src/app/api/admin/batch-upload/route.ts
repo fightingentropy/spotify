@@ -5,7 +5,6 @@ import { env } from "@/lib/env";
 import { importLocalLibrary } from "@/lib/local-library";
 import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type BatchPayload = {

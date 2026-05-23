@@ -8,4 +8,7 @@ export type PlayerSong = {
   createdAt?: string;
   audioBitDepth?: number;
   audioSampleRate?: number;
+  source?: "server" | "browser-local" | "picked-file";
+  localPath?: string;
+  writable?: boolean;
 };

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { parseFile } from "music-metadata";
 import { getObjectAbsolutePath, statObject } from "@/lib/storage";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
@@ -18,7 +17,7 @@ export async function GET(
     if (!info) {
       throw new Error("not found");
     }
-    const audioPath = getObjectAbsolutePath(objectKey);
+    const audioPath = await getObjectAbsolutePath(objectKey);
     const meta = await parseFile(audioPath, {
       duration: false,
       skipCovers: false,

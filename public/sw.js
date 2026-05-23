@@ -1,8 +1,8 @@
-const CACHE_VERSION = "waveform-v1";
+const CACHE_VERSION = "waveform-v2";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 
-const SHELL_URLS = ["/", "/liked", "/search", "/library", "/settings"];
+const SHELL_URLS = ["/", "/liked", "/search", "/library", "/settings", "/upload"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -32,8 +32,15 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (url.pathname.startsWith("/api/")) return;
+  if (url.protocol === "blob:" || url.protocol === "data:") return;
 
-  if (url.pathname.startsWith("/_next/static/")) {
+  if (
+    url.pathname.startsWith("/_next/static/") ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname === "/icon" ||
+    url.pathname === "/apple-icon" ||
+    url.pathname === "/waveform.svg"
+  ) {
     event.respondWith(
       caches.open(STATIC_CACHE).then(async (cache) => {
         const cached = await cache.match(request);

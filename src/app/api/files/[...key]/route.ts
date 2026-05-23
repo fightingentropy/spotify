@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server";
+import { Readable } from "node:stream";
 import {
   getObjectStream,
   getPartialObjectStream,
   statObject,
 } from "@/lib/storage";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function toResponseBody(
+  stream: ReadableStream<Uint8Array> | Readable,
+): BodyInit {
+  if (stream instanceof Readable) {
+    return Readable.toWeb(stream) as unknown as BodyInit;
+  }
+  return stream;
+}
 
 function parseRangeHeader(
   rangeHeader: string,
@@ -73,8 +82,7 @@ export async function GET(
       headers.set("Content-Range", `bytes ${start}-${end}/${size}`);
       headers.set("Accept-Ranges", "bytes");
       headers.set("Cache-Control", "public, max-age=31536000, immutable");
-      // @ts-expect-error Node stream in web Response
-      return new Response(partial, { status: 206, headers });
+      return new Response(toResponseBody(partial), { status: 206, headers });
     }
     const stream = await getObjectStream(objectKey);
     const headers = new Headers();
@@ -82,8 +90,7 @@ export async function GET(
     if (size > 0) headers.set("Content-Length", String(size));
     headers.set("Accept-Ranges", "bytes");
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
-    // @ts-expect-error Node stream in web Response
-    return new Response(stream, { headers });
+    return new Response(toResponseBody(stream), { headers });
   } catch (error) {
     console.error("Failed to stream object", error);
     return NextResponse.json({ error: "Failed" }, { status: 500 });

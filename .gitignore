@@ -46,3 +46,11 @@ next-env.d.ts
 /music/
 /waveform.sqlite
 /waveform.sqlite-*
+
+# OpenNext
+.open-next
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example

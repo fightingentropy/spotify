@@ -4,7 +4,6 @@ import { authOptions } from "@/auth";
 import { env } from "@/lib/env";
 import { discoverMusicLibrary } from "@/lib/local-library";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type ImportPayload = {

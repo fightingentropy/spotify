@@ -14,6 +14,7 @@ const nextConfig: NextConfig = {
     formats: ["image/avif", "image/webp"],
     minimumCacheTTL: 60 * 60 * 24 * 30,
   },
+  serverExternalPackages: ["better-sqlite3", "music-metadata"],
   experimental: {
     optimizePackageImports: ["lucide-react"],
   },
@@ -39,3 +40,5 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+import('@opennextjs/cloudflare').then(m => m.initOpenNextCloudflareForDev());

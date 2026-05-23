@@ -5,7 +5,6 @@ import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type UpdateSongPayload = {

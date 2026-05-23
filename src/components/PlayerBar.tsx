@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
@@ -9,6 +8,13 @@ import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 import NowPlayingSheet from "@/components/NowPlayingSheet";
+import { CoverImage } from "@/components/CoverImage";
+import { isBrowserLocalSong } from "@/store/browser-local-library";
+
+function resolvePlayableSrc(src: string): string {
+  if (/^(blob:|data:|https?:)/i.test(src)) return src;
+  return `${location.origin}${src}`;
+}
 
 function PlayerBar(): React.ReactElement | null {
   // Individual selectors so we only re-render when each specific value changes
@@ -154,8 +160,12 @@ function PlayerBar(): React.ReactElement | null {
           }
         | null;
       if (data?.queue && Array.isArray(data.queue) && typeof data.currentIndex === "number") {
-        const idx = Math.max(0, Math.min(data.queue.length - 1, data.currentIndex));
-        setQueue(data.queue, idx);
+        const restoredQueue = data.queue.filter((song) => !isBrowserLocalSong(song));
+        const restoredSongId = data.queue[data.currentIndex]?.id;
+        const idxFromSong = restoredQueue.findIndex((song) => song.id === restoredSongId);
+        const idx = idxFromSong >= 0 ? idxFromSong : Math.max(0, Math.min(restoredQueue.length - 1, data.currentIndex));
+        if (restoredQueue.length === 0) return;
+        setQueue(restoredQueue, idx);
         // Always start paused on fresh load to avoid autoplay restrictions
         pause();
         if (typeof data.currentTime === "number") {
@@ -186,7 +196,7 @@ function PlayerBar(): React.ReactElement | null {
       setDuration(0);
       return;
     }
-    const absolute = src ? location.origin + src : null;
+    const absolute = src ? resolvePlayableSrc(src) : null;
     if (absolute && audio.src !== absolute) audio.src = absolute;
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
@@ -262,7 +272,7 @@ function PlayerBar(): React.ReactElement | null {
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
-        const absoluteNext = nextSong.audioUrl ? location.origin + nextSong.audioUrl : null;
+        const absoluteNext = nextSong.audioUrl ? resolvePlayableSrc(nextSong.audioUrl) : null;
         if (absoluteNext && incoming.src !== absoluteNext) incoming.src = absoluteNext;
         incoming.currentTime = 0;
         incoming.volume = 0;
@@ -327,15 +337,21 @@ function PlayerBar(): React.ReactElement | null {
   useEffect(() => {
     function saveState() {
       try {
-        if (!currentSong) {
+        if (!currentSong || isBrowserLocalSong(currentSong)) {
+          localStorage.removeItem("wf_player_state");
+          return;
+        }
+        const persistableQueue = queue.filter((song) => !isBrowserLocalSong(song));
+        const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
+        if (persistableIndex < 0) {
           localStorage.removeItem("wf_player_state");
           return;
         }
         const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
         const time = active?.currentTime ?? currentTime;
         const payload = {
-          queue,
-          currentIndex,
+          queue: persistableQueue,
+          currentIndex: persistableIndex,
           song: currentSong,
           currentTime: time,
           isPlaying,
@@ -525,7 +541,7 @@ function PlayerBar(): React.ReactElement | null {
             className="flex items-center gap-3 min-w-0 flex-1 text-left touch-manipulation"
             aria-label="Open now playing"
           >
-            <Image
+            <CoverImage
               src={currentSong.imageUrl || "/waveform.svg"}
               alt="cover"
               width={48}
@@ -567,7 +583,7 @@ function PlayerBar(): React.ReactElement | null {
         <div className="flex items-center gap-3 sm:gap-4">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <div className="hidden sm:block">
-              <Image
+              <CoverImage
                 src={currentSong.imageUrl || "/waveform.svg"}
                 alt="cover"
                 width={48}

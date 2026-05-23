@@ -4,7 +4,6 @@ import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
 import { randomUUID } from "node:crypto";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {

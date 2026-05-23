@@ -15,6 +15,7 @@ type SongListItemProps = {
   likePending?: boolean;
   canLike?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
+  showLike?: boolean;
   editMode?: boolean;
   canReorder?: boolean;
   onEdit?: (song: PlayerSong) => void;
@@ -29,6 +30,7 @@ const SongListItemComponent = function SongListItem({
   likePending = false,
   canLike = false,
   onToggleLike,
+  showLike = true,
   editMode = false,
   canReorder = false,
   onEdit,
@@ -136,26 +138,28 @@ const SongListItemComponent = function SongListItem({
         </button>
       ) : null}
 
-      <button
-        type="button"
-        aria-label={liked ? "Remove from liked songs" : "Save to liked songs"}
-        title={!canLike ? "Sign in to like songs" : liked ? "Remove from liked songs" : "Save to liked songs"}
-        disabled={likePending}
-        onClick={handleToggleLike}
-        className={cn(
-          "h-9 w-9 rounded-full grid place-items-center transition",
-          canLike ? "hover:bg-black/10 hover:dark:bg-white/10" : "opacity-80",
-          likePending && "opacity-60 cursor-wait",
-        )}
-      >
-        <Heart
-          size={18}
+      {showLike ? (
+        <button
+          type="button"
+          aria-label={liked ? "Remove from liked songs" : "Save to liked songs"}
+          title={!canLike ? "Sign in to like songs" : liked ? "Remove from liked songs" : "Save to liked songs"}
+          disabled={likePending}
+          onClick={handleToggleLike}
           className={cn(
-            liked ? "fill-emerald-500 text-emerald-500" : "text-foreground/80",
-            likePending && "animate-pulse",
+            "h-9 w-9 rounded-full grid place-items-center transition",
+            canLike ? "hover:bg-black/10 hover:dark:bg-white/10" : "opacity-80",
+            likePending && "opacity-60 cursor-wait",
           )}
-        />
-      </button>
+        >
+          <Heart
+            size={18}
+            className={cn(
+              liked ? "fill-emerald-500 text-emerald-500" : "text-foreground/80",
+              likePending && "animate-pulse",
+            )}
+          />
+        </button>
+      ) : null}
 
       <div className="h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
         {isActiveAndPlaying ? <Pause size={17} /> : <Play size={17} className="translate-x-[1px]" />}
@@ -171,6 +175,7 @@ export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) =
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
+    prevProps.showLike === nextProps.showLike &&
     prevProps.editMode === nextProps.editMode &&
     prevProps.canReorder === nextProps.canReorder &&
     prevProps.priority === nextProps.priority &&

@@ -368,7 +368,7 @@ export async function indexOrganizedMusicLibrary(
       result.scanned += 1;
 
       try {
-        const storageKey = absolutePathToStorageKey(audioPath);
+        const storageKey = await absolutePathToStorageKey(audioPath);
         if (!storageKey) {
           throw new Error("Unable to resolve storage key for audio file");
         }
@@ -401,8 +401,8 @@ export async function indexOrganizedMusicLibrary(
           ? await findFirstFileInDir(lyricsDir, LYRICS_EXTENSIONS)
           : null;
 
-        const coverKey = coverPath ? absolutePathToStorageKey(coverPath) : null;
-        const lyricsKey = lyricsPath ? absolutePathToStorageKey(lyricsPath) : null;
+        const coverKey = coverPath ? await absolutePathToStorageKey(coverPath) : null;
+        const lyricsKey = lyricsPath ? await absolutePathToStorageKey(lyricsPath) : null;
         let imageUrl = coverKey ? toApiFileUrl(coverKey) : "/waveform.svg";
         const lyricsUrl = lyricsKey ? toApiFileUrl(lyricsKey) : null;
 
@@ -483,8 +483,8 @@ export async function indexOrganizedMusicLibrary(
   return result;
 }
 
-function toReferenceStorageKey(sourceDir: string, absolutePath: string): string {
-  return absolutePathToStorageKey(absolutePath)
+async function toReferenceStorageKey(sourceDir: string, absolutePath: string): Promise<string> {
+  return (await absolutePathToStorageKey(absolutePath))
     ?? relative(resolve(sourceDir), absolutePath).split(sep).join("/");
 }
 
@@ -563,7 +563,7 @@ async function resolveImageUrl(
     );
     if (sidecarCover) {
       if (!env.LOCAL_MUSIC_COPY_FILES) {
-        const refKey = absolutePathToStorageKey(sidecarCover);
+        const refKey = await absolutePathToStorageKey(sidecarCover);
         if (refKey) {
           return toApiFileUrl(refKey);
         }
@@ -670,7 +670,7 @@ export async function importLocalLibrary(
       let audioUrl: string;
       if (env.LOCAL_MUSIC_COPY_FILES) {
         const audioKey = `${basePath}/audio/${randomUUID()}.flac`;
-        const audioPathInStorage = getObjectAbsolutePath(audioKey);
+        const audioPathInStorage = await getObjectAbsolutePath(audioKey);
         audioUrl = toApiFileUrl(audioKey);
         if (sourceExt === ".flac") {
           await putObjectFromFilePath(audioKey, audioPath, "audio/flac");
@@ -679,11 +679,11 @@ export async function importLocalLibrary(
           result.converted += 1;
         }
       } else if (sourceExt === ".flac") {
-        const audioKey = toReferenceStorageKey(sourceDir, audioPath);
+        const audioKey = await toReferenceStorageKey(sourceDir, audioPath);
         audioUrl = toApiFileUrl(audioKey);
       } else {
         const audioKey = `${basePath}/audio/${randomUUID()}.flac`;
-        const audioPathInStorage = getObjectAbsolutePath(audioKey);
+        const audioPathInStorage = await getObjectAbsolutePath(audioKey);
         audioUrl = toApiFileUrl(audioKey);
         await runFfmpegToFlac(audioPath, audioPathInStorage);
         result.converted += 1;
@@ -712,7 +712,7 @@ export async function importLocalLibrary(
         }
         if (sidecarLyrics) {
           if (!env.LOCAL_MUSIC_COPY_FILES) {
-            const refKey = absolutePathToStorageKey(sidecarLyrics);
+            const refKey = await absolutePathToStorageKey(sidecarLyrics);
             if (refKey) {
               lyricsUrl = toApiFileUrl(refKey);
             }

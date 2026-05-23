@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { SongGrid } from "@/components/SongGrid";
 import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
+import { HomeNoServerLibrary } from "@/components/HomeNoServerLibrary";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { authOptions } from "@/auth";
 import { db } from "@/lib/db";
@@ -10,7 +11,6 @@ import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrati
 import { ensureMusicLibrarySynced } from "@/lib/music-sync";
 
 export const revalidate = 0;
-export const runtime = "nodejs";
 
 export default async function Home() {
   await ensureMusicLibrarySynced();
@@ -41,10 +41,13 @@ export default async function Home() {
   return (
     <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
       <HomeSearchCommandPalette songs={playerSongs} />
-      {playerSongs.length === 0 ? (
-        <div className="opacity-70">No songs available yet. Upload your first track to get started.</div>
-      ) : (
-        <SongGrid songs={playerSongs} likedSongIds={likedSongIds} canLike={!!userId} />
+      {playerSongs.length === 0 ? <HomeNoServerLibrary /> : (
+        <>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Server Library</h2>
+          </div>
+          <SongGrid songs={playerSongs} likedSongIds={likedSongIds} canLike={!!userId} />
+        </>
       )}
       <div className="h-8 lg:h-24" />
     </div>

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const REQUEST_TIMEOUT_MS = 20_000;

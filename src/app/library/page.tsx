@@ -6,7 +6,6 @@ import { db } from "@/lib/db";
 import type { PlaylistRow } from "@/lib/db-types";
 
 export const revalidate = 0;
-export const runtime = "nodejs";
 
 export default async function LibraryPage() {
   const session = await getServerSession(authOptions);

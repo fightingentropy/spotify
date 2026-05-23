@@ -9,7 +9,6 @@ import { ensureSongLyricsColumn } from "@/lib/db-migrations";
 import { env } from "@/lib/env";
 import { putObjectFromBuffer } from "@/lib/storage";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);

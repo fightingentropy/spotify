@@ -66,6 +66,11 @@ async function resolveLibraryUserId(): Promise<string | null> {
 }
 
 async function hasMusicToScan(): Promise<boolean> {
+  const { getCloudflareBindings } = await import("@/lib/cloudflare");
+  if (await getCloudflareBindings()) {
+    return false;
+  }
+
   for (const candidate of getMusicSourceDirectoryCandidates()) {
     const info = await stat(candidate).catch(() => null);
     if (info?.isDirectory()) {

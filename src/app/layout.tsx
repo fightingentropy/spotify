@@ -13,7 +13,6 @@ import MobileNav from "@/components/MobileNav";
 import PwaRegister from "@/components/PwaRegister";
 import InstallPrompt from "@/components/InstallPrompt";
 
-export const runtime = "nodejs";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

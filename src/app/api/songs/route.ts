@@ -18,7 +18,6 @@ import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
 import { ensureSongAudioColumns, ensureSongLyricsColumn } from "@/lib/db-migrations";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type UploadedFile = {
@@ -175,7 +174,7 @@ async function readAudioQualityFromStorageKey(key: string): Promise<AudioQuality
   }
   let result: AudioQuality;
   try {
-    const absolutePath = getObjectAbsolutePath(key);
+    const absolutePath = await getObjectAbsolutePath(key);
     const metadata = await parseFile(absolutePath, {
       duration: false,
       skipCovers: true,

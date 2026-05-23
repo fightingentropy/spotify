@@ -10,12 +10,18 @@ import { cn } from "@/lib/utils";
 import { SongCard } from "@/components/SongCard";
 import { SongListItem } from "@/components/SongListItem";
 import { EDIT_MODE_EVENT, EDIT_MODE_KEY } from "@/components/EditModeSettings";
+import {
+  isBrowserLocalSong,
+  saveBrowserLocalSongEdits,
+  useBrowserLocalLibraryStore,
+} from "@/store/browser-local-library";
 
 type SongGridProps = {
   songs: PlayerSong[];
   likedSongIds?: string[];
   hideIfUnliked?: boolean;
   canLike?: boolean;
+  showLikeControls?: boolean;
   emptyLabel?: string;
   viewToggleClassName?: string;
 };
@@ -49,6 +55,7 @@ export function SongGrid({
   likedSongIds = [],
   hideIfUnliked = false,
   canLike = false,
+  showLikeControls = true,
   emptyLabel,
   viewToggleClassName,
 }: SongGridProps) {
@@ -77,6 +84,7 @@ export function SongGrid({
   const likedLookup = useLikesStore((state) => state.likedSongIds);
   const pendingLookup = useLikesStore((state) => state.pending);
   const hydrated = useLikesStore((state) => state.hydrated);
+  const replaceBrowserLocalSong = useBrowserLocalLibraryStore((state) => state.replaceSong);
 
   useEffect(() => {
     setLocalSongs(songs);
@@ -368,35 +376,47 @@ export function SongGrid({
     setEditError(null);
 
     try {
-      const metaRes = await fetch(`/api/songs/${encodeURIComponent(editingSong.id)}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: nextTitle, artist: nextArtist }),
-      });
-      const metaData = await metaRes.json().catch(() => ({}));
-      if (!metaRes.ok) {
-        throw new Error(metaData?.error ?? "Failed to update song");
-      }
-
-      let updatedSong = metaData as PlayerSong;
-
-      if (editCoverFile || editLyricsFile || editLyricsText.trim()) {
-        const form = new FormData();
-        if (editCoverFile) form.append("image", editCoverFile);
-        if (editLyricsFile) form.append("lyricsFile", editLyricsFile);
-        if (editLyricsText.trim()) form.append("lyricsText", editLyricsText.trim());
-        const assetsRes = await fetch(
-          `/api/songs/${encodeURIComponent(editingSong.id)}/assets`,
-          {
-            method: "POST",
-            body: form,
-          },
-        );
-        const assetsData = await assetsRes.json().catch(() => ({}));
-        if (!assetsRes.ok) {
-          throw new Error(assetsData?.error ?? "Failed to update cover/lyrics");
+      let updatedSong: PlayerSong;
+      if (isBrowserLocalSong(editingSong)) {
+        updatedSong = await saveBrowserLocalSongEdits(editingSong, {
+          title: nextTitle,
+          artist: nextArtist,
+          coverFile: editCoverFile,
+          lyricsFile: editLyricsFile,
+          lyricsText: editLyricsText,
+        });
+        replaceBrowserLocalSong(updatedSong);
+      } else {
+        const metaRes = await fetch(`/api/songs/${encodeURIComponent(editingSong.id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: nextTitle, artist: nextArtist }),
+        });
+        const metaData = await metaRes.json().catch(() => ({}));
+        if (!metaRes.ok) {
+          throw new Error(metaData?.error ?? "Failed to update song");
         }
-        updatedSong = assetsData as PlayerSong;
+
+        updatedSong = metaData as PlayerSong;
+
+        if (editCoverFile || editLyricsFile || editLyricsText.trim()) {
+          const form = new FormData();
+          if (editCoverFile) form.append("image", editCoverFile);
+          if (editLyricsFile) form.append("lyricsFile", editLyricsFile);
+          if (editLyricsText.trim()) form.append("lyricsText", editLyricsText.trim());
+          const assetsRes = await fetch(
+            `/api/songs/${encodeURIComponent(editingSong.id)}/assets`,
+            {
+              method: "POST",
+              body: form,
+            },
+          );
+          const assetsData = await assetsRes.json().catch(() => ({}));
+          if (!assetsRes.ok) {
+            throw new Error(assetsData?.error ?? "Failed to update cover/lyrics");
+          }
+          updatedSong = assetsData as PlayerSong;
+        }
       }
 
       setLocalSongs((current) =>
@@ -417,7 +437,7 @@ export function SongGrid({
     } finally {
       setSavingEdit(false);
     }
-  }, [editArtist, editCoverFile, editLyricsFile, editLyricsText, editTitle, editingSong]);
+  }, [editArtist, editCoverFile, editLyricsFile, editLyricsText, editTitle, editingSong, replaceBrowserLocalSong]);
 
   const editingSongQualityLabel =
     editingSong && editingSong.audioBitDepth && editingSong.audioSampleRate
@@ -491,6 +511,7 @@ export function SongGrid({
               liked={!!likedMap[song.id]}
               likePending={!!pendingLookup[song.id]}
               canLike={canLike}
+              showLike={showLikeControls}
               onToggleLike={handleToggleLike}
               hideIfUnliked={hideIfUnliked}
               editMode={editMode}
@@ -521,6 +542,7 @@ export function SongGrid({
                       liked={!!likedMap[song.id]}
                       likePending={!!pendingLookup[song.id]}
                       canLike={canLike}
+                      showLike={showLikeControls}
                       onToggleLike={handleToggleLike}
                       editMode={editMode}
                       canReorder={false}
@@ -569,6 +591,7 @@ export function SongGrid({
                     liked={!!likedMap[song.id]}
                     likePending={!!pendingLookup[song.id]}
                     canLike={canLike}
+                    showLike={showLikeControls}
                     onToggleLike={handleToggleLike}
                     editMode={editMode}
                     canReorder={canReorder}

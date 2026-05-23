@@ -1,94 +1,32 @@
-import { createReadStream, createWriteStream } from "node:fs";
-import { copyFile, mkdir, readdir, stat, writeFile } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import type { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { getCloudflareBindings } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
+import {
+  inferContentTypeFromKey,
+  normalizeStorageKey,
+} from "@/lib/storage-keys";
+import {
+  r2GetObjectStream,
+  r2GetPartialObjectStream,
+  r2ListObjects,
+  r2PutObjectFromBuffer,
+  r2PutObjectFromStream,
+  r2StatObject,
+  r2StorageKeyExists,
+} from "@/lib/storage-r2";
 
-function resolveStorageRoots(): string[] {
-  const roots: string[] = [];
-  const home = process.env.HOME || "";
+type LocalStorageModule = typeof import("@/lib/storage-local");
 
-  for (const candidate of [
-    resolve(process.cwd(), "music"),
-    resolve(env.LOCAL_MUSIC_SOURCE_DIR),
-    home ? resolve(home, "Music") : null,
-  ]) {
-    if (candidate && !roots.includes(candidate)) {
-      roots.push(candidate);
-    }
+let localStoragePromise: Promise<LocalStorageModule> | null = null;
+
+async function getLocalStorage(): Promise<LocalStorageModule> {
+  if (!localStoragePromise) {
+    localStoragePromise = (Function(
+      'return import("@/lib/storage-local")',
+    ) as () => Promise<LocalStorageModule>)();
   }
-
-  const mediaRoot = resolve(env.LOCAL_MEDIA_ROOT);
-  if (!roots.includes(mediaRoot)) {
-    roots.push(mediaRoot);
-  }
-
-  const projectRoot = resolve(process.cwd());
-  if (!roots.includes(projectRoot)) {
-    roots.push(projectRoot);
-  }
-
-  return roots;
-}
-
-const storageRoots = resolveStorageRoots();
-const storageRoot = storageRoots[0];
-
-function normalizeStorageKey(key: string): string {
-  const normalized = key.replaceAll("\\", "/").replace(/^\/+/, "").trim();
-  if (!normalized || normalized.includes("\0")) {
-    throw new Error("Invalid storage key");
-  }
-  const parts = normalized.split("/").filter(Boolean);
-  if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) {
-    throw new Error("Invalid storage key");
-  }
-  return parts.join("/");
-}
-
-function resolveStoragePath(key: string): string {
-  const normalizedKey = normalizeStorageKey(key);
-  for (const root of storageRoots) {
-    const absolutePath = resolve(root, normalizedKey);
-    const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
-    if (absolutePath !== root && !absolutePath.startsWith(rootPrefix)) {
-      continue;
-    }
-    return absolutePath;
-  }
-  const absolutePath = resolve(storageRoot, normalizedKey);
-  const rootPrefix = storageRoot.endsWith(sep) ? storageRoot : `${storageRoot}${sep}`;
-  if (absolutePath !== storageRoot && !absolutePath.startsWith(rootPrefix)) {
-    throw new Error("Invalid storage path");
-  }
-  return absolutePath;
-}
-
-export function absolutePathToStorageKey(absolutePath: string): string | null {
-  const normalizedAbsolute = resolve(absolutePath);
-  for (const root of storageRoots) {
-    const rel = relative(root, normalizedAbsolute).split(sep).join("/");
-    if (!rel || rel.startsWith("..")) {
-      continue;
-    }
-    return rel;
-  }
-  return null;
-}
-
-export async function storageKeyExists(key: string): Promise<boolean> {
-  try {
-    await statObject(key);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function apiUrlToStorageKey(url: string): string | null {
-  if (!url.startsWith("/api/files/")) return null;
-  return decodeURIComponent(url.slice("/api/files/".length));
+  return localStoragePromise;
 }
 
 export function getMusicSourceDirectoryCandidates(): string[] {
@@ -121,43 +59,74 @@ export function getMusicDirectoryCandidates(): string[] {
   return candidates;
 }
 
-async function ensureParentDir(targetPath: string): Promise<void> {
-  await mkdir(dirname(targetPath), { recursive: true });
+export async function absolutePathToStorageKey(
+  absolutePath: string,
+): Promise<string | null> {
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return null;
+  }
+  const local = await getLocalStorage();
+  return local.absolutePathToStorageKey(absolutePath);
 }
 
-async function ensureStorageRoot(): Promise<void> {
-  await mkdir(storageRoot, { recursive: true });
+export async function storageKeyExists(key: string): Promise<boolean> {
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return r2StorageKeyExists(bindings.MEDIA, key);
+  }
+  try {
+    await statObject(key);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export function getObjectAbsolutePath(key: string): string {
-  return resolveStoragePath(key);
+export async function getObjectAbsolutePath(key: string): Promise<string> {
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return normalizeStorageKey(key);
+  }
+  const local = await getLocalStorage();
+  return local.getObjectAbsolutePath(key);
 }
 
 export async function ensureBucketExists(): Promise<string> {
-  await ensureStorageRoot();
-  return storageRoot;
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return "r2://waveform-media";
+  }
+  const local = await getLocalStorage();
+  return local.ensureBucketExists();
 }
 
 export async function putObjectFromBuffer(
   key: string,
   buffer: Buffer,
-  _contentType?: string,
+  contentType?: string,
 ): Promise<void> {
-  const filePath = resolveStoragePath(key);
-  await ensureStorageRoot();
-  await ensureParentDir(filePath);
-  await writeFile(filePath, buffer);
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    await r2PutObjectFromBuffer(bindings.MEDIA, key, buffer, contentType);
+    return;
+  }
+  const local = await getLocalStorage();
+  await local.putObjectFromBuffer(key, buffer, contentType);
 }
 
 export async function putObjectFromStream(
   key: string,
   stream: Readable,
-  _contentType?: string,
+  contentType?: string,
 ): Promise<void> {
-  const filePath = resolveStoragePath(key);
-  await ensureStorageRoot();
-  await ensureParentDir(filePath);
-  await pipeline(stream, createWriteStream(filePath));
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    await r2PutObjectFromStream(bindings.MEDIA, key, stream, contentType);
+    return;
+  }
+  const local = await getLocalStorage();
+  await local.putObjectFromStream(key, stream, contentType);
 }
 
 export async function statObject(key: string): Promise<{
@@ -165,140 +134,60 @@ export async function statObject(key: string): Promise<{
   lastModified: Date;
   metaData: Record<string, string>;
 }> {
-  const normalizedKey = normalizeStorageKey(key);
-  let lastError: unknown = null;
-  for (const root of storageRoots) {
-    const filePath = resolve(root, normalizedKey);
-    try {
-      const info = await stat(filePath);
-      if (!info.isFile()) {
-        throw new Error("Not found");
-      }
-      return {
-        size: Number(info.size),
-        lastModified: info.mtime,
-        metaData: {
-          "content-type": inferContentTypeFromKey(key),
-        },
-      };
-    } catch (error) {
-      lastError = error;
-    }
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return r2StatObject(bindings.MEDIA, key);
   }
-  throw lastError instanceof Error ? lastError : new Error("Not found");
+  const local = await getLocalStorage();
+  return local.statObject(key);
 }
 
-export async function getObjectStream(key: string) {
-  const normalizedKey = normalizeStorageKey(key);
-  for (const root of storageRoots) {
-    const filePath = resolve(root, normalizedKey);
-    try {
-      await stat(filePath);
-      return createReadStream(filePath);
-    } catch {
-      // Try the next storage root.
-    }
+export async function getObjectStream(
+  key: string,
+): Promise<ReadableStream<Uint8Array> | Readable> {
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return r2GetObjectStream(bindings.MEDIA, key);
   }
-  return createReadStream(resolveStoragePath(normalizedKey));
+  const local = await getLocalStorage();
+  return local.getObjectStream(key);
 }
 
 export async function getPartialObjectStream(
   key: string,
   offset: number,
   length?: number,
-) {
-  const normalizedKey = normalizeStorageKey(key);
-  const safeOffset = Math.max(0, Number.isFinite(offset) ? offset : 0);
-  const end =
-    typeof length === "number" && Number.isFinite(length) && length > 0
-      ? safeOffset + length - 1
-      : undefined;
-
-  for (const root of storageRoots) {
-    const filePath = resolve(root, normalizedKey);
-    try {
-      await stat(filePath);
-      return createReadStream(filePath, { start: safeOffset, end });
-    } catch {
-      // Try the next storage root.
-    }
+): Promise<ReadableStream<Uint8Array> | Readable> {
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return r2GetPartialObjectStream(bindings.MEDIA, key, offset, length);
   }
-
-  const filePath = resolveStoragePath(normalizedKey);
-  return createReadStream(filePath, { start: safeOffset, end });
-}
-
-async function walkFiles(dirPath: string): Promise<Array<{ path: string; stats: Awaited<ReturnType<typeof stat>> }>> {
-  const items: Array<{ path: string; stats: Awaited<ReturnType<typeof stat>> }> = [];
-  const entries = await readdir(dirPath, { withFileTypes: true });
-  for (const entry of entries) {
-    const abs = resolve(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      const nested = await walkFiles(abs);
-      items.push(...nested);
-      continue;
-    }
-    if (entry.isFile()) {
-      const s = await stat(abs);
-      items.push({ path: abs, stats: s });
-    }
-  }
-  return items;
+  const local = await getLocalStorage();
+  return local.getPartialObjectStream(key, offset, length);
 }
 
 export async function listObjects(
   prefix: string,
 ): Promise<Array<{ name: string; size?: number; lastModified?: Date }>> {
-  await ensureStorageRoot();
-  const normalizedPrefix = prefix ? normalizeStorageKey(prefix) : "";
-  const searchRoot = normalizedPrefix ? resolveStoragePath(normalizedPrefix) : storageRoot;
-  let entries: Array<{ path: string; stats: Awaited<ReturnType<typeof stat>> }> = [];
-  try {
-    const rootStat = await stat(searchRoot);
-    if (rootStat.isFile()) {
-      entries = [{ path: searchRoot, stats: rootStat }];
-    } else if (rootStat.isDirectory()) {
-      entries = await walkFiles(searchRoot);
-    }
-  } catch {
-    return [];
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    return r2ListObjects(bindings.MEDIA, prefix);
   }
-
-  const result = entries
-    .map(({ path, stats }) => {
-      const rel = relative(storageRoot, path).split(sep).join("/");
-      return {
-        name: rel,
-        size: Number(stats.size),
-        lastModified: stats.mtime,
-      };
-    })
-    .filter((item) => !normalizedPrefix || item.name.startsWith(normalizedPrefix))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  return result;
+  const local = await getLocalStorage();
+  return local.listObjects(prefix);
 }
 
 export async function putObjectFromFilePath(
   key: string,
   filePath: string,
-  _contentType?: string,
+  contentType?: string,
 ): Promise<void> {
-  const destination = resolveStoragePath(key);
-  await ensureStorageRoot();
-  await ensureParentDir(destination);
-  await copyFile(filePath, destination);
+  const bindings = await getCloudflareBindings();
+  if (bindings) {
+    throw new Error("Direct file-path uploads are not supported on Cloudflare");
+  }
+  const local = await getLocalStorage();
+  await local.putObjectFromFilePath(key, filePath, contentType);
 }
 
-export function inferContentTypeFromKey(key: string): string {
-  const lower = key.toLowerCase();
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".mp3") || lower.endsWith(".mpeg")) return "audio/mpeg";
-  if (lower.endsWith(".wav")) return "audio/wav";
-  if (lower.endsWith(".flac")) return "audio/flac";
-  if (lower.endsWith(".lrc") || lower.endsWith(".txt")) return "text/plain; charset=utf-8";
-  return "application/octet-stream";
-}
+export { inferContentTypeFromKey, normalizeStorageKey };

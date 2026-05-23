@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
 import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
-export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   const rate = rateLimit(req, {

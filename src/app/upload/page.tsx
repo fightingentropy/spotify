@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Download,
   FileText,
+  FolderDown,
   Globe,
   ImageDown,
   Loader2,
@@ -15,6 +16,9 @@ import {
   XCircle,
 } from "lucide-react";
 import { DOWNLOAD_QUALITY_PROFILE_KEY } from "@/components/DownloadQualitySettings";
+import {
+  useBrowserLocalLibraryStore,
+} from "@/store/browser-local-library";
 
 type SpotifyAvailability = {
   tidal: boolean;
@@ -57,6 +61,20 @@ function formatDuration(durationMs: number): string {
 function formatPlays(totalPlays: number): string {
   if (!totalPlays || !Number.isFinite(totalPlays)) return "N/A";
   return totalPlays.toLocaleString();
+}
+
+function filenameFromContentDisposition(header: string | null): string {
+  if (!header) return "";
+  const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  const match = header.match(/filename="?([^";]+)"?/i);
+  return match?.[1] ?? "";
 }
 
 function ActionIcon({ status }: { status: ActionStatus }) {
@@ -192,6 +210,7 @@ export default function UploadPage() {
   const [coverStatus, setCoverStatus] = useState<ActionStatus>("idle");
   const [availabilityStatus, setAvailabilityStatus] = useState<ActionStatus>("idle");
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
+  const [localSaveStatus, setLocalSaveStatus] = useState<ActionStatus>("idle");
   const [qualityProfile, setQualityProfile] = useState<QualityProfile>("max");
   const [showMissingAssetsModal, setShowMissingAssetsModal] = useState(false);
   const [missingCover, setMissingCover] = useState(false);
@@ -209,6 +228,9 @@ export default function UploadPage() {
 
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const localFolderSupported = useBrowserLocalLibraryStore((state) => state.supported);
+  const hydrateLocalFolder = useBrowserLocalLibraryStore((state) => state.hydrateCapabilities);
+  const saveDownloadedTrack = useBrowserLocalLibraryStore((state) => state.saveDownloadedTrack);
 
   useEffect(() => {
     return () => {
@@ -228,6 +250,10 @@ export default function UploadPage() {
       }
     } catch {}
   }, []);
+
+  useEffect(() => {
+    hydrateLocalFolder();
+  }, [hydrateLocalFolder]);
 
   if (status === "loading") {
     return <div className="max-w-md mx-auto py-16 px-4">Loading…</div>;
@@ -278,6 +304,7 @@ export default function UploadPage() {
     setCoverStatus("idle");
     setAvailabilityStatus("idle");
     setDownloadStatus("idle");
+    setLocalSaveStatus("idle");
     setSpotifyTrack(null);
     setAvailability(null);
     setLyricsText("");
@@ -709,6 +736,72 @@ export default function UploadPage() {
     }
   }
 
+  async function handleSaveToLocalFolder() {
+    if (!spotifyTrack) {
+      setError("Fetch a Spotify track first");
+      return;
+    }
+    if (!localFolderSupported) {
+      setLocalSaveStatus("error");
+      setError("Folder writing is not available in this browser");
+      return;
+    }
+
+    setError(null);
+    setLocalSaveStatus("loading");
+    try {
+      const audioRes = await fetch("/api/songs/spotify/file", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          spotifyUrl: spotifyUrl.trim(),
+          region,
+          title: spotifyTrack.title,
+          artist: spotifyTrack.artist,
+          qualityProfile,
+        }),
+      });
+      const audioData = audioRes.ok ? null : await audioRes.json().catch(() => ({}));
+      if (!audioRes.ok) {
+        throw new Error(audioData?.error ?? "Failed to download audio");
+      }
+      const audioBlob = await audioRes.blob();
+      const audioFileName =
+        filenameFromContentDisposition(audioRes.headers.get("content-disposition")) ||
+        `${spotifyTrack.artist} - ${spotifyTrack.title}.flac`;
+
+      let coverBlob: Blob | null = null;
+      let coverFileName = "";
+      if (spotifyTrack.imageUrl) {
+        const url = new URL("/api/songs/spotify/cover", window.location.origin);
+        url.searchParams.set("url", spotifyTrack.imageUrl);
+        url.searchParams.set("filename", `${spotifyTrack.title} - ${spotifyTrack.artist}.jpg`);
+        const coverRes = await fetch(url.toString(), { method: "GET" }).catch(() => null);
+        if (coverRes?.ok) {
+          coverBlob = await coverRes.blob();
+          coverFileName =
+            filenameFromContentDisposition(coverRes.headers.get("content-disposition")) ||
+            `${spotifyTrack.title} - ${spotifyTrack.artist}.jpg`;
+        }
+      }
+
+      const lyricsToInclude = await fetchLyricsForImport();
+      await saveDownloadedTrack({
+        title: spotifyTrack.title,
+        artist: spotifyTrack.artist,
+        audioBlob,
+        audioFileName,
+        coverBlob,
+        coverFileName,
+        lyricsText: lyricsToInclude,
+      });
+      setLocalSaveStatus("success");
+    } catch (err) {
+      setLocalSaveStatus("error");
+      setError(err instanceof Error ? err.message : "Failed to save to folder");
+    }
+  }
+
   return (
     <div className="max-w-5xl mx-auto py-12 px-4">
       <h1 className="text-2xl font-semibold mb-6">Add a song</h1>
@@ -905,7 +998,7 @@ export default function UploadPage() {
                       type="button"
                       onClick={handleAddFromSpotify}
                       disabled={downloadStatus === "loading"}
-                      className="h-11 px-5 rounded-2xl bg-yellow-500 text-black font-semibold inline-flex items-center gap-2 disabled:opacity-50"
+                      className="h-11 flex-1 justify-center rounded-2xl bg-yellow-500 px-5 text-black font-semibold inline-flex items-center gap-2 disabled:opacity-50 sm:flex-none"
                     >
                       {downloadStatus === "loading" ? (
                         <Loader2 size={16} className="animate-spin" />
@@ -914,6 +1007,26 @@ export default function UploadPage() {
                       )}
                       Download
                       <ActionIcon status={downloadStatus} />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveToLocalFolder}
+                      disabled={localSaveStatus === "loading" || !localFolderSupported}
+                      title={
+                        localFolderSupported
+                          ? "Save to local folder"
+                          : "Folder writing is not available in this browser"
+                      }
+                      className="h-11 flex-1 justify-center rounded-2xl border px-5 font-semibold inline-flex items-center gap-2 disabled:opacity-50 sm:flex-none"
+                    >
+                      {localSaveStatus === "loading" ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <FolderDown size={16} />
+                      )}
+                      Save to Folder
+                      <ActionIcon status={localSaveStatus} />
                     </button>
 
                     <div className="relative group/preview">
