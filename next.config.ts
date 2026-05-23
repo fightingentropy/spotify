@@ -23,6 +23,12 @@ const nextConfig: NextConfig = {
         pathname: "/icon-512.png",
       },
       {
+        pathname: "/waveform-pwa-icon-180.png",
+      },
+      {
+        pathname: "/waveform-pwa-icon-512.png",
+      },
+      {
         pathname: "/waveform.svg",
       },
     ],
@@ -58,18 +64,6 @@ const nextConfig: NextConfig = {
             value: "no-cache, no-store, must-revalidate",
           },
         ],
-      },
-    ];
-  },
-  async rewrites() {
-    return [
-      {
-        source: "/waveform-pwa-icon-512.png",
-        destination: "/icon-512.png",
-      },
-      {
-        source: "/waveform-pwa-icon-180.png",
-        destination: "/apple-icon.png",
       },
     ];
   },

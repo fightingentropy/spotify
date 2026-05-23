@@ -1,4 +1,4 @@
-const CACHE_VERSION = "waveform-v5";
+const CACHE_VERSION = "waveform-v6";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;

@@ -22,9 +22,12 @@ type UseMediaSessionOptions = {
   audioRefs: Array<RefObject<HTMLAudioElement | null>>;
 };
 
+const FALLBACK_ARTWORK = "/waveform-pwa-icon-512.png";
+const FALLBACK_ARTWORK_SMALL = "/waveform-pwa-icon-180.png";
+
 function resolveArtworkUrl(imageUrl: string): string {
-  if (/^blob:|^data:/i.test(imageUrl)) {
-    return `${location.origin}/waveform-pwa-icon-512.png`;
+  if (!imageUrl || /^blob:|^data:/i.test(imageUrl) || /\.svg(?:[?#]|$)/i.test(imageUrl)) {
+    return `${location.origin}${FALLBACK_ARTWORK}`;
   }
   if (/^https?:/i.test(imageUrl)) return imageUrl;
   return `${location.origin}${imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`}`;
@@ -44,27 +47,40 @@ function registerActionHandlers(
   handlers: Pick<UseMediaSessionOptions, "onPlay" | "onPause" | "onPrevious" | "onNext" | "onSeek">,
 ): void {
   if (!("mediaSession" in navigator)) return;
-  navigator.mediaSession.setActionHandler("play", () => handlers.onPlay());
-  navigator.mediaSession.setActionHandler("pause", () => handlers.onPause());
-  navigator.mediaSession.setActionHandler("previoustrack", () => handlers.onPrevious());
-  navigator.mediaSession.setActionHandler("nexttrack", () => handlers.onNext());
-  navigator.mediaSession.setActionHandler("seekto", (details) => {
-    if (details.seekTime != null) handlers.onSeek(details.seekTime);
-  });
+
+  const actionHandlers = {
+    play: () => handlers.onPlay(),
+    pause: () => handlers.onPause(),
+    previoustrack: () => handlers.onPrevious(),
+    nexttrack: () => handlers.onNext(),
+    seekto: (details: MediaSessionActionDetails) => {
+      if (details.seekTime != null) handlers.onSeek(details.seekTime);
+    },
+  } satisfies Partial<Record<MediaSessionAction, MediaSessionActionHandler>>;
+
+  for (const [action, handler] of Object.entries(actionHandlers) as Array<
+    [keyof typeof actionHandlers, MediaSessionActionHandler]
+  >) {
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch {}
+  }
 }
 
 function applyMetadata(song: MediaSessionSong): void {
-  if (!("mediaSession" in navigator)) return;
+  if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
 
   const artworkSrc = resolveArtworkUrl(song.imageUrl);
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: song.title,
-    artist: song.artist,
-    artwork: [
-      { src: `${location.origin}/waveform-pwa-icon-180.png`, sizes: "180x180", type: "image/png" },
-      { src: artworkSrc, sizes: "512x512", type: "image/png" },
-    ],
-  });
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: song.title,
+      artist: song.artist,
+      artwork: [
+        { src: `${location.origin}${FALLBACK_ARTWORK_SMALL}`, sizes: "180x180", type: "image/png" },
+        { src: artworkSrc || `${location.origin}${FALLBACK_ARTWORK}`, sizes: "512x512", type: "image/png" },
+      ],
+    });
+  } catch {}
 }
 
 function applyPlaybackState(isPlaying: boolean): void {
@@ -162,7 +178,7 @@ export function useMediaSession({
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
 
-    const onPlaying = (event: Event) => {
+    const onActiveAudioEvent = (event: Event) => {
       const active = getActiveAudio();
       if (!active || event.currentTarget !== active) return;
       syncMediaSession();
@@ -173,7 +189,9 @@ export function useMediaSession({
       .filter((element): element is HTMLAudioElement => element != null);
 
     for (const element of elements) {
-      element.addEventListener("playing", onPlaying);
+      element.addEventListener("loadedmetadata", onActiveAudioEvent);
+      element.addEventListener("play", onActiveAudioEvent);
+      element.addEventListener("playing", onActiveAudioEvent);
     }
 
     const active = getActiveAudio();
@@ -183,7 +201,9 @@ export function useMediaSession({
 
     return () => {
       for (const element of elements) {
-        element.removeEventListener("playing", onPlaying);
+        element.removeEventListener("loadedmetadata", onActiveAudioEvent);
+        element.removeEventListener("play", onActiveAudioEvent);
+        element.removeEventListener("playing", onActiveAudioEvent);
       }
       clearActionHandlers();
     };

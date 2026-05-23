@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
@@ -74,6 +74,7 @@ function PlayerBar(): React.ReactElement | null {
     () => (activeIdx === 0 ? audioBRef.current : audioARef.current),
     [activeIdx]
   );
+  const mediaSessionAudioRefs = useMemo(() => [audioARef, audioBRef], []);
 
   const crossfadingRef = useRef<boolean>(false);
   const suppressAutoLoadRef = useRef<boolean>(false);
@@ -112,7 +113,7 @@ function PlayerBar(): React.ReactElement | null {
     onNext: next,
     onSeek,
     getActiveAudio,
-    audioRefs: [audioARef, audioBRef],
+    audioRefs: mediaSessionAudioRefs,
   });
 
   // Client hydration of crossfade settings to ensure feature works without visiting /settings
