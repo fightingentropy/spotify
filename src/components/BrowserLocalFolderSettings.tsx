@@ -36,7 +36,7 @@ export default function BrowserLocalFolderSettings() {
         <h2 className="text-lg font-medium mb-2">Local Folder</h2>
         <p className="text-sm opacity-70 mb-4">
           Choose a folder on this device for Waveform to read, play, and optionally save music to.
-          Your selection is remembered across visits.
+          Your selection stays in this browser and is remembered across visits.
         </p>
 
         <div className="rounded border border-black/10 dark:border-white/10 p-4">

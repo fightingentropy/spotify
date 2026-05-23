@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 type ImportDefaults = {
+  serverImportAvailable: boolean;
   sourceDir: string;
   includeCoverFiles: boolean;
   includeLyricsFiles: boolean;
@@ -23,6 +24,7 @@ const COVER_FILES_KEY = "wf_import_covers";
 const LYRICS_FILES_KEY = "wf_import_lyrics";
 
 export default function LocalMediaSettings() {
+  const [serverImportAvailable, setServerImportAvailable] = useState<boolean | null>(null);
   const [sourceDir, setSourceDir] = useState("./music");
   const [includeCoverFiles, setIncludeCoverFiles] = useState(true);
   const [includeLyricsFiles, setIncludeLyricsFiles] = useState(true);
@@ -43,12 +45,18 @@ export default function LocalMediaSettings() {
         const defaults = (res.ok
           ? ((await res.json()) as ImportDefaults)
           : {
+              serverImportAvailable: false,
               sourceDir: "./music",
               includeCoverFiles: true,
               includeLyricsFiles: true,
             }) as ImportDefaults;
 
         if (cancelled) return;
+
+        setServerImportAvailable(defaults.serverImportAvailable);
+        if (!defaults.serverImportAvailable) {
+          return;
+        }
 
         setSourceDir(localSource || defaults.sourceDir || "./music");
         setIncludeCoverFiles(
@@ -59,9 +67,7 @@ export default function LocalMediaSettings() {
         );
       } catch {
         if (!cancelled) {
-          setSourceDir(localStorage.getItem(SOURCE_DIR_KEY) || "./music");
-          setIncludeCoverFiles(localStorage.getItem(COVER_FILES_KEY) !== "0");
-          setIncludeLyricsFiles(localStorage.getItem(LYRICS_FILES_KEY) !== "0");
+          setServerImportAvailable(false);
         }
       }
     }
@@ -113,14 +119,22 @@ export default function LocalMediaSettings() {
     }
   }, [includeCoverFiles, includeLyricsFiles, sourceDir]);
 
+  if (serverImportAvailable === null) {
+    return null;
+  }
+
+  if (!serverImportAvailable) {
+    return null;
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-medium mb-2">Local Library Import</h2>
+        <h2 className="text-lg font-medium mb-2">Server Library Import</h2>
         <p className="text-sm opacity-70 mb-4">
-          Waveform reads audio directly from your music folder — it does not duplicate your
-          library unless you enable copying below. Album art is cached locally in{" "}
-          <code className="opacity-80">local-media/</code> (small files only).
+          When running Waveform on your own machine, import tracks from a folder on disk into the
+          server library. On the hosted site, use Local Folder above instead — the server cannot
+          read files from your computer.
         </p>
         <div className="rounded border border-black/10 dark:border-white/10 p-4 space-y-4">
           <div>

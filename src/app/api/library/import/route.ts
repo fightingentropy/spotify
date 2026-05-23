@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
+import { getCloudflareBindings } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import { discoverMusicLibrary } from "@/lib/local-library";
 
@@ -13,7 +14,9 @@ type ImportPayload = {
 };
 
 export async function GET() {
+  const cloudflare = await getCloudflareBindings();
   return NextResponse.json({
+    serverImportAvailable: cloudflare === null,
     sourceDir: env.LOCAL_MUSIC_SOURCE_DIR,
     copyFiles: env.LOCAL_MUSIC_COPY_FILES,
     includeCoverFiles: env.LOCAL_IMPORT_USE_COVER_FILES,
