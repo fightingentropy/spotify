@@ -10,6 +10,21 @@ const nextConfig: NextConfig = {
       {
         pathname: "/api/files/**",
       },
+      {
+        pathname: "/api/artwork/**",
+      },
+      {
+        pathname: "/apple-icon.png",
+      },
+      {
+        pathname: "/icon.svg",
+      },
+      {
+        pathname: "/icon-512.png",
+      },
+      {
+        pathname: "/waveform.svg",
+      },
     ],
     formats: ["image/avif", "image/webp"],
     minimumCacheTTL: 60 * 60 * 24 * 30,

@@ -112,6 +112,14 @@ type BrowserLocalLibraryState = {
 export type FolderPickerKind = "handle" | "webkit" | "files";
 
 type DirectoryPickerFile = File & { webkitRelativePath?: string };
+type PickedFolderFile = {
+  file: File;
+  relativePath: string;
+};
+type PersistedPickedFolderFile = {
+  relativePath: string;
+  file: File;
+};
 
 const AUDIO_EXTENSIONS = new Set([
   ".aac",
@@ -129,9 +137,10 @@ const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const LYRICS_EXTENSIONS = [".lrc", ".txt"];
 const DIRECTORY_PICKER_ID = "waveform-music-library";
 const HANDLE_DB_NAME = "waveform-local-library";
-const HANDLE_DB_VERSION = 1;
+const HANDLE_DB_VERSION = 2;
 const HANDLE_STORE_NAME = "handles";
 const HANDLE_KEY = "directory";
+const PICKED_FOLDER_STORE_NAME = "picked-folder-files";
 const FOLDER_NAME_STORAGE_KEY = "wf_browser_local_folder_name";
 const FOLDER_ACCESS_KIND_KEY = "wf_browser_local_folder_access_kind";
 
@@ -189,6 +198,18 @@ function stemOf(name: string): string {
 
 function normalizePath(parts: string[]): string {
   return parts.join("/");
+}
+
+function normalizeRelativePath(path: string): string {
+  return path.split("/").filter(Boolean).join("/");
+}
+
+function pickedFolderFileFromFile(file: DirectoryPickerFile): PickedFolderFile {
+  const relativePath = normalizeRelativePath(file.webkitRelativePath?.trim() || file.name);
+  return {
+    file,
+    relativePath: relativePath || file.name,
+  };
 }
 
 function songIdForPath(parts: string[]): string {
@@ -258,7 +279,13 @@ function openDirectoryHandleDb(): Promise<IDBDatabase> {
     request.onerror = () => reject(request.error ?? new Error("Failed to open IndexedDB"));
     request.onsuccess = () => resolve(request.result);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(HANDLE_STORE_NAME);
+      const db = request.result;
+      if (!db.objectStoreNames.contains(HANDLE_STORE_NAME)) {
+        db.createObjectStore(HANDLE_STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(PICKED_FOLDER_STORE_NAME)) {
+        db.createObjectStore(PICKED_FOLDER_STORE_NAME, { keyPath: "relativePath" });
+      }
     };
   });
 }
@@ -306,6 +333,94 @@ async function clearPersistedDirectoryHandle(): Promise<void> {
     });
     db.close();
   } catch {}
+}
+
+async function requestPersistentStorage(): Promise<void> {
+  try {
+    await navigator.storage?.persist?.();
+  } catch {}
+}
+
+function isPersistablePickedFolderFile(entry: PickedFolderFile): boolean {
+  const name = entry.file.name.toLowerCase();
+  const extension = extensionOf(name);
+  return (
+    AUDIO_EXTENSIONS.has(extension) ||
+    IMAGE_EXTENSIONS.includes(extension) ||
+    LYRICS_EXTENSIONS.includes(extension) ||
+    name.endsWith(".waveform.json")
+  );
+}
+
+async function persistPickedFolderSnapshot(files: PickedFolderFile[]): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  await requestPersistentStorage();
+
+  const snapshotFiles = files.filter(isPersistablePickedFolderFile);
+  const db = await openDirectoryHandleDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(PICKED_FOLDER_STORE_NAME, "readwrite");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("Failed to save offline folder"));
+      tx.onabort = () => reject(tx.error ?? new Error("Failed to save offline folder"));
+
+      const store = tx.objectStore(PICKED_FOLDER_STORE_NAME);
+      store.clear();
+      for (const entry of snapshotFiles) {
+        const record: PersistedPickedFolderFile = {
+          relativePath: entry.relativePath,
+          file: entry.file,
+        };
+        store.put(record);
+      }
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function readPickedFolderSnapshot(): Promise<PickedFolderFile[]> {
+  if (typeof indexedDB === "undefined") return [];
+
+  const db = await openDirectoryHandleDb();
+  try {
+    const records = await new Promise<PersistedPickedFolderFile[]>((resolve, reject) => {
+      const tx = db.transaction(PICKED_FOLDER_STORE_NAME, "readonly");
+      const request = tx.objectStore(PICKED_FOLDER_STORE_NAME).getAll();
+      request.onsuccess = () => resolve(request.result as PersistedPickedFolderFile[]);
+      request.onerror = () =>
+        reject(request.error ?? new Error("Failed to read offline folder"));
+      tx.onerror = () => reject(tx.error ?? new Error("Failed to read offline folder"));
+    });
+
+    return records
+      .filter((record) => record.file instanceof File && record.relativePath)
+      .map((record) => ({
+        file: record.file,
+        relativePath: normalizeRelativePath(record.relativePath) || record.file.name,
+      }));
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
+}
+
+async function clearPickedFolderSnapshot(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  let db: IDBDatabase | null = null;
+  try {
+    db = await openDirectoryHandleDb();
+    const database = db;
+    await new Promise<void>((resolve, reject) => {
+      const tx = database.transaction(PICKED_FOLDER_STORE_NAME, "readwrite");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("Failed to clear offline folder"));
+      tx.objectStore(PICKED_FOLDER_STORE_NAME).clear();
+    });
+  } catch {}
+  db?.close();
 }
 
 async function restoreSavedDirectoryAccess(): Promise<"granted" | "prompt" | "missing"> {
@@ -367,6 +482,81 @@ async function restoreSavedLibrary(
     apply({
       status: "error",
       error: error instanceof Error ? error.message : "Failed to restore folder",
+    });
+    return false;
+  }
+}
+
+async function restorePickedFolderSnapshot(
+  apply: (partial: Partial<BrowserLocalLibraryState>) => void,
+): Promise<boolean> {
+  const cachedName = readCachedFolderName();
+  const files = await readPickedFolderSnapshot();
+
+  if (files.length === 0) {
+    if (cachedName) {
+      apply({
+        directoryName: cachedName,
+        status: "idle",
+        error: null,
+        writable: false,
+        pickedFileMode: false,
+        folderPickerKind: "webkit",
+      });
+    } else {
+      clearCachedFolderAccessKind();
+    }
+    return false;
+  }
+
+  apply({
+    directoryName: cachedName || folderNameFromPickedFiles(files),
+    status: "scanning",
+    error: null,
+    writable: false,
+    pickedFileMode: false,
+    folderPickerKind: "webkit",
+  });
+
+  try {
+    const result = await scanPickedFolderFiles(files);
+    if (result.songs.length === 0) {
+      await clearPickedFolderSnapshot();
+      clearCachedFolderName();
+      clearCachedFolderAccessKind();
+      apply({
+        directoryName: "",
+        songs: [],
+        status: "idle",
+        error: "No supported audio files found in the saved offline folder",
+        writable: false,
+        pickedFileMode: false,
+        folderPickerKind: "webkit",
+        scannedAt: null,
+      });
+      return false;
+    }
+
+    writeCachedFolderName(result.directoryName);
+    writeCachedFolderAccessKind("webkit");
+    apply({
+      directoryName: result.directoryName,
+      songs: result.songs,
+      status: "ready",
+      error: null,
+      writable: false,
+      pickedFileMode: false,
+      folderPickerKind: "webkit",
+      scannedAt: Date.now(),
+    });
+    return true;
+  } catch (error) {
+    apply({
+      status: "error",
+      error: error instanceof Error ? error.message : "Failed to restore offline folder",
+      writable: false,
+      pickedFileMode: false,
+      folderPickerKind: "webkit",
     });
     return false;
   }
@@ -688,9 +878,9 @@ function pathPartsForRelativePath(relativePath: string): string[] {
   return relativePath.split("/").filter(Boolean);
 }
 
-function folderNameFromPickedFiles(files: DirectoryPickerFile[]): string {
-  for (const file of files) {
-    const relativePath = file.webkitRelativePath?.trim();
+function folderNameFromPickedFiles(files: PickedFolderFile[]): string {
+  for (const entry of files) {
+    const relativePath = entry.relativePath.trim();
     if (!relativePath) continue;
     const [root] = relativePath.split("/");
     if (root) return root;
@@ -698,29 +888,29 @@ function folderNameFromPickedFiles(files: DirectoryPickerFile[]): string {
   return "Music folder";
 }
 
-function buildDirectoryIndex(files: DirectoryPickerFile[]): Map<string, DirectoryPickerFile[]> {
-  const byDirectory = new Map<string, DirectoryPickerFile[]>();
-  for (const file of files) {
-    const relativePath = file.webkitRelativePath?.trim() || file.name;
+function buildDirectoryIndex(files: PickedFolderFile[]): Map<string, PickedFolderFile[]> {
+  const byDirectory = new Map<string, PickedFolderFile[]>();
+  for (const entry of files) {
+    const relativePath = entry.relativePath || entry.file.name;
     const directoryKey = directoryKeyForRelativePath(relativePath);
     const bucket = byDirectory.get(directoryKey);
     if (bucket) {
-      bucket.push(file);
+      bucket.push(entry);
     } else {
-      byDirectory.set(directoryKey, [file]);
+      byDirectory.set(directoryKey, [entry]);
     }
   }
   return byDirectory;
 }
 
 async function readSidecarFromFiles(
-  files: DirectoryPickerFile[],
+  files: PickedFolderFile[],
   stem: string,
 ): Promise<LocalSidecar> {
-  const sidecarFile = files.find((file) => file.name === `${stem}.waveform.json`);
-  if (!sidecarFile) return {};
+  const sidecarEntry = files.find((entry) => entry.file.name === `${stem}.waveform.json`);
+  if (!sidecarEntry) return {};
   try {
-    const parsed = JSON.parse(await sidecarFile.text()) as LocalSidecar;
+    const parsed = JSON.parse(await sidecarEntry.file.text()) as LocalSidecar;
     if (!parsed || typeof parsed !== "object") return {};
     return parsed;
   } catch {
@@ -729,13 +919,13 @@ async function readSidecarFromFiles(
 }
 
 function findCoverFileInDirectory(
-  files: DirectoryPickerFile[],
+  files: PickedFolderFile[],
   stem: string,
   sidecar: LocalSidecar,
-): DirectoryPickerFile | null {
+): File | null {
   if (sidecar.coverFile) {
-    const fromSidecar = files.find((file) => file.name === sidecar.coverFile);
-    if (fromSidecar) return fromSidecar;
+    const fromSidecar = files.find((entry) => entry.file.name === sidecar.coverFile);
+    if (fromSidecar) return fromSidecar.file;
   }
 
   for (const ext of IMAGE_EXTENSIONS) {
@@ -745,35 +935,36 @@ function findCoverFileInDirectory(
       `cover${ext}`,
       `folder${ext}`,
     ]) {
-      const match = files.find((file) => file.name === candidate);
-      if (match) return match;
+      const match = files.find((entry) => entry.file.name === candidate);
+      if (match) return match.file;
     }
   }
   return null;
 }
 
 function findLyricsFileInDirectory(
-  files: DirectoryPickerFile[],
+  files: PickedFolderFile[],
   stem: string,
   sidecar: LocalSidecar,
-): DirectoryPickerFile | null {
+): File | null {
   if (sidecar.lyricsFile) {
-    const fromSidecar = files.find((file) => file.name === sidecar.lyricsFile);
-    if (fromSidecar) return fromSidecar;
+    const fromSidecar = files.find((entry) => entry.file.name === sidecar.lyricsFile);
+    if (fromSidecar) return fromSidecar.file;
   }
 
   for (const ext of LYRICS_EXTENSIONS) {
-    const match = files.find((file) => file.name === `${stem}${ext}`);
-    if (match) return match;
+    const match = files.find((entry) => entry.file.name === `${stem}${ext}`);
+    if (match) return match.file;
   }
   return null;
 }
 
 async function songFromPickedFolderFile(
-  file: DirectoryPickerFile,
+  entry: PickedFolderFile,
   pathParts: string[],
-  directoryFiles: DirectoryPickerFile[],
+  directoryFiles: PickedFolderFile[],
 ): Promise<LocalSongEntry> {
+  const { file } = entry;
   const stem = stemOf(file.name);
   const sidecar = await readSidecarFromFiles(directoryFiles, stem);
   const parsed = parseTitleArtist(
@@ -829,26 +1020,24 @@ async function songFromPickedFolderFile(
   };
 }
 
-async function scanPickedFolder(filesInput: FileList | File[]): Promise<{
+async function scanPickedFolderFiles(files: PickedFolderFile[]): Promise<{
   directoryName: string;
   songs: PlayerSong[];
 }> {
-  const files = Array.from(filesInput) as DirectoryPickerFile[];
   const directoryIndex = buildDirectoryIndex(files);
-  const audioFiles = files.filter((file) => AUDIO_EXTENSIONS.has(extensionOf(file.name)));
+  const audioFiles = files.filter((entry) => AUDIO_EXTENSIONS.has(extensionOf(entry.file.name)));
 
   clearTrackedObjectUrls();
   entriesById.clear();
   activeDirectoryHandle = null;
-  void clearPersistedDirectoryHandle();
 
   const entries = await Promise.all(
-    audioFiles.map(async (file) => {
-      const relativePath = file.webkitRelativePath?.trim() || file.name;
+    audioFiles.map(async (entry) => {
+      const relativePath = entry.relativePath || entry.file.name;
       const pathParts = pathPartsForRelativePath(relativePath);
       const directoryKey = directoryKeyForRelativePath(relativePath);
-      const directoryFiles = directoryIndex.get(directoryKey) ?? [file];
-      return songFromPickedFolderFile(file, pathParts, directoryFiles);
+      const directoryFiles = directoryIndex.get(directoryKey) ?? [entry];
+      return songFromPickedFolderFile(entry, pathParts, directoryFiles);
     }),
   );
 
@@ -866,6 +1055,18 @@ async function scanPickedFolder(filesInput: FileList | File[]): Promise<{
     directoryName: folderNameFromPickedFiles(files),
     songs: entries.map((entry) => entry.song),
   };
+}
+
+async function scanPickedFolder(filesInput: FileList | File[]): Promise<{
+  directoryName: string;
+  songs: PlayerSong[];
+  files: PickedFolderFile[];
+}> {
+  const files = Array.from(filesInput, (file) =>
+    pickedFolderFileFromFile(file as DirectoryPickerFile),
+  );
+  const result = await scanPickedFolderFiles(files);
+  return { ...result, files };
 }
 
 function pickedFileSong(file: File): LocalSongEntry {
@@ -1141,16 +1342,9 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
       }
 
       if (folderPickerKind === "webkit") {
-        const cachedName = readCachedFolderName();
         const cachedKind = readCachedFolderAccessKind();
-        if (cachedName && cachedKind === "webkit") {
-          set({
-            directoryName: cachedName,
-            status: "idle",
-            error: null,
-            folderPickerKind: "webkit",
-            pickedFileMode: false,
-          });
+        if (cachedKind === "webkit") {
+          await restorePickedFolderSnapshot((partial) => set(partial));
         }
       }
     })();
@@ -1174,6 +1368,7 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
       });
       await persistDirectoryHandle(activeDirectoryHandle);
       const result = await scanActiveDirectory();
+      await clearPickedFolderSnapshot();
       writeCachedFolderName(result.directoryName);
       writeCachedFolderAccessKind("handle");
       set({
@@ -1233,6 +1428,10 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
       try {
         const result = await scanPickedFolder(filesInput);
         if (result.songs.length === 0) {
+          await clearPersistedDirectoryHandle();
+          await clearPickedFolderSnapshot();
+          clearCachedFolderName();
+          clearCachedFolderAccessKind();
           set({
             directoryName: "",
             songs: [],
@@ -1246,13 +1445,21 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
           return;
         }
 
+        await clearPersistedDirectoryHandle();
+        let snapshotError: string | null = null;
+        try {
+          await persistPickedFolderSnapshot(result.files);
+        } catch {
+          snapshotError =
+            "Folder loaded, but this device did not allow Waveform to save it for offline use";
+        }
         writeCachedFolderName(result.directoryName);
         writeCachedFolderAccessKind("webkit");
         set({
           directoryName: result.directoryName,
           songs: result.songs,
           status: "ready",
-          error: null,
+          error: snapshotError,
           writable: false,
           pickedFileMode: false,
           folderPickerKind: "webkit",
@@ -1275,7 +1482,8 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
       clearTrackedObjectUrls();
       entriesById.clear();
       activeDirectoryHandle = null;
-      void clearPersistedDirectoryHandle();
+      await clearPersistedDirectoryHandle();
+      await clearPickedFolderSnapshot();
       clearCachedFolderName();
       clearCachedFolderAccessKind();
 
@@ -1323,6 +1531,8 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
   saveDownloadedTrack: async (input) => {
     set({ error: null });
     const song = await saveDownloadedTrackToFolder(input);
+    await clearPickedFolderSnapshot();
+    writeCachedFolderAccessKind("handle");
     set((state) => ({
       supported: true,
       directoryName: activeDirectoryHandle?.name || state.directoryName || "Music",

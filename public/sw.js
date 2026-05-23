@@ -1,12 +1,96 @@
-const CACHE_VERSION = "waveform-v2";
+const CACHE_VERSION = "waveform-v3";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
+const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 
-const SHELL_URLS = ["/", "/liked", "/search", "/library", "/settings", "/upload"];
+const SHELL_URLS = [
+  "/",
+  "/liked",
+  "/search",
+  "/library",
+  "/settings",
+  "/upload",
+  "/manifest.webmanifest",
+  "/icon.svg",
+  "/icon-512.png",
+  "/apple-icon.png",
+  "/waveform.svg",
+  "/favicon.ico",
+];
+
+function isCacheableResponse(response) {
+  return response && response.ok && response.type !== "opaqueredirect";
+}
+
+async function putCache(cacheName, request, response) {
+  if (!isCacheableResponse(response)) return;
+  try {
+    const cache = await caches.open(cacheName);
+    await cache.put(request, response.clone());
+  } catch {}
+}
+
+function refreshCache(cacheName, request) {
+  return fetch(request)
+    .then(async (response) => {
+      await putCache(cacheName, request, response);
+      return response;
+    })
+    .catch(() => undefined);
+}
+
+async function cacheFirst(request, cacheName) {
+  const cached = await caches.match(request);
+  if (cached) {
+    return cached;
+  }
+
+  const response = await fetch(request);
+  await putCache(cacheName, request, response);
+  return response;
+}
+
+async function staleWhileRevalidate(event, request, cacheName) {
+  const cached = await caches.match(request);
+  const refreshed = refreshCache(cacheName, request);
+  event.waitUntil(refreshed.then(() => undefined));
+  if (cached) {
+    return cached;
+  }
+
+  const response = await refreshed;
+  return response || fetch(request);
+}
+
+async function navigationResponse(event, request) {
+  const cache = await caches.open(SHELL_CACHE);
+  const cached =
+    (await cache.match(request, { ignoreSearch: true })) ||
+    (await cache.match("/", { ignoreSearch: true }));
+  const refreshed = refreshCache(SHELL_CACHE, request);
+  event.waitUntil(refreshed.then(() => undefined));
+
+  if (cached) {
+    return cached;
+  }
+
+  const response = await refreshed;
+  if (response) {
+    return response;
+  }
+
+  return new Response("<!doctype html><title>Waveform</title><body>Waveform is offline.</body>", {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+    status: 503,
+  });
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_URLS)).catch(() => undefined),
+    caches
+      .open(SHELL_CACHE)
+      .then((cache) => Promise.all(SHELL_URLS.map((url) => cache.add(url).catch(() => undefined))))
+      .catch(() => undefined),
   );
   self.skipWaiting();
 });
@@ -16,7 +100,13 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key.startsWith("waveform-") && key !== SHELL_CACHE && key !== STATIC_CACHE)
+          .filter(
+            (key) =>
+              key.startsWith("waveform-") &&
+              key !== SHELL_CACHE &&
+              key !== STATIC_CACHE &&
+              key !== RUNTIME_CACHE,
+          )
           .map((key) => caches.delete(key)),
       ),
     ),
@@ -30,40 +120,43 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-
-  if (url.pathname.startsWith("/api/")) return;
   if (url.protocol === "blob:" || url.protocol === "data:") return;
+  if (url.pathname === "/sw.js") return;
+
+  if (request.mode === "navigate") {
+    event.respondWith(navigationResponse(event, request));
+    return;
+  }
+
+  if (request.headers.has("range")) {
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/auth/")) {
+    return;
+  }
 
   if (
     url.pathname.startsWith("/_next/static/") ||
     url.pathname === "/manifest.webmanifest" ||
-    url.pathname === "/icon" ||
-    url.pathname === "/apple-icon" ||
+    url.pathname === "/icon.svg" ||
+    url.pathname === "/icon-512.png" ||
+    url.pathname === "/apple-icon.png" ||
+    url.pathname === "/favicon.ico" ||
     url.pathname === "/waveform.svg"
   ) {
-    event.respondWith(
-      caches.open(STATIC_CACHE).then(async (cache) => {
-        const cached = await cache.match(request);
-        if (cached) return cached;
-        const response = await fetch(request);
-        if (response.ok) cache.put(request, response.clone());
-        return response;
-      }),
-    );
+    event.respondWith(cacheFirst(request, STATIC_CACHE));
     return;
   }
 
-  if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match("/"))),
-    );
+  if (
+    request.destination === "image" ||
+    request.destination === "font" ||
+    request.destination === "style" ||
+    request.destination === "script" ||
+    url.pathname.startsWith("/_next/image") ||
+    url.pathname.startsWith("/api/artwork/")
+  ) {
+    event.respondWith(staleWhileRevalidate(event, request, RUNTIME_CACHE));
   }
 });
