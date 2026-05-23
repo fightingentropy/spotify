@@ -275,6 +275,53 @@ async function restoreSavedDirectoryAccess(): Promise<"granted" | "prompt" | "mi
   return readPermission === "granted" ? "granted" : "prompt";
 }
 
+async function restoreSavedLibrary(
+  apply: (partial: Partial<BrowserLocalLibraryState>) => void,
+): Promise<boolean> {
+  const access = await restoreSavedDirectoryAccess();
+  if (access === "missing") {
+    const cachedName = readCachedFolderName();
+    if (cachedName) {
+      apply({ directoryName: cachedName, status: "idle", error: null });
+    }
+    return false;
+  }
+
+  const folderName = activeDirectoryHandle?.name || readCachedFolderName() || "Music";
+  apply({ status: "scanning", error: null, directoryName: folderName });
+
+  if (activeDirectoryHandle) {
+    const canAccess =
+      (await requestDirectoryPermission(activeDirectoryHandle, "readwrite")) ||
+      (await requestDirectoryPermission(activeDirectoryHandle, "read"));
+    if (!canAccess) {
+      apply({ status: "idle", error: null, directoryName: folderName });
+      return false;
+    }
+  }
+
+  try {
+    const result = await scanActiveDirectory();
+    writeCachedFolderName(result.directoryName);
+    apply({
+      directoryName: result.directoryName,
+      songs: result.songs,
+      status: "ready",
+      error: null,
+      writable: result.writable,
+      pickedFileMode: false,
+      scannedAt: Date.now(),
+    });
+    return true;
+  } catch (error) {
+    apply({
+      status: "error",
+      error: error instanceof Error ? error.message : "Failed to restore folder",
+    });
+    return false;
+  }
+}
+
 function sanitizeFileSegment(value: string): string {
   const safe = value
     .trim()
@@ -846,45 +893,7 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
       const supported = isBrowserFolderAccessSupported();
       set({ supported, hydrated: true });
       if (!supported) return;
-
-      const access = await restoreSavedDirectoryAccess();
-      if (access === "missing") {
-        const cachedName = readCachedFolderName();
-        if (cachedName) {
-          set({ directoryName: cachedName });
-        }
-        return;
-      }
-
-      const folderName = activeDirectoryHandle?.name || readCachedFolderName() || "Music";
-      if (access === "prompt") {
-        set({
-          directoryName: folderName,
-          status: "idle",
-          error: null,
-        });
-        return;
-      }
-
-      set({ status: "scanning", error: null, directoryName: folderName });
-      try {
-        const result = await scanActiveDirectory();
-        writeCachedFolderName(result.directoryName);
-        set({
-          directoryName: result.directoryName,
-          songs: result.songs,
-          status: "ready",
-          error: null,
-          writable: result.writable,
-          pickedFileMode: false,
-          scannedAt: Date.now(),
-        });
-      } catch (error) {
-        set({
-          status: "error",
-          error: error instanceof Error ? error.message : "Failed to restore folder",
-        });
-      }
+      await restoreSavedLibrary((partial) => set(partial));
     })();
   },
   chooseDirectory: async () => {
@@ -932,40 +941,15 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
     if (!activeDirectoryHandle) {
       const access = await restoreSavedDirectoryAccess();
       if (access === "missing") {
-        await get().chooseDirectory();
+        set({
+          status: "error",
+          error: "Choose a music folder in Settings first",
+        });
         return;
       }
     }
 
-    set({ status: "scanning", error: null });
-    try {
-      if (activeDirectoryHandle) {
-        const canAccess = await requestDirectoryPermission(activeDirectoryHandle, "readwrite");
-        if (!canAccess) {
-          const canRead = await requestDirectoryPermission(activeDirectoryHandle, "read");
-          if (!canRead) {
-            throw new Error("Waveform needs folder permission to rescan");
-          }
-        }
-      }
-
-      const result = await scanActiveDirectory();
-      writeCachedFolderName(result.directoryName);
-      set({
-        directoryName: result.directoryName,
-        songs: result.songs,
-        status: "ready",
-        error: null,
-        writable: result.writable,
-        pickedFileMode: false,
-        scannedAt: Date.now(),
-      });
-    } catch (error) {
-      set({
-        status: "error",
-        error: error instanceof Error ? error.message : "Failed to rescan folder",
-      });
-    }
+    await restoreSavedLibrary((partial) => set(partial));
   },
   loadPickedFiles: (filesInput) => {
     void (async () => {

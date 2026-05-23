@@ -12,7 +12,7 @@ export function HomeNoServerLibrary() {
   if (status === "scanning") {
     return (
       <div className="opacity-70">
-        {directoryName ? `Loading ${directoryName}…` : "Loading local folder…"}
+        {directoryName ? `Loading ${directoryName}…` : "Loading your library…"}
       </div>
     );
   }
@@ -20,11 +20,8 @@ export function HomeNoServerLibrary() {
   if (songs.length > 0) {
     return (
       <section className="mb-8">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">Local Folder</h2>
-          <Link href="/settings" className="text-sm opacity-70 hover:opacity-100">
-            Manage folder
-          </Link>
+        <div className="mb-3">
+          <h2 className="text-lg font-semibold">Library</h2>
         </div>
         <SongGrid songs={songs} canLike={false} showLikeControls={false} />
       </section>
@@ -33,9 +30,9 @@ export function HomeNoServerLibrary() {
 
   return (
     <div className="opacity-70">
-      No server songs available yet.{" "}
+      No songs in your library yet.{" "}
       <Link href="/settings" className="underline">
-        Choose a local folder
+        Set up a local folder in Settings
       </Link>{" "}
       or upload a track to get started.
     </div>
