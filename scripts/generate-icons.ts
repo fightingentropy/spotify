@@ -4,18 +4,28 @@ import sharp from "sharp";
 
 const root = join(import.meta.dir, "..");
 const svgPath = join(root, "src/app/icon.svg");
+const appleSvgPath = join(root, "src/app/apple-icon.svg");
 const svg = readFileSync(svgPath);
+const appleSvg = readFileSync(appleSvgPath);
+
+async function pngFromSvg(source: Buffer, size: number) {
+  return sharp(source).resize(size, size).png().toBuffer();
+}
 
 async function png(size: number) {
-  return sharp(svg).resize(size, size).png().toBuffer();
+  return pngFromSvg(svg, size);
+}
+
+async function applePng(size: number) {
+  return pngFromSvg(appleSvg, size);
 }
 
 const png16 = await png(16);
 const png32 = await png(32);
 const png48 = await png(48);
 
-writeFileSync(join(root, "src/app/apple-icon.png"), await png(180));
-writeFileSync(join(root, "public/apple-icon.png"), await png(180));
+writeFileSync(join(root, "src/app/apple-icon.png"), await applePng(180));
+writeFileSync(join(root, "public/apple-icon.png"), await applePng(180));
 writeFileSync(join(root, "public/icon-512.png"), await png(512));
 
 // ICO: PNG entries in a minimal ICO container (Windows Vista+ format).
@@ -56,4 +66,4 @@ writeFileSync(
   ]),
 );
 
-console.log("Generated src/app/favicon.ico, apple-icon.png, public/icon-512.png");
+console.log("Generated src/app/favicon.ico, apple-icon.png (Spotify), public/icon-512.png");

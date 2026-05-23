@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Share, X } from "lucide-react";
+import Image from "next/image";
+import { X } from "lucide-react";
 
 const DISMISS_KEY = "wf_ios_install_dismissed";
 
@@ -41,8 +42,14 @@ export default function InstallPrompt() {
   return (
     <div className="lg:hidden fixed top-[calc(3.5rem+env(safe-area-inset-top))] inset-x-3 z-[60] rounded-2xl border border-emerald-500/30 bg-emerald-500/10 backdrop-blur-lg p-4 shadow-lg">
       <div className="flex items-start gap-3">
-        <div className="h-10 w-10 rounded-xl bg-emerald-500/20 grid place-items-center shrink-0">
-          <Share size={18} className="text-emerald-400" />
+        <div className="h-10 w-10 rounded-xl overflow-hidden shrink-0 shadow-sm">
+          <Image
+            src="/apple-icon.png"
+            alt="Waveform"
+            width={40}
+            height={40}
+            className="h-full w-full object-cover"
+          />
         </div>
         <div className="min-w-0 flex-1">
           <div className="font-medium text-sm">Install Waveform</div>
