@@ -1,14 +1,12 @@
 "use client";
 
-import { useRef, type InputHTMLAttributes } from "react";
+import { useRef, type ChangeEvent, type InputHTMLAttributes } from "react";
 import { FolderOpen, Loader2, Music2, RefreshCw, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 
 export default function BrowserLocalFolderSettings() {
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const supported = useBrowserLocalLibraryStore((state) => state.supported);
   const folderPickerKind = useBrowserLocalLibraryStore((state) => state.folderPickerKind);
   const hydrated = useBrowserLocalLibraryStore((state) => state.hydrated);
   const directoryName = useBrowserLocalLibraryStore((state) => state.directoryName);
@@ -36,20 +34,11 @@ export default function BrowserLocalFolderSettings() {
           ? "Reconnect folder"
           : "No folder selected";
 
-  const openFolderPicker = () => {
-    if (folderPickerKind === "webkit") {
-      folderInputRef.current?.click();
-      return;
+  const handleFolderInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files.length > 0) {
+      loadPickedFolder(event.target.files);
     }
-    void chooseDirectory();
-  };
-
-  const reconnectFolder = () => {
-    if (folderPickerKind === "webkit") {
-      folderInputRef.current?.click();
-      return;
-    }
-    void rescan();
+    event.currentTarget.value = "";
   };
 
   return (
@@ -64,20 +53,6 @@ export default function BrowserLocalFolderSettings() {
         </p>
 
         <div className="rounded border border-black/10 dark:border-white/10 p-4">
-          <input
-            ref={folderInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              if (event.target.files && event.target.files.length > 0) {
-                loadPickedFolder(event.target.files);
-              }
-              event.currentTarget.value = "";
-            }}
-            {...({ webkitdirectory: "", directory: "" } as InputHTMLAttributes<HTMLInputElement>)}
-          />
-
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-500">
@@ -98,19 +73,47 @@ export default function BrowserLocalFolderSettings() {
 
             <div className="flex flex-wrap gap-2">
               {usesFolderPicker ? (
-                <button
-                  type="button"
-                  onClick={openFolderPicker}
-                  disabled={busy}
-                  className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60 sm:flex-none"
-                >
-                  {busy ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <FolderOpen size={16} />
-                  )}
-                  {hasSongs || hasSavedFolder ? "Change Folder" : "Choose Folder"}
-                </button>
+                folderPickerKind === "webkit" ? (
+                  <label
+                    aria-disabled={busy}
+                    className={cn(
+                      "relative inline-flex h-10 flex-1 select-none items-center justify-center gap-2 overflow-hidden rounded-lg bg-foreground px-4 text-sm font-medium text-background sm:flex-none",
+                      busy && "opacity-60",
+                    )}
+                  >
+                    <input
+                      type="file"
+                      multiple
+                      disabled={busy}
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+                      onChange={handleFolderInputChange}
+                      {...({
+                        webkitdirectory: "",
+                        directory: "",
+                      } as InputHTMLAttributes<HTMLInputElement>)}
+                    />
+                    {busy ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <FolderOpen size={16} />
+                    )}
+                    {hasSongs || hasSavedFolder ? "Change Folder" : "Choose Folder"}
+                  </label>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void chooseDirectory()}
+                    disabled={busy}
+                    className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60 sm:flex-none"
+                  >
+                    {busy ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <FolderOpen size={16} />
+                    )}
+                    {hasSongs || hasSavedFolder ? "Change Folder" : "Choose Folder"}
+                  </button>
+                )
               ) : (
                 <>
                   <input
@@ -138,16 +141,41 @@ export default function BrowserLocalFolderSettings() {
               )}
 
               {hasSavedFolder && usesFolderPicker ? (
-                <button
-                  type="button"
-                  onClick={reconnectFolder}
-                  disabled={busy}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-black/15 px-4 text-sm font-medium disabled:opacity-60 dark:border-white/15"
-                  title={hasSongs ? "Rescan folder" : "Reconnect folder"}
-                >
-                  <RefreshCw size={16} className={cn(busy && "animate-spin")} />
-                  <span className="hidden sm:inline">{hasSongs ? "Rescan" : "Reconnect"}</span>
-                </button>
+                folderPickerKind === "webkit" ? (
+                  <label
+                    aria-disabled={busy}
+                    className={cn(
+                      "relative inline-flex h-10 select-none items-center justify-center gap-2 overflow-hidden rounded-lg border border-black/15 px-4 text-sm font-medium dark:border-white/15",
+                      busy && "opacity-60",
+                    )}
+                    title="Reconnect folder"
+                  >
+                    <input
+                      type="file"
+                      multiple
+                      disabled={busy}
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+                      onChange={handleFolderInputChange}
+                      {...({
+                        webkitdirectory: "",
+                        directory: "",
+                      } as InputHTMLAttributes<HTMLInputElement>)}
+                    />
+                    <RefreshCw size={16} className={cn(busy && "animate-spin")} />
+                    <span className="hidden sm:inline">Reconnect</span>
+                  </label>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void rescan()}
+                    disabled={busy}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-black/15 px-4 text-sm font-medium disabled:opacity-60 dark:border-white/15"
+                    title={hasSongs ? "Rescan folder" : "Reconnect folder"}
+                  >
+                    <RefreshCw size={16} className={cn(busy && "animate-spin")} />
+                    <span className="hidden sm:inline">{hasSongs ? "Rescan" : "Reconnect"}</span>
+                  </button>
+                )
               ) : null}
             </div>
           </div>
