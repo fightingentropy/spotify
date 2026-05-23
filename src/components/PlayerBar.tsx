@@ -10,6 +10,7 @@ import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuf
 import NowPlayingSheet from "@/components/NowPlayingSheet";
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/store/browser-local-library";
+import { useMediaSession } from "@/lib/use-media-session";
 
 function resolvePlayableSrc(src: string): string {
   if (/^(blob:|data:|https?:)/i.test(src)) return src;
@@ -30,6 +31,7 @@ function PlayerBar(): React.ReactElement | null {
   const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
   const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
   const toggle = usePlayerStore((s) => s.toggle);
+  const play = usePlayerStore((s) => s.play);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
   const setVolume = usePlayerStore((s) => s.setVolume);
@@ -84,6 +86,33 @@ function PlayerBar(): React.ReactElement | null {
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
   const src = currentSong?.audioUrl || null;
+
+  const onSeek = useCallback((value: number) => {
+    const active = getActiveAudio();
+    const inactive = getInactiveAudio();
+    if (!active || !duration) return;
+    const nextTime = Math.max(0, Math.min(duration, value));
+    active.currentTime = nextTime;
+    if (crossfadingRef.current && inactive) {
+      try {
+        inactive.currentTime = Math.max(0, Math.min(inactive.duration || nextTime, nextTime));
+      } catch {}
+    }
+    setCurrentTime(nextTime);
+  }, [duration, getActiveAudio, getInactiveAudio]);
+
+  useMediaSession({
+    song: currentSong,
+    isPlaying,
+    currentTime,
+    duration,
+    onPlay: play,
+    onPause: pause,
+    onPrevious: previous,
+    onNext: next,
+    onSeek,
+    audioRefs: [audioARef, audioBRef],
+  });
 
   // Client hydration of crossfade settings to ensure feature works without visiting /settings
   const hydratedRef = useRef(false);
@@ -429,19 +458,6 @@ function PlayerBar(): React.ReactElement | null {
 
   if (!currentSong) return null;
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
-
-  function onSeek(value: number) {
-    const active = getActiveAudio();
-    const inactive = getInactiveAudio();
-    if (!active || !duration) return;
-    const nextTime = Math.max(0, Math.min(duration, value));
-    active.currentTime = nextTime;
-    // Keep inactive in sync during crossfade seek to avoid jump when roles swap
-    if (crossfadingRef.current && inactive) {
-      try { inactive.currentTime = Math.max(0, Math.min(inactive.duration || nextTime, nextTime)); } catch {}
-    }
-    setCurrentTime(nextTime);
-  }
 
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
 

@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    id: "/",
+    id: "waveform-music-player",
     name: "Waveform",
     short_name: "Waveform",
     description: "Local-first music player for your library",
