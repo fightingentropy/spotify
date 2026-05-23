@@ -8,6 +8,7 @@ export function BrowserLocalLibraryHydrator() {
   const directoryName = useBrowserLocalLibraryStore((state) => state.directoryName);
   const songs = useBrowserLocalLibraryStore((state) => state.songs);
   const status = useBrowserLocalLibraryStore((state) => state.status);
+  const folderPickerKind = useBrowserLocalLibraryStore((state) => state.folderPickerKind);
   const pickedFileMode = useBrowserLocalLibraryStore((state) => state.pickedFileMode);
   const hydrateCapabilities = useBrowserLocalLibraryStore((state) => state.hydrateCapabilities);
   const rescan = useBrowserLocalLibraryStore((state) => state.rescan);
@@ -19,7 +20,13 @@ export function BrowserLocalLibraryHydrator() {
   }, [hydrateCapabilities, hydrated]);
 
   useEffect(() => {
-    if (!hydrated || pickedFileMode || status === "scanning" || songs.length > 0) {
+    if (
+      !hydrated ||
+      pickedFileMode ||
+      folderPickerKind !== "handle" ||
+      status === "scanning" ||
+      songs.length > 0
+    ) {
       return;
     }
     if (!directoryName) {
@@ -34,7 +41,7 @@ export function BrowserLocalLibraryHydrator() {
     return () => {
       window.removeEventListener("pointerdown", reconnect);
     };
-  }, [directoryName, hydrated, pickedFileMode, rescan, songs.length, status]);
+  }, [directoryName, folderPickerKind, hydrated, pickedFileMode, rescan, songs.length, status]);
 
   return null;
 }

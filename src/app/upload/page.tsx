@@ -228,7 +228,8 @@ export default function UploadPage() {
 
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const localFolderSupported = useBrowserLocalLibraryStore((state) => state.supported);
+  const folderPickerKind = useBrowserLocalLibraryStore((state) => state.folderPickerKind);
+  const localFolderWritable = folderPickerKind === "handle";
   const hydrateLocalFolder = useBrowserLocalLibraryStore((state) => state.hydrateCapabilities);
   const saveDownloadedTrack = useBrowserLocalLibraryStore((state) => state.saveDownloadedTrack);
 
@@ -741,9 +742,9 @@ export default function UploadPage() {
       setError("Fetch a Spotify track first");
       return;
     }
-    if (!localFolderSupported) {
+    if (!localFolderWritable) {
       setLocalSaveStatus("error");
-      setError("Folder writing is not available in this browser");
+      setError("Saving to a folder requires a writable folder on desktop Chrome or Edge");
       return;
     }
 
@@ -1012,9 +1013,9 @@ export default function UploadPage() {
                     <button
                       type="button"
                       onClick={handleSaveToLocalFolder}
-                      disabled={localSaveStatus === "loading" || !localFolderSupported}
+                      disabled={localSaveStatus === "loading" || !localFolderWritable}
                       title={
-                        localFolderSupported
+                        localFolderWritable
                           ? "Save to local folder"
                           : "Folder writing is not available in this browser"
                       }

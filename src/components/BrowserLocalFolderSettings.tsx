@@ -1,13 +1,15 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, type InputHTMLAttributes } from "react";
 import { FolderOpen, Loader2, Music2, RefreshCw, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 
 export default function BrowserLocalFolderSettings() {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const supported = useBrowserLocalLibraryStore((state) => state.supported);
+  const folderPickerKind = useBrowserLocalLibraryStore((state) => state.folderPickerKind);
   const hydrated = useBrowserLocalLibraryStore((state) => state.hydrated);
   const directoryName = useBrowserLocalLibraryStore((state) => state.directoryName);
   const songs = useBrowserLocalLibraryStore((state) => state.songs);
@@ -17,18 +19,38 @@ export default function BrowserLocalFolderSettings() {
   const pickedFileMode = useBrowserLocalLibraryStore((state) => state.pickedFileMode);
   const chooseDirectory = useBrowserLocalLibraryStore((state) => state.chooseDirectory);
   const rescan = useBrowserLocalLibraryStore((state) => state.rescan);
+  const loadPickedFolder = useBrowserLocalLibraryStore((state) => state.loadPickedFolder);
   const loadPickedFiles = useBrowserLocalLibraryStore((state) => state.loadPickedFiles);
 
   const busy = status === "scanning";
   const hasSongs = songs.length > 0;
   const hasSavedFolder = Boolean(directoryName) && !pickedFileMode;
+  const usesFolderPicker = folderPickerKind === "handle" || folderPickerKind === "webkit";
   const statusLabel = busy
     ? "Scanning"
     : hasSongs
       ? `${songs.length.toLocaleString()} local ${songs.length === 1 ? "track" : "tracks"}`
-      : hydrated && !supported
+      : hydrated && !usesFolderPicker
         ? "File picker mode"
-        : "No folder selected";
+        : folderPickerKind === "webkit" && hasSavedFolder
+          ? "Reconnect folder"
+          : "No folder selected";
+
+  const openFolderPicker = () => {
+    if (folderPickerKind === "webkit") {
+      folderInputRef.current?.click();
+      return;
+    }
+    void chooseDirectory();
+  };
+
+  const reconnectFolder = () => {
+    if (folderPickerKind === "webkit") {
+      folderInputRef.current?.click();
+      return;
+    }
+    void rescan();
+  };
 
   return (
     <div className="space-y-6">
@@ -36,10 +58,26 @@ export default function BrowserLocalFolderSettings() {
         <h2 className="text-lg font-medium mb-2">Local Folder</h2>
         <p className="text-sm opacity-70 mb-4">
           Choose a folder on this device for Waveform to read, play, and optionally save music to.
-          Your selection stays in this browser and is remembered across visits.
+          {folderPickerKind === "webkit"
+            ? " On iPhone and iPad, pick a folder from Files or iCloud Drive."
+            : " Your selection stays in this browser and is remembered across visits."}
         </p>
 
         <div className="rounded border border-black/10 dark:border-white/10 p-4">
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              if (event.target.files && event.target.files.length > 0) {
+                loadPickedFolder(event.target.files);
+              }
+              event.currentTarget.value = "";
+            }}
+            {...({ webkitdirectory: "", directory: "" } as InputHTMLAttributes<HTMLInputElement>)}
+          />
+
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-500">
@@ -51,16 +89,18 @@ export default function BrowserLocalFolderSettings() {
                 </div>
                 <div className="truncate text-xs text-foreground/60">
                   {statusLabel}
-                  {hasSongs && !pickedFileMode ? ` · ${writable ? "Writable" : "Read only"}` : ""}
+                  {hasSongs && !pickedFileMode && folderPickerKind === "handle"
+                    ? ` · ${writable ? "Writable" : "Read only"}`
+                    : ""}
                 </div>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {supported ? (
+              {usesFolderPicker ? (
                 <button
                   type="button"
-                  onClick={() => void chooseDirectory()}
+                  onClick={openFolderPicker}
                   disabled={busy}
                   className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60 sm:flex-none"
                 >
@@ -74,7 +114,7 @@ export default function BrowserLocalFolderSettings() {
               ) : (
                 <>
                   <input
-                    ref={inputRef}
+                    ref={fileInputRef}
                     type="file"
                     accept="audio/*"
                     multiple
@@ -88,7 +128,7 @@ export default function BrowserLocalFolderSettings() {
                   />
                   <button
                     type="button"
-                    onClick={() => inputRef.current?.click()}
+                    onClick={() => fileInputRef.current?.click()}
                     className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-medium text-background sm:flex-none"
                   >
                     <Upload size={16} />
@@ -97,10 +137,10 @@ export default function BrowserLocalFolderSettings() {
                 </>
               )}
 
-              {hasSavedFolder && supported ? (
+              {hasSavedFolder && usesFolderPicker ? (
                 <button
                   type="button"
-                  onClick={() => void rescan()}
+                  onClick={reconnectFolder}
                   disabled={busy}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-black/15 px-4 text-sm font-medium disabled:opacity-60 dark:border-white/15"
                   title={hasSongs ? "Rescan folder" : "Reconnect folder"}
@@ -118,10 +158,18 @@ export default function BrowserLocalFolderSettings() {
             </div>
           ) : null}
 
-          {hasSavedFolder && status === "idle" && !hasSongs ? (
+          {hasSavedFolder && status === "idle" && !hasSongs && folderPickerKind === "handle" ? (
             <p className="mt-3 text-sm text-foreground/60">
               Your <span className="font-medium text-foreground">{directoryName}</span> folder is
               remembered. Click Reconnect if tracks do not load automatically.
+            </p>
+          ) : null}
+
+          {hasSavedFolder && status === "idle" && !hasSongs && folderPickerKind === "webkit" ? (
+            <p className="mt-3 text-sm text-foreground/60">
+              Your <span className="font-medium text-foreground">{directoryName}</span> folder was
+              remembered. Tap Reconnect and choose the same folder in Files or iCloud Drive to load
+              tracks again.
             </p>
           ) : null}
         </div>
