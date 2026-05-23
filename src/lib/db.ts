@@ -1,5 +1,6 @@
 import type { CloudflareD1Database } from "@/lib/cloudflare";
 import { getCloudflareBindings } from "@/lib/cloudflare";
+import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
 import {
   buildSql,
   statementReturnsRows,
@@ -10,6 +11,21 @@ import {
 
 declare global {
   var __waveformDb: SqlTag | undefined;
+  var __waveformD1SchemaPromise: Promise<void> | undefined;
+}
+
+async function ensureD1Schema(d1: CloudflareD1Database): Promise<void> {
+  if (!globalThis.__waveformD1SchemaPromise) {
+    globalThis.__waveformD1SchemaPromise = (async () => {
+      for (const statement of D1_SCHEMA_STATEMENTS) {
+        await d1.prepare(statement).bind().run();
+      }
+    })().catch((error) => {
+      globalThis.__waveformD1SchemaPromise = undefined;
+      throw error;
+    });
+  }
+  await globalThis.__waveformD1SchemaPromise;
 }
 
 function createD1SqlTag(d1: CloudflareD1Database): SqlTag {
@@ -62,6 +78,7 @@ function createDbProxy(): SqlTag {
   ): Promise<T[]> {
     const bindings = await getCloudflareBindings();
     if (bindings) {
+      await ensureD1Schema(bindings.DB);
       return createD1SqlTag(bindings.DB)<T>(strings, ...values);
     }
     const db = await getLocalDb();

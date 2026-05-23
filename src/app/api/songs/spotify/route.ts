@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
+import { resolveQobuzAvailability } from "@/lib/qobuz-download";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,7 @@ type ActionPayload = {
   region?: unknown;
   title?: unknown;
   artist?: unknown;
+  album?: unknown;
 };
 
 type Availability = {
@@ -22,7 +24,6 @@ type Availability = {
 };
 
 const REQUEST_TIMEOUT_MS = 20_000;
-const QOBUZ_APP_ID = "798273057";
 
 class SpotifyActionError extends Error {
   status: number;
@@ -266,47 +267,6 @@ async function fetchDeezerTrackInfo(
   };
 }
 
-async function resolveQobuzFromIsrc(isrc: string): Promise<{
-  available: boolean;
-  qobuzUrl: string;
-}> {
-  if (!isrc) {
-    return { available: false, qobuzUrl: "" };
-  }
-
-  const searchUrl = `https://www.qobuz.com/api.json/0.2/track/search?query=${encodeURIComponent(
-    isrc,
-  )}&limit=1&app_id=${QOBUZ_APP_ID}`;
-  const qobuzPayload = await fetchJsonObject(searchUrl).catch(() => null);
-  const tracks = qobuzPayload ? toObject(qobuzPayload.tracks) : null;
-  const totalRaw = tracks?.total;
-  const total =
-    typeof totalRaw === "number"
-      ? totalRaw
-      : typeof totalRaw === "string"
-        ? Number(totalRaw)
-        : 0;
-
-  if (!Number.isFinite(total) || total <= 0) {
-    return { available: false, qobuzUrl: "" };
-  }
-
-  const items = tracks?.items;
-  const first = Array.isArray(items) ? toObject(items[0]) : null;
-  const qobuzTrackIdRaw = first?.id;
-  const qobuzTrackId =
-    typeof qobuzTrackIdRaw === "number"
-      ? `${qobuzTrackIdRaw}`
-      : typeof qobuzTrackIdRaw === "string"
-        ? qobuzTrackIdRaw
-        : "";
-
-  return {
-    available: true,
-    qobuzUrl: qobuzTrackId ? `https://open.qobuz.com/track/${qobuzTrackId}` : "",
-  };
-}
-
 async function getPreviewUrl(trackId: string): Promise<string> {
   const embedUrl = `https://open.spotify.com/embed/track/${trackId}`;
   const response = await fetchWithTimeout(embedUrl).catch(() => null);
@@ -322,7 +282,12 @@ async function getPreviewUrl(trackId: string): Promise<string> {
 
 async function resolveAvailability(
   songLinkPayload: Record<string, unknown>,
-  deezerIsrc: string,
+  options: {
+    isrc: string;
+    title: string;
+    artist: string;
+    album: string;
+  },
 ): Promise<Availability> {
   const linksByPlatform = toObject(songLinkPayload.linksByPlatform);
   const tidalObj = linksByPlatform ? toObject(linksByPlatform.tidal) : null;
@@ -332,7 +297,7 @@ async function resolveAvailability(
 
   const tidalUrl = toStringValue(tidalObj?.url);
   const amazonUrl = toStringValue(amazonObj?.url);
-  const qobuz = await resolveQobuzFromIsrc(deezerIsrc);
+  const qobuz = await resolveQobuzAvailability(options);
 
   return {
     tidal: Boolean(tidalUrl),
@@ -426,7 +391,12 @@ export async function POST(req: Request) {
     if (action === "availability") {
       const availability = await resolveAvailability(
         songLinkPayload,
-        deezerInfo?.isrc || "",
+        {
+          isrc: deezerInfo?.isrc || "",
+          title: toStringValue(payload.title) || metadata.title,
+          artist: toStringValue(payload.artist) || metadata.artist,
+          album: toStringValue(payload.album) || deezerInfo?.album || "",
+        },
       );
       return NextResponse.json({ availability }, { status: 200 });
     }
@@ -466,7 +436,12 @@ export async function POST(req: Request) {
 
     const availability = await resolveAvailability(
       songLinkPayload,
-      deezerInfo?.isrc || "",
+      {
+        isrc: deezerInfo?.isrc || "",
+        title: toStringValue(payload.title) || metadata.title,
+        artist: toStringValue(payload.artist) || metadata.artist,
+        album: toStringValue(payload.album) || deezerInfo?.album || "",
+      },
     );
     const previewUrl = await getPreviewUrl(spotifyTrackId);
 

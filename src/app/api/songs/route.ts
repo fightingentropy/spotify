@@ -12,6 +12,17 @@ import {
   putObjectFromBuffer,
   putObjectFromStream,
 } from "@/lib/storage";
+import {
+  AmazonMusicDownloadError,
+  normalizeAmazonMusicUrl,
+  openAmazonMusicSource,
+  resolveAmazonMusicSource,
+  type AmazonMusicSource,
+} from "@/lib/amazon-music-download";
+import {
+  QobuzDownloadError,
+  resolveQobuzStreamUrl as resolveQobuzProviderStreamUrl,
+} from "@/lib/qobuz-download";
 import { db } from "@/lib/db";
 import type { SongRow } from "@/lib/db-types";
 import { randomUUID } from "node:crypto";
@@ -35,6 +46,7 @@ type LinkSongPayload = {
   mode?: unknown;
   title?: unknown;
   artist?: unknown;
+  album?: unknown;
   imageUrl?: unknown;
   audioUrl?: unknown;
   spotifyUrl?: unknown;
@@ -56,6 +68,16 @@ type LinkSongData = {
   audioSampleRate: number | null;
 };
 
+type ResolvedSpotifyAudioDownload =
+  | {
+      service: "qobuz" | "tidal";
+      streamUrl: string;
+    }
+  | {
+      service: "amazon";
+      amazonSource: AmazonMusicSource;
+    };
+
 const IMAGE_EXT_TYPES = new Map<string, string>([
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
@@ -66,6 +88,8 @@ const IMAGE_EXT_TYPES = new Map<string, string>([
 
 const AUDIO_EXT_TYPES = new Map<string, string>([
   [".flac", "audio/flac"],
+  [".m4a", "audio/mp4"],
+  [".mp4", "audio/mp4"],
   [".mp3", "audio/mpeg"],
   [".mpeg", "audio/mpeg"],
   [".wav", "audio/wav"],
@@ -81,8 +105,12 @@ const IMAGE_MIME_TYPES = new Set<string>([
 const AUDIO_MIME_TYPES = new Set<string>([
   "audio/flac",
   "audio/x-flac",
+  "audio/aac",
+  "audio/mp4",
+  "audio/m4a",
   "audio/mpeg",
   "audio/mp3",
+  "audio/x-m4a",
   "audio/wav",
   "audio/x-wav",
   "audio/wave",
@@ -99,12 +127,6 @@ const TIDAL_API_BASES = [
   "https://hifi-one.spotisaver.net",
   "https://hifi-two.spotisaver.net",
 ];
-const QOBUZ_STREAM_API_BASES = [
-  "https://dab.yeet.su/api/stream?trackId=",
-  "https://dabmusic.xyz/api/stream?trackId=",
-  "https://qobuz.squid.wtf/api/download-music?track_id=",
-];
-const QOBUZ_APP_ID = "798273057";
 
 class UploadError extends Error {
   status: number;
@@ -225,6 +247,12 @@ function inferExtFromContentType(
     return ".jpg";
   }
   if (contentType === "audio/flac") return ".flac";
+  if (
+    contentType === "audio/aac" ||
+    contentType === "audio/mp4" ||
+    contentType === "audio/m4a" ||
+    contentType === "audio/x-m4a"
+  ) return ".m4a";
   if (contentType === "audio/mpeg") return ".mp3";
   if (contentType === "audio/wav") return ".wav";
   return ".mp3";
@@ -524,6 +552,54 @@ async function uploadFromRemoteUrl(
   return { fileName, key, contentType: uploadConfig.contentType };
 }
 
+async function uploadFromAmazonMusicSource(
+  source: AmazonMusicSource,
+  options?: {
+    basePath?: string;
+  },
+): Promise<UploadedFile> {
+  const audio = await openAmazonMusicSource(source).catch((error) => {
+    if (error instanceof AmazonMusicDownloadError) {
+      throw new UploadError(error.message, error.status);
+    }
+    throw new UploadError("Failed to prepare Amazon Music audio", 502);
+  });
+
+  try {
+    const remoteName = sanitizeFileName(audio.fileNameHint || source.fileNameHint);
+    const uploadConfig = resolveUploadConfig("audio", audio.contentType, remoteName);
+    if (!uploadConfig) {
+      throw new UploadError("Unsupported Amazon Music audio type", 415);
+    }
+
+    const normalizedName = ensureAllowedExtension(
+      "audio",
+      remoteName,
+      uploadConfig.contentType,
+    );
+    const fileId = randomUUID();
+    const remoteExt =
+      extname(normalizedName).toLowerCase() ||
+      inferExtFromContentType("audio", uploadConfig.contentType);
+    const fileName = `${fileId}${remoteExt}`;
+    const key = options?.basePath
+      ? join(options.basePath, "audio", fileName).replaceAll("\\", "/")
+      : join(uploadConfig.prefix, fileName).replaceAll("\\", "/");
+
+    await uploadStreamWithLimit(
+      audio.stream,
+      key,
+      uploadConfig.contentType,
+      uploadConfig.maxBytes,
+      "Audio file",
+    );
+
+    return { fileName, key, contentType: uploadConfig.contentType };
+  } finally {
+    await audio.cleanup();
+  }
+}
+
 function getPlatformLink(
   songLinkPayload: Record<string, unknown>,
   platform: string,
@@ -536,6 +612,23 @@ function getPlatformLink(
   const entityUniqueId = toStringValue(platformData.entityUniqueId);
   if (!url && !entityUniqueId) return null;
   return { url, entityUniqueId };
+}
+
+async function resolveAmazonDownload(
+  songLinkPayload: Record<string, unknown>,
+): Promise<ResolvedSpotifyAudioDownload> {
+  const amazonPlatform = getPlatformLink(songLinkPayload, "amazonMusic");
+  const amazonUrl = normalizeAmazonMusicUrl(amazonPlatform?.url ?? "");
+  if (!amazonUrl) {
+    throw new UploadError("No Amazon Music mapping found for this Spotify track", 400);
+  }
+  const amazonSource = await resolveAmazonMusicSource(amazonUrl).catch((error) => {
+    if (error instanceof AmazonMusicDownloadError) {
+      throw new UploadError(error.message, error.status);
+    }
+    throw new UploadError("Failed to resolve Amazon Music stream", 502);
+  });
+  return { service: "amazon", amazonSource };
 }
 
 function getSongLinkMetadata(
@@ -695,13 +788,10 @@ async function resolveTidalStreamUrl(
   );
 }
 
-async function resolveQobuzStreamUrl(
-  songLinkPayload: Record<string, unknown>,
-  quality: string,
-): Promise<string> {
+async function resolveDeezerIsrc(songLinkPayload: Record<string, unknown>): Promise<string> {
   const deezerPlatform = getPlatformLink(songLinkPayload, "deezer");
   if (!deezerPlatform) {
-    throw new UploadError("No Deezer mapping found for this Spotify track", 400);
+    return "";
   }
 
   const deezerEntityId = tryParsePlatformIdFromEntity(
@@ -711,100 +801,51 @@ async function resolveQobuzStreamUrl(
   const deezerUrlId = deezerPlatform.url ? tryParseTrackIdFromUrl(deezerPlatform.url) : null;
   const deezerTrackId = deezerEntityId || deezerUrlId;
   if (!deezerTrackId || !/^\d+$/.test(deezerTrackId)) {
-    throw new UploadError("Could not resolve Deezer track ID for ISRC lookup", 400);
+    return "";
   }
 
   const deezerResponse = await fetchWithTimeout(
     `https://api.deezer.com/track/${deezerTrackId}`,
     REMOTE_FETCH_TIMEOUT_MS,
-  ).catch(() => {
-    throw new UploadError("Failed to reach Deezer API", 502);
-  });
-  if (!deezerResponse.ok) {
-    throw new UploadError(`Deezer API returned ${deezerResponse.status}`, 502);
+  ).catch(() => null);
+  if (!deezerResponse?.ok) {
+    return "";
   }
   const deezerPayload = toObject(await deezerResponse.json().catch(() => null));
-  const isrc = toStringValue(deezerPayload?.isrc);
-  if (!isrc) {
-    throw new UploadError("Could not resolve ISRC from Deezer", 400);
+  return toStringValue(deezerPayload?.isrc).toUpperCase();
+}
+
+async function resolveQobuzDownload(
+  songLinkPayload: Record<string, unknown>,
+  quality: string,
+  options: {
+    title: string;
+    artist: string;
+    album: string;
+  },
+): Promise<ResolvedSpotifyAudioDownload> {
+  const isrc = await resolveDeezerIsrc(songLinkPayload);
+  if (!isrc && !options.title && !options.artist) {
+    throw new UploadError("Qobuz needs an ISRC or title/artist metadata", 400);
   }
 
-  const qobuzSearchUrl = `https://www.qobuz.com/api.json/0.2/track/search?query=${encodeURIComponent(
-    isrc,
-  )}&limit=1&app_id=${QOBUZ_APP_ID}`;
-  const qobuzSearchResponse = await fetchWithTimeout(
-    qobuzSearchUrl,
-    REMOTE_FETCH_TIMEOUT_MS,
-  ).catch(() => {
-    throw new UploadError("Failed to reach Qobuz API", 502);
-  });
-  if (!qobuzSearchResponse.ok) {
-    throw new UploadError(`Qobuz API returned ${qobuzSearchResponse.status}`, 502);
-  }
-  const qobuzSearchPayload = toObject(await qobuzSearchResponse.json().catch(() => null));
-  const tracks = toObject(qobuzSearchPayload?.tracks);
-  const items = tracks?.items;
-  const firstTrack = Array.isArray(items) ? toObject(items[0]) : null;
-  const qobuzTrackIdValue = firstTrack?.id;
-  const qobuzTrackId =
-    typeof qobuzTrackIdValue === "number"
-      ? `${qobuzTrackIdValue}`
-      : typeof qobuzTrackIdValue === "string"
-        ? qobuzTrackIdValue
-        : "";
-  if (!qobuzTrackId || !/^\d+$/.test(qobuzTrackId)) {
-    throw new UploadError("Could not resolve Qobuz track ID", 400);
-  }
-
-  const requestedQuality = quality || "6";
-  let lastError: string | null = null;
-
-  for (const apiBase of QOBUZ_STREAM_API_BASES) {
-    const apiUrl = `${apiBase}${qobuzTrackId}&quality=${encodeURIComponent(requestedQuality)}`;
-    try {
-      const response = await fetchWithTimeout(apiUrl, REMOTE_FETCH_TIMEOUT_MS);
-      if (!response.ok) {
-        lastError = `${apiBase} returned ${response.status}`;
-        continue;
-      }
-
-      const text = await response.text();
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        lastError = `${apiBase} returned non-JSON data`;
-        continue;
-      }
-
-      const payload = toObject(parsed);
-      if (!payload) {
-        lastError = `${apiBase} returned invalid JSON shape`;
-        continue;
-      }
-
-      const rootUrl = toStringValue(payload.url);
-      if (rootUrl.startsWith("http")) {
-        return rootUrl;
-      }
-      const data = toObject(payload.data);
-      const nestedUrl = data ? toStringValue(data.url) : "";
-      if (nestedUrl.startsWith("http")) {
-        return nestedUrl;
-      }
-
-      lastError = `${apiBase} had no stream URL`;
-    } catch {
-      lastError = `${apiBase} request failed`;
+  try {
+    return {
+      service: "qobuz",
+      streamUrl: await resolveQobuzProviderStreamUrl({
+        isrc,
+        title: options.title,
+        artist: options.artist,
+        album: options.album,
+        quality: quality || "6",
+      }),
+    };
+  } catch (error) {
+    if (error instanceof QobuzDownloadError) {
+      throw new UploadError(error.message, error.status);
     }
+    throw new UploadError("Failed to resolve Qobuz stream", 502);
   }
-
-  throw new UploadError(
-    lastError
-      ? `Failed to resolve Qobuz stream (${lastError})`
-      : "Failed to resolve Qobuz stream",
-    502,
-  );
 }
 
 async function parseLinkSongPayload(payload: LinkSongPayload): Promise<{
@@ -887,26 +928,30 @@ async function parseSpotifySongRequest(payload: LinkSongPayload): Promise<{
         : ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH"];
 
   try {
-    const songLinkPayload = await fetchSongLinkPayload(trackId, region);
+    const songLinkPayload = await fetchSongLinkPayload(trackId, region).catch(() => ({}));
     const metadata = getSongLinkMetadata(songLinkPayload, trackId);
     const title = toStringValue(payload.title) || metadata.title || `Track ${trackId}`;
     const artist = toStringValue(payload.artist) || metadata.artist || "Unknown Artist";
+    const album = toStringValue(payload.album);
     const basePath = buildOrganizedMusicBasePath(title, artist);
 
-    let streamUrl = "";
+    let audioDownload: ResolvedSpotifyAudioDownload | null = null;
 
     if (service === "tidal") {
       const tidalQualities = quality ? [quality] : profileTidalQualities;
       const tidalErrors: string[] = [];
       for (const q of tidalQualities) {
         try {
-          streamUrl = await resolveTidalStreamUrl(songLinkPayload, q);
+          audioDownload = {
+            service: "tidal",
+            streamUrl: await resolveTidalStreamUrl(songLinkPayload, q),
+          };
           break;
         } catch (error) {
           tidalErrors.push(error instanceof Error ? error.message : `quality ${q} failed`);
         }
       }
-      if (!streamUrl) {
+      if (!audioDownload) {
         throw new UploadError(
           `No Tidal stream found for requested quality profile: ${tidalErrors.join(" | ")}`,
           502,
@@ -917,58 +962,87 @@ async function parseSpotifySongRequest(payload: LinkSongPayload): Promise<{
       const qobuzErrors: string[] = [];
       for (const q of qobuzQualities) {
         try {
-          streamUrl = await resolveQobuzStreamUrl(songLinkPayload, q);
+          audioDownload = await resolveQobuzDownload(songLinkPayload, q, {
+            title,
+            artist,
+            album,
+          });
           break;
         } catch (error) {
           qobuzErrors.push(error instanceof Error ? error.message : `quality ${q} failed`);
         }
       }
-      if (!streamUrl) {
+      if (!audioDownload) {
         throw new UploadError(
           `No Qobuz stream found for requested quality profile: ${qobuzErrors.join(" | ")}`,
           502,
         );
       }
+    } else if (service === "amazon") {
+      audioDownload = await resolveAmazonDownload(songLinkPayload);
     } else if (service) {
-      throw new UploadError('Unsupported service. Use "tidal" or "qobuz".', 400);
+      throw new UploadError('Unsupported service. Use "tidal", "qobuz", or "amazon".', 400);
     } else {
       const qobuzQualities = quality ? [quality] : profileQobuzQualities;
       const qobuzErrors: string[] = [];
       for (const q of qobuzQualities) {
         try {
-          streamUrl = await resolveQobuzStreamUrl(songLinkPayload, q);
+          audioDownload = await resolveQobuzDownload(songLinkPayload, q, {
+            title,
+            artist,
+            album,
+          });
           break;
         } catch (error) {
           qobuzErrors.push(error instanceof Error ? error.message : `quality ${q} failed`);
         }
       }
 
-      if (!streamUrl) {
-        const tidalQualities = quality ? [quality] : profileTidalQualities;
-        const tidalErrors: string[] = [];
-        for (const q of tidalQualities) {
-          try {
-            streamUrl = await resolveTidalStreamUrl(songLinkPayload, q);
-            break;
-          } catch (error) {
-            tidalErrors.push(error instanceof Error ? error.message : `quality ${q} failed`);
-          }
+      if (!audioDownload) {
+        const amazonErrors: string[] = [];
+        try {
+          audioDownload = await resolveAmazonDownload(songLinkPayload);
+        } catch (error) {
+          amazonErrors.push(error instanceof Error ? error.message : "Amazon Music failed");
         }
 
-        if (!streamUrl) {
-          throw new UploadError(
-            `No downloadable provider found. Qobuz: ${qobuzErrors.join(" | ")}. Tidal: ${tidalErrors.join(" | ")}`,
-            502,
-          );
+        if (!audioDownload) {
+          const tidalQualities = quality ? [quality] : profileTidalQualities;
+          const tidalErrors: string[] = [];
+          for (const q of tidalQualities) {
+            try {
+              audioDownload = {
+                service: "tidal",
+                streamUrl: await resolveTidalStreamUrl(songLinkPayload, q),
+              };
+              break;
+            } catch (error) {
+              tidalErrors.push(error instanceof Error ? error.message : `quality ${q} failed`);
+            }
+          }
+
+          if (!audioDownload) {
+            throw new UploadError(
+              `No downloadable provider found. Qobuz: ${qobuzErrors.join(" | ")}. Amazon: ${amazonErrors.join(" | ")}. Tidal: ${tidalErrors.join(" | ")}`,
+              502,
+            );
+          }
         }
       }
     }
 
-    const audio = await uploadFromRemoteUrl("audio", streamUrl, {
-      fallbackContentType: "audio/flac",
-      fileNameHint: `${trackId}.flac`,
-      basePath,
-    });
+    if (!audioDownload) {
+      throw new UploadError("No downloadable provider found", 502);
+    }
+
+    const audio =
+      audioDownload.service === "amazon"
+        ? await uploadFromAmazonMusicSource(audioDownload.amazonSource, { basePath })
+        : await uploadFromRemoteUrl("audio", audioDownload.streamUrl, {
+            fallbackContentType: "audio/flac",
+            fileNameHint: `${trackId}.flac`,
+            basePath,
+          });
     const audioQuality = await readAudioQualityFromStorageKey(audio.key);
 
     let image: UploadedFile | null = null;

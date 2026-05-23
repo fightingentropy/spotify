@@ -1144,6 +1144,7 @@ function extForBlob(blob: Blob, fallbackName: string, fallbackExt: string): stri
   if (type.includes("jpeg") || type.includes("jpg")) return ".jpg";
   if (type.includes("flac")) return ".flac";
   if (type.includes("wav")) return ".wav";
+  if (type.includes("mp4") || type.includes("m4a") || type.includes("aac")) return ".m4a";
   if (type.includes("mpeg") || type.includes("mp3")) return ".mp3";
   return fallbackExt;
 }

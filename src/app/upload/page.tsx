@@ -15,7 +15,12 @@ import {
   Play,
   XCircle,
 } from "lucide-react";
-import { DOWNLOAD_QUALITY_PROFILE_KEY } from "@/components/DownloadQualitySettings";
+import {
+  DOWNLOAD_PROVIDER_KEY,
+  DOWNLOAD_QUALITY_PROFILE_KEY,
+  isDownloadProvider,
+  type DownloadProvider,
+} from "@/components/DownloadQualitySettings";
 import {
   useBrowserLocalLibraryStore,
 } from "@/store/browser-local-library";
@@ -212,6 +217,7 @@ export default function UploadPage() {
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
   const [localSaveStatus, setLocalSaveStatus] = useState<ActionStatus>("idle");
   const [qualityProfile, setQualityProfile] = useState<QualityProfile>("max");
+  const [downloadProvider, setDownloadProvider] = useState<DownloadProvider>("auto");
   const [showMissingAssetsModal, setShowMissingAssetsModal] = useState(false);
   const [missingCover, setMissingCover] = useState(false);
   const [missingLyrics, setMissingLyrics] = useState(false);
@@ -248,6 +254,10 @@ export default function UploadPage() {
       const stored = localStorage.getItem(DOWNLOAD_QUALITY_PROFILE_KEY);
       if (stored === "cd" || stored === "hires48" || stored === "max") {
         setQualityProfile(stored);
+      }
+      const storedProvider = localStorage.getItem(DOWNLOAD_PROVIDER_KEY);
+      if (storedProvider && isDownloadProvider(storedProvider)) {
+        setDownloadProvider(storedProvider);
       }
     } catch {}
   }, []);
@@ -548,8 +558,12 @@ export default function UploadPage() {
       region,
       title: spotifyTrack.title,
       artist: spotifyTrack.artist,
+      album: spotifyTrack.album,
       qualityProfile,
     };
+    if (downloadProvider !== "auto") {
+      payload.service = downloadProvider;
+    }
     if (lyricsToInclude) {
       payload.lyricsText = lyricsToInclude;
     }
@@ -759,7 +773,9 @@ export default function UploadPage() {
           region,
           title: spotifyTrack.title,
           artist: spotifyTrack.artist,
+          album: spotifyTrack.album,
           qualityProfile,
+          service: downloadProvider === "auto" ? undefined : downloadProvider,
         }),
       });
       const audioData = audioRes.ok ? null : await audioRes.json().catch(() => ({}));

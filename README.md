@@ -34,6 +34,7 @@ SQLite schema is auto-applied from `db/schema.sql` at startup.
   - Spotify link mode (default)
   - Manual file upload mode
   - Spotify fetch card actions: preview, download lyrics, download cover, check availability
+  - Spotify downloads use the same provider flow for library imports and browser-folder saves: Qobuz, Amazon Music, then Tidal by default
   - Missing cover/lyrics prompts during import with ignore/upload choices
   - Duplicate song detection with replace confirmation
   - Automatic folder organization under:
@@ -55,6 +56,7 @@ SQLite schema is auto-applied from `db/schema.sql` at startup.
 
 - Crossfade toggle + duration
 - Edit mode toggle (enables per-song edit controls)
+- Download provider (`Auto`, `Qobuz`, `Amazon Music`, `Tidal`)
 - Download quality profile (`Max`, `24-bit/48kHz`, `16-bit/44.1kHz`)
 
 ## Environment Variables
@@ -97,6 +99,7 @@ Core:
 Spotify helpers:
 
 - `POST /api/songs/spotify` actions: `fetch`, `availability`, `lyrics`
+- `POST /api/songs/spotify/file` download a Spotify track audio file
 - `GET /api/songs/spotify/cover` cover proxy/download
 
 Auth:
