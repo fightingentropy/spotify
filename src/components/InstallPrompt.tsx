@@ -40,7 +40,7 @@ export default function InstallPrompt() {
   }
 
   return (
-    <div className="lg:hidden fixed top-[calc(3.5rem+env(safe-area-inset-top))] inset-x-3 z-[60] rounded-2xl border border-emerald-500/30 bg-emerald-500/10 backdrop-blur-lg p-4 shadow-lg">
+    <div className="lg:hidden fixed top-[calc(3.5rem+env(safe-area-inset-top))] inset-x-3 z-[60] rounded-2xl border border-[#1DB954]/30 bg-[#1DB954]/10 backdrop-blur-lg p-4 shadow-lg">
       <div className="flex items-start gap-3">
         <div className="h-10 w-10 rounded-xl overflow-hidden shrink-0 shadow-sm">
           <Image

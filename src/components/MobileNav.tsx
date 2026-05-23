@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Library, Search, Settings } from "lucide-react";
+import { Library, Search, Settings } from "lucide-react";
+import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import { cn } from "@/lib/utils";
 
 const tabs = [
-  { href: "/", label: "Home", icon: Home, match: (path: string) => path === "/" },
+  { href: "/", label: "Home", match: (path: string) => path === "/", home: true as const },
   {
     href: "/search",
     label: "Search",
@@ -39,19 +40,27 @@ export default function MobileNav() {
       className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 pb-[env(safe-area-inset-bottom)]"
     >
       <div className="h-[var(--wf-mobile-nav-height)] grid grid-cols-4">
-        {tabs.map(({ href, label, icon: Icon, match }) => {
-          const active = match(pathname);
+        {tabs.map((tab) => {
+          const active = tab.match(pathname);
+          const Icon = "icon" in tab ? tab.icon : null;
           return (
             <Link
-              key={href}
-              href={href}
+              key={tab.href}
+              href={tab.href}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 min-h-[44px] touch-manipulation transition-colors",
-                active ? "text-emerald-500" : "text-foreground/60",
+                active ? "text-[#1DB954]" : "text-foreground/60",
               )}
             >
-              <Icon size={22} strokeWidth={active ? 2.5 : 2} />
-              <span className="text-[10px] font-medium">{label}</span>
+              {"home" in tab && tab.home ? (
+                <SpotifyIcon
+                  size={22}
+                  className={cn(active && "ring-2 ring-[#1DB954]/40 ring-offset-2 ring-offset-background rounded-full")}
+                />
+              ) : Icon ? (
+                <Icon size={22} strokeWidth={active ? 2.5 : 2} />
+              ) : null}
+              <span className="text-[10px] font-medium">{tab.label}</span>
             </Link>
           );
         })}

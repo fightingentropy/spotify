@@ -57,6 +57,7 @@ export const viewport: Viewport = {
   userScalable: false,
   viewportFit: "cover",
   themeColor: [
+    { media: "(max-width: 1023px)", color: "#121212" },
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
     { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
   ],
@@ -86,8 +87,23 @@ export default async function RootLayout({
           <header className="fixed top-0 inset-x-0 z-50 border-b border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 pt-[env(safe-area-inset-top)]">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
               <Link href="/" className="font-semibold inline-flex items-center gap-2 touch-manipulation">
-                <Image src="/waveform.svg" alt="Waveform" width={24} height={24} className="h-6 w-6" priority />
-                <span>Waveform</span>
+                <Image
+                  src="/apple-icon.png"
+                  alt="Waveform"
+                  width={24}
+                  height={24}
+                  className="h-6 w-6 rounded-md lg:hidden"
+                  priority
+                />
+                <Image
+                  src="/waveform.svg"
+                  alt="Waveform"
+                  width={24}
+                  height={24}
+                  className="h-6 w-6 hidden lg:block"
+                  priority
+                />
+                <span className="hidden sm:inline">Waveform</span>
               </Link>
               <nav className="hidden lg:flex items-center gap-6">
                 <Link href="/" className="opacity-80 hover:opacity-100">Home</Link>
