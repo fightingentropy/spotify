@@ -10,6 +10,7 @@ import {
   isDownloadProvider,
   type DownloadProvider,
 } from "@/components/DownloadQualitySettings";
+import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 
 type SpotifyTrack = {
   spotifyId: string;
@@ -46,9 +47,38 @@ function ActionIcon({ status }: { status: ActionStatus }) {
   return null;
 }
 
+function filenameFromContentDisposition(value: string | null, fallback: string): string {
+  if (!value) return fallback;
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded).replaceAll('"', "").trim() || fallback;
+    } catch {}
+  }
+  return value.match(/filename="([^"]+)"/i)?.[1]?.trim() || value.match(/filename=([^;]+)/i)?.[1]?.trim() || fallback;
+}
+
+function extensionFromContentType(type: string, fallback: string): string {
+  const normalized = type.toLowerCase();
+  if (normalized.includes("flac")) return ".flac";
+  if (normalized.includes("wav")) return ".wav";
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return ".mp3";
+  if (normalized.includes("mp4") || normalized.includes("m4a") || normalized.includes("aac")) return ".m4a";
+  if (normalized.includes("png")) return ".png";
+  if (normalized.includes("webp")) return ".webp";
+  if (normalized.includes("gif")) return ".gif";
+  if (normalized.includes("jpeg") || normalized.includes("jpg")) return ".jpg";
+  return fallback;
+}
+
 export default function UploadPage() {
   const { user, status } = useAuth();
   const navigate = useNavigate();
+  const localDirectoryName = useBrowserLocalLibraryStore((state) => state.directoryName);
+  const localFolderPickerKind = useBrowserLocalLibraryStore((state) => state.folderPickerKind);
+  const localFolderWritable = useBrowserLocalLibraryStore((state) => state.writable);
+  const localSongsCount = useBrowserLocalLibraryStore((state) => state.songs.length);
+  const saveDownloadedTrack = useBrowserLocalLibraryStore((state) => state.saveDownloadedTrack);
   const [mode, setMode] = useState<"upload" | "spotify">("spotify");
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
@@ -241,6 +271,85 @@ export default function UploadPage() {
     if (!res.ok) throw new Error(data?.error ?? "Failed to add song from Spotify");
   }
 
+  function shouldSaveToLocalFolder() {
+    return localFolderPickerKind === "handle" && (localFolderWritable || Boolean(localDirectoryName) || localSongsCount > 0);
+  }
+
+  function hasReadOnlyPickedFolder() {
+    return localFolderPickerKind !== "handle" && (Boolean(localDirectoryName) || localSongsCount > 0);
+  }
+
+  function spotifyDownloadPayload(lyricsToInclude = ""): Record<string, string> {
+    if (!spotifyTrack) return {};
+    const payload: Record<string, string> = {
+      mode: "spotify",
+      spotifyUrl: spotifyUrl.trim(),
+      region,
+      title: spotifyTrack.title,
+      artist: spotifyTrack.artist,
+      album: spotifyTrack.album,
+      imageUrl: spotifyTrack.imageUrl,
+      qualityProfile,
+    };
+    if (downloadProvider !== "auto") payload.service = downloadProvider;
+    if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
+    return payload;
+  }
+
+  async function fetchSpotifyAudioBlob(payload: Record<string, string>) {
+    const res = await fetch("/api/songs/spotify/file", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error ?? "Failed to download audio");
+    }
+    const blob = await res.blob();
+    const fallback = `${spotifyTrack?.artist || "Unknown Artist"} - ${spotifyTrack?.title || "Track"}${extensionFromContentType(blob.type, ".flac")}`;
+    return {
+      blob,
+      fileName: filenameFromContentDisposition(res.headers.get("content-disposition"), fallback),
+    };
+  }
+
+  async function fetchSpotifyCoverBlob() {
+    if (!spotifyTrack?.imageUrl) return null;
+    const res = await fetch(
+      `/api/songs/spotify/cover?url=${encodeURIComponent(spotifyTrack.imageUrl)}&filename=${encodeURIComponent(`${spotifyTrack.title} cover`)}`,
+      { credentials: "include" },
+    );
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return {
+      blob,
+      fileName: filenameFromContentDisposition(
+        res.headers.get("content-disposition"),
+        `cover${extensionFromContentType(blob.type, ".jpg")}`,
+      ),
+    };
+  }
+
+  async function saveSpotifyImportToLocalFolder(lyricsToInclude: string) {
+    if (!spotifyTrack) return;
+    const payload = spotifyDownloadPayload(lyricsToInclude);
+    const [audio, cover] = await Promise.all([
+      fetchSpotifyAudioBlob(payload),
+      fetchSpotifyCoverBlob().catch(() => null),
+    ]);
+    await saveDownloadedTrack({
+      title: spotifyTrack.title,
+      artist: spotifyTrack.artist,
+      audioBlob: audio.blob,
+      audioFileName: audio.fileName,
+      coverBlob: cover?.blob ?? null,
+      coverFileName: cover?.fileName,
+      lyricsText: lyricsToInclude,
+    });
+  }
+
   function isDuplicateSongError(errorValue: unknown): errorValue is Error & { code: string } {
     return errorValue instanceof Error && (errorValue as Error & { code?: string }).code === "DUPLICATE_SONG";
   }
@@ -271,7 +380,13 @@ export default function UploadPage() {
     let resolvedLyrics = "";
     try {
       resolvedLyrics = await fetchLyricsForImport();
-      await submitSpotifyImport(resolvedLyrics);
+      if (shouldSaveToLocalFolder()) {
+        await saveSpotifyImportToLocalFolder(resolvedLyrics);
+      } else if (hasReadOnlyPickedFolder()) {
+        throw new Error("This browser only gave read access to the selected folder. Use a desktop browser with folder write access to save downloads there.");
+      } else {
+        await submitSpotifyImport(resolvedLyrics);
+      }
       setDownloadStatus("success");
       navigate("/");
     } catch (err) {

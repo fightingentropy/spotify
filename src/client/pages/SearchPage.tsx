@@ -1,11 +1,14 @@
 import MobileSearch from "@/components/MobileSearch";
 import { useApiData, type HomePayload } from "@/client/api";
+import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 
 export default function SearchPage() {
+  const localSongs = useBrowserLocalLibraryStore((state) => state.songs);
   const { data, loading, error } = useApiData<HomePayload>("/api/home", {
     songs: [],
     likedSongIds: [],
   });
+  const songs = [...data.songs, ...localSongs];
 
   if (loading) {
     return <div className="px-4 py-6 max-w-7xl mx-auto opacity-70">Loading search...</div>;
@@ -17,11 +20,11 @@ export default function SearchPage() {
   return (
     <>
       <div className="lg:hidden">
-        <MobileSearch songs={data.songs} />
+        <MobileSearch songs={songs} />
       </div>
       <div className="hidden lg:block px-6 py-8 max-w-7xl mx-auto">
         <h1 className="text-2xl font-semibold mb-6">Search</h1>
-        <MobileSearch songs={data.songs} />
+        <MobileSearch songs={songs} />
       </div>
       <div className="h-24 lg:hidden" />
     </>
