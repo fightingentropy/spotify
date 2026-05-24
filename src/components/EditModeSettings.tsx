@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-export const EDIT_MODE_KEY = "wf_edit_mode_enabled";
+export const EDIT_MODE_KEY = "spotify_edit_mode_enabled";
 export const EDIT_MODE_EVENT = "wf:edit-mode-changed";
 
 export default function EditModeSettings() {

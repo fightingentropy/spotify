@@ -1,22 +1,18 @@
 import type { SongRow } from "@/lib/db-types";
 import type { PlayerSong } from "@/types/player";
 
-const LEGACY_WAVEFORM_COVER = "/waveform.svg";
 const SPOTIFY_FALLBACK_COVER = "/apple-icon.png";
 
 export function normalizeCoverImageUrl(url: string | null | undefined): string {
-  if (!url || url === LEGACY_WAVEFORM_COVER) return SPOTIFY_FALLBACK_COVER;
+  if (!url) return SPOTIFY_FALLBACK_COVER;
   return url;
 }
 
 export function normalizeMediaUrl(
   url: string | null | undefined,
-  kind: "image" | "audio" | "lyrics",
+  _kind: "image" | "audio" | "lyrics",
 ): string {
   if (!url) return "";
-  if (kind === "image" && url === LEGACY_WAVEFORM_COVER) {
-    return SPOTIFY_FALLBACK_COVER;
-  }
   if (url.startsWith("/api/files/")) {
     const encoded = url.slice("/api/files/".length);
     let decoded = encoded;
@@ -33,21 +29,6 @@ export function normalizeMediaUrl(
     }
     return `/api/files/${decoded}`;
   }
-
-  const normalizedKind =
-    kind === "image" ? "images" : kind === "audio" ? "audio" : "lyrics";
-  const legacyPrefix =
-    kind === "image"
-      ? "/uploads/images/"
-      : kind === "audio"
-        ? "/uploads/audio/"
-        : "/uploads/lyrics/";
-
-  if (url.startsWith(legacyPrefix)) {
-    const filename = url.slice(legacyPrefix.length);
-    return `/api/files/${normalizedKind}/${encodeURIComponent(filename)}`.replace(/%2F/g, "/");
-  }
-
   return url;
 }
 

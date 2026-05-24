@@ -124,9 +124,9 @@ function PlayerBar(): React.ReactElement | null {
     if (hydratedRef.current) return;
     hydratedRef.current = true;
     try {
-      const storedEnabled = localStorage.getItem("wf_crossfade_enabled");
+      const storedEnabled = localStorage.getItem("spotify_crossfade_enabled");
       const enabled = storedEnabled === null ? true : storedEnabled === "1";
-      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("wf_crossfade_seconds") ?? 4)));
+      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("spotify_crossfade_seconds") ?? 4)));
       if (enabled !== crossfadeEnabled) setCrossfadeEnabled(enabled);
       if (secs !== crossfadeSeconds) setCrossfadeSeconds(secs);
     } catch {}
@@ -180,7 +180,7 @@ function PlayerBar(): React.ReactElement | null {
   // Restore last played queue/song and time on client mount to avoid SSR mismatches
   useEffect(() => {
     try {
-      const raw = localStorage.getItem("wf_player_state");
+      const raw = localStorage.getItem("spotify_player_state");
       if (!raw) return;
       const data = JSON.parse(raw) as
         | {
@@ -394,13 +394,13 @@ function PlayerBar(): React.ReactElement | null {
     function saveState() {
       try {
         if (!currentSong || isBrowserLocalSong(currentSong)) {
-          localStorage.removeItem("wf_player_state");
+          localStorage.removeItem("spotify_player_state");
           return;
         }
         const persistableQueue = queue.filter((song) => !isBrowserLocalSong(song));
         const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
         if (persistableIndex < 0) {
-          localStorage.removeItem("wf_player_state");
+          localStorage.removeItem("spotify_player_state");
           return;
         }
         const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
@@ -412,7 +412,7 @@ function PlayerBar(): React.ReactElement | null {
           currentTime: time,
           isPlaying,
         };
-        localStorage.setItem("wf_player_state", JSON.stringify(payload));
+        localStorage.setItem("spotify_player_state", JSON.stringify(payload));
       } catch {}
     }
 

@@ -135,14 +135,14 @@ const AUDIO_EXTENSIONS = new Set([
 ]);
 const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const LYRICS_EXTENSIONS = [".lrc", ".txt"];
-const DIRECTORY_PICKER_ID = "waveform-music-library";
-const HANDLE_DB_NAME = "waveform-local-library";
+const DIRECTORY_PICKER_ID = "spotify-music-library";
+const HANDLE_DB_NAME = "spotify-local-library";
 const HANDLE_DB_VERSION = 2;
 const HANDLE_STORE_NAME = "handles";
 const HANDLE_KEY = "directory";
 const PICKED_FOLDER_STORE_NAME = "picked-folder-files";
-const FOLDER_NAME_STORAGE_KEY = "wf_browser_local_folder_name";
-const FOLDER_ACCESS_KIND_KEY = "wf_browser_local_folder_access_kind";
+const FOLDER_NAME_STORAGE_KEY = "spotify_browser_local_folder_name";
+const FOLDER_ACCESS_KIND_KEY = "spotify_browser_local_folder_access_kind";
 
 let activeDirectoryHandle: BrowserDirectoryHandle | null = null;
 const entriesById = new Map<string, LocalSongEntry>();
@@ -348,7 +348,7 @@ function isPersistablePickedFolderFile(entry: PickedFolderFile): boolean {
     AUDIO_EXTENSIONS.has(extension) ||
     IMAGE_EXTENSIONS.includes(extension) ||
     LYRICS_EXTENSIONS.includes(extension) ||
-    name.endsWith(".waveform.json")
+    name.endsWith(".spotify.json")
   );
 }
 
@@ -690,7 +690,7 @@ async function readSidecar(
   dirHandle: BrowserDirectoryHandle,
   stem: string,
 ): Promise<LocalSidecar> {
-  const handle = await getOptionalFileHandle(dirHandle, `${stem}.waveform.json`);
+  const handle = await getOptionalFileHandle(dirHandle, `${stem}.spotify.json`);
   if (!handle) return {};
   try {
     const file = await handle.getFile();
@@ -750,7 +750,7 @@ async function collectAudioFiles(
 ) {
   for await (const handle of dirHandle.values()) {
     if (handle.kind === "directory") {
-      if (handle.name === ".waveform" || handle.name === "node_modules") continue;
+      if (handle.name === ".spotify" || handle.name === "node_modules") continue;
       await collectAudioFiles(handle, [...pathParts, handle.name], acc);
       continue;
     }
@@ -907,7 +907,7 @@ async function readSidecarFromFiles(
   files: PickedFolderFile[],
   stem: string,
 ): Promise<LocalSidecar> {
-  const sidecarEntry = files.find((entry) => entry.file.name === `${stem}.waveform.json`);
+  const sidecarEntry = files.find((entry) => entry.file.name === `${stem}.spotify.json`);
   if (!sidecarEntry) return {};
   try {
     const parsed = JSON.parse(await sidecarEntry.file.text()) as LocalSidecar;
@@ -1238,7 +1238,7 @@ export async function saveBrowserLocalSongEdits(
 
   await writeTextFile(
     entry.parentDirectoryHandle,
-    `${entry.stem}.waveform.json`,
+    `${entry.stem}.spotify.json`,
     `${JSON.stringify(nextSidecar, null, 2)}\n`,
   );
 
@@ -1290,7 +1290,7 @@ async function saveDownloadedTrackToFolder(input: SaveDownloadedTrackInput): Pro
 
   await writeTextFile(
     songDir,
-    `${audioStem}.waveform.json`,
+    `${audioStem}.spotify.json`,
     `${JSON.stringify(sidecar, null, 2)}\n`,
   );
 

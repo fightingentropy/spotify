@@ -51,7 +51,7 @@ function Shell() {
       <LibrarySidebarClient
         userId={library.userId}
         playlists={library.playlists}
-        initialCollapsed={localStorage.getItem("wf_left_sidebar_collapsed") === "1"}
+        initialCollapsed={localStorage.getItem("spotify_left_sidebar_collapsed") === "1"}
       />
       <NowPlayingSidebar />
       <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">

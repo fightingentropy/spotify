@@ -28,7 +28,7 @@ The Worker applies the D1 schema at runtime. Local development uses Wrangler's l
 - Qobuz/Tidal provider resolution with quality profile settings
 - Duplicate song detection with replace confirmation
 - R2 media streaming with range request support
-- Worker-native credentials auth with opaque `wf_session` cookie sessions
+- Worker-native credentials auth with opaque `spotify_session` cookie sessions
 - Likes with optimistic updates
 - Per-song edit mode for metadata, cover art, and lyrics
 - Browser-local folder mode for on-device music

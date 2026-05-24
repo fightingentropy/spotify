@@ -37,11 +37,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 
-# local media + sqlite runtime data
+# local media runtime data
 /local-media/
 /music/
-/waveform.sqlite
-/waveform.sqlite-*
 
 # wrangler files
 .wrangler

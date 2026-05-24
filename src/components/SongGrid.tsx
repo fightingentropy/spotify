@@ -100,11 +100,11 @@ export function SongGrid({
     };
 
     try {
-      const stored = localStorage.getItem("wf_song_view_mode");
+      const stored = localStorage.getItem("spotify_song_view_mode");
       if (stored === "list" || stored === "grid") {
         setViewMode(stored);
       }
-      const storedSort = localStorage.getItem("wf_song_sort_mode");
+      const storedSort = localStorage.getItem("spotify_song_sort_mode");
       if (
         storedSort === "default" ||
         storedSort === "uploaded_desc" ||
@@ -137,14 +137,14 @@ export function SongGrid({
   const setNextViewMode = useCallback((nextMode: "grid" | "list") => {
     setViewMode(nextMode);
     try {
-      localStorage.setItem("wf_song_view_mode", nextMode);
+      localStorage.setItem("spotify_song_view_mode", nextMode);
     } catch {}
   }, []);
 
   const setNextSortMode = useCallback((nextMode: SongSortMode) => {
     setSortMode(nextMode);
     try {
-      localStorage.setItem("wf_song_sort_mode", nextMode);
+      localStorage.setItem("spotify_song_sort_mode", nextMode);
     } catch {}
   }, []);
 

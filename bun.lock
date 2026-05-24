@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "waveform",
+      "name": "spotify",
       "dependencies": {
         "bcryptjs": "^3.0.3",
         "clsx": "^2.1.1",

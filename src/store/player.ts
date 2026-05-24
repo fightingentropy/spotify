@@ -123,12 +123,12 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   cycleRepeatMode: () =>
     set((s) => ({ repeatMode: s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off" })),
   setCrossfadeEnabled: (enabled) => {
-    try { if (typeof window !== "undefined") localStorage.setItem("wf_crossfade_enabled", enabled ? "1" : "0"); } catch {}
+    try { if (typeof window !== "undefined") localStorage.setItem("spotify_crossfade_enabled", enabled ? "1" : "0"); } catch {}
     set({ crossfadeEnabled: enabled });
   },
   setCrossfadeSeconds: (seconds) => {
     const clamped = Math.max(0, Math.min(12, seconds));
-    try { if (typeof window !== "undefined") localStorage.setItem("wf_crossfade_seconds", String(clamped)); } catch {}
+    try { if (typeof window !== "undefined") localStorage.setItem("spotify_crossfade_seconds", String(clamped)); } catch {}
     set({ crossfadeSeconds: clamped });
   },
 }));

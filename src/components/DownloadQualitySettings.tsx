@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-export const DOWNLOAD_QUALITY_PROFILE_KEY = "wf_download_quality_profile";
-export const DOWNLOAD_PROVIDER_KEY = "wf_download_provider";
+export const DOWNLOAD_QUALITY_PROFILE_KEY = "spotify_download_quality_profile";
+export const DOWNLOAD_PROVIDER_KEY = "spotify_download_provider";
 
 type QualityProfile = "cd" | "hires48" | "max";
 export type DownloadProvider = "auto" | "qobuz" | "tidal";

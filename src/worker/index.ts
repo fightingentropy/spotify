@@ -64,7 +64,7 @@ type ResolvedAudioDownload = {
   streamUrl: string;
 };
 
-const SESSION_COOKIE = "wf_session";
+const SESSION_COOKIE = "spotify_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
@@ -363,7 +363,7 @@ async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
       headers: {
-        "user-agent": "waveform/1.0 (+https://spotify.erlinhoxha.workers.dev)",
+        "user-agent": "spotify/1.0 (+https://spotify.erlinhoxha.workers.dev)",
         ...(init?.headers || {}),
       },
     });

@@ -12,9 +12,9 @@ export default function CrossfadeSettings() {
   // Hydrate settings from localStorage on client to avoid SSR mismatch
   useEffect(() => {
     try {
-      const storedEnabled = localStorage.getItem("wf_crossfade_enabled");
+      const storedEnabled = localStorage.getItem("spotify_crossfade_enabled");
       const enabled = storedEnabled === null ? true : storedEnabled === "1";
-      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("wf_crossfade_seconds") ?? 4)));
+      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("spotify_crossfade_seconds") ?? 4)));
       setCrossfadeEnabled(enabled);
       setCrossfadeSeconds(secs);
     } catch {}

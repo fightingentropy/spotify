@@ -17,7 +17,7 @@ type LibrarySidebarClientProps = {
   initialCollapsed: boolean;
 };
 
-const SIDEBAR_STATE_KEY = "wf_left_sidebar_collapsed";
+const SIDEBAR_STATE_KEY = "spotify_left_sidebar_collapsed";
 
 export default function LibrarySidebarClient({
   userId,

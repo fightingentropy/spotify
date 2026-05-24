@@ -1,5 +1,5 @@
--- SQLite schema for Waveform.
--- Applied automatically at runtime by src/lib/db.ts.
+-- SQLite schema for Spotify.
+-- Applied automatically at runtime by src/worker/index.ts.
 
 
 CREATE TABLE IF NOT EXISTS "User" (

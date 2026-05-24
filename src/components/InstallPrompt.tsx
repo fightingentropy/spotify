@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 
-const DISMISS_KEY = "wf_ios_install_dismissed";
+const DISMISS_KEY = "spotify_ios_install_dismissed";
 
 function isIos(): boolean {
   if (typeof navigator === "undefined") return false;
