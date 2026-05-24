@@ -27,6 +27,21 @@ type SpotifyTrack = {
 type ActionStatus = "idle" | "loading" | "success" | "error";
 type QualityProfile = "cd" | "hires48" | "max";
 type PendingImportPayload = { lyricsToInclude: string };
+type PreparedBrowserSave = {
+  files: File[];
+  trackTitle: string;
+  trackArtist: string;
+};
+type ShareFilesPayload = {
+  files: File[];
+  title?: string;
+  text?: string;
+};
+type FileSharingNavigator = Navigator & {
+  canShare?: (data: ShareFilesPayload) => boolean;
+  share?: (data: ShareFilesPayload) => Promise<void>;
+};
+type BrowserSaveResult = "shared-all" | "shared-some" | "downloaded";
 
 function formatDuration(durationMs: number): string {
   if (!durationMs || !Number.isFinite(durationMs)) return "0:00";
@@ -71,6 +86,65 @@ function extensionFromContentType(type: string, fallback: string): string {
   return fallback;
 }
 
+function sanitizeDownloadSegment(value: string): string {
+  const safe = value
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ");
+  return safe || "Unknown";
+}
+
+function extensionFromFileName(name: string, fallback: string): string {
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index).toLowerCase() : fallback;
+}
+
+function stemFromFileName(name: string): string {
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(0, index) : name;
+}
+
+function createDownloadFile(
+  blob: Blob,
+  fileName: string,
+  type = blob.type || "application/octet-stream",
+): File {
+  return new File([blob], fileName, { type, lastModified: Date.now() });
+}
+
+function browserSupportsSharing(files: File[]): boolean {
+  if (typeof navigator === "undefined") return false;
+  const sharingNavigator = navigator as FileSharingNavigator;
+  if (!sharingNavigator.share) return false;
+  if (!sharingNavigator.canShare) return true;
+  try {
+    return sharingNavigator.canShare({ files });
+  } catch {
+    return false;
+  }
+}
+
+function triggerBrowserDownloads(files: File[]) {
+  for (const file of files) {
+    const url = URL.createObjectURL(file);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = file.name;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+}
+
+function isBrowserSaveDismissed(errorValue: unknown): boolean {
+  return (
+    errorValue instanceof DOMException &&
+    (errorValue.name === "AbortError" || errorValue.name === "NotAllowedError")
+  );
+}
+
 export default function UploadPage() {
   const { user, status } = useAuth();
   const navigate = useNavigate();
@@ -97,6 +171,8 @@ export default function UploadPage() {
   const [showReplaceModal, setShowReplaceModal] = useState(false);
   const [replaceModalMessage, setReplaceModalMessage] = useState("");
   const [pendingImportPayload, setPendingImportPayload] = useState<PendingImportPayload | null>(null);
+  const [preparedBrowserSave, setPreparedBrowserSave] = useState<PreparedBrowserSave | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -155,6 +231,7 @@ export default function UploadPage() {
 
   async function handleFetchSpotify() {
     setError(null);
+    setNotice(null);
     setFetchStatus("loading");
     setDownloadStatus("idle");
     setSpotifyTrack(null);
@@ -162,6 +239,7 @@ export default function UploadPage() {
     setShowReplaceModal(false);
     setReplaceModalMessage("");
     setPendingImportPayload(null);
+    setPreparedBrowserSave(null);
     try {
       const res = await fetch("/api/songs/spotify", {
         method: "POST",
@@ -350,6 +428,112 @@ export default function UploadPage() {
     });
   }
 
+  async function buildSpotifyBrowserSave(lyricsToInclude: string): Promise<PreparedBrowserSave> {
+    if (!spotifyTrack) throw new Error("Fetch a Spotify track first");
+    const payload = spotifyDownloadPayload(lyricsToInclude);
+    const [audio, cover] = await Promise.all([
+      fetchSpotifyAudioBlob(payload),
+      fetchSpotifyCoverBlob().catch(() => null),
+    ]);
+
+    const audioExt = extensionFromFileName(
+      audio.fileName,
+      extensionFromContentType(audio.blob.type, ".flac"),
+    );
+    const audioStem = sanitizeDownloadSegment(`${spotifyTrack.artist} - ${spotifyTrack.title}`);
+    const audioFileName = `${audioStem}${audioExt}`;
+    const audioFile = createDownloadFile(audio.blob, audioFileName);
+    const files = [audioFile];
+    let coverFileName: string | undefined;
+    let lyricsFileName: string | undefined;
+
+    if (cover?.blob) {
+      const coverExt = extensionFromFileName(
+        cover.fileName,
+        extensionFromContentType(cover.blob.type, ".jpg"),
+      );
+      coverFileName = `${audioStem}.cover${coverExt}`;
+      files.push(createDownloadFile(cover.blob, coverFileName));
+    }
+
+    if (lyricsToInclude.trim()) {
+      lyricsFileName = `${audioStem}.lrc`;
+      files.push(
+        createDownloadFile(
+          new Blob([lyricsToInclude.trim()], { type: "text/plain;charset=utf-8" }),
+          lyricsFileName,
+          "text/plain;charset=utf-8",
+        ),
+      );
+    }
+
+    const sidecar = {
+      version: 1,
+      title: spotifyTrack.title,
+      artist: spotifyTrack.artist,
+      coverFile: coverFileName,
+      lyricsFile: lyricsFileName,
+      updatedAt: new Date().toISOString(),
+    };
+    files.push(
+      createDownloadFile(
+        new Blob([`${JSON.stringify(sidecar, null, 2)}\n`], { type: "application/json" }),
+        `${stemFromFileName(audioFileName)}.spotify.json`,
+        "application/json",
+      ),
+    );
+
+    return {
+      files,
+      trackTitle: spotifyTrack.title,
+      trackArtist: spotifyTrack.artist,
+    };
+  }
+
+  async function savePreparedFilesThroughBrowser(
+    prepared: PreparedBrowserSave,
+  ): Promise<BrowserSaveResult> {
+    const sharingNavigator = navigator as FileSharingNavigator;
+    const title = `${prepared.trackArtist} - ${prepared.trackTitle}`;
+    const text = "Save these files into your music folder.";
+    if (sharingNavigator.share) {
+      const candidates = [
+        prepared.files,
+        prepared.files.filter((file) => !file.name.endsWith(".spotify.json")),
+        prepared.files.filter(
+          (file) =>
+            file.type.startsWith("audio/") ||
+            file.type.startsWith("image/") ||
+            file.type.startsWith("text/"),
+        ),
+        prepared.files.filter((file) => file.type.startsWith("audio/")),
+      ].filter((files) => files.length > 0);
+
+      for (const files of candidates) {
+        if (!browserSupportsSharing(files)) continue;
+        try {
+          await sharingNavigator.share({ title, text, files });
+          return files.length === prepared.files.length ? "shared-all" : "shared-some";
+        } catch (errorValue) {
+          if (isBrowserSaveDismissed(errorValue)) throw errorValue;
+        }
+      }
+    }
+
+    triggerBrowserDownloads(prepared.files);
+    return "downloaded";
+  }
+
+  function browserSaveNotice(result: BrowserSaveResult) {
+    if (result === "shared-all") {
+      return "Save sheet opened. Save the files into your music folder, then reopen that folder in Library.";
+    }
+    if (result === "shared-some") {
+      return "Save sheet opened. This browser accepted the music file, but may skip one of the helper files.";
+    }
+    return "Download started. Save the files into your music folder, then reopen that folder in Library.";
+  }
+
   function isDuplicateSongError(errorValue: unknown): errorValue is Error & { code: string } {
     return errorValue instanceof Error && (errorValue as Error & { code?: string }).code === "DUPLICATE_SONG";
   }
@@ -359,6 +543,7 @@ export default function UploadPage() {
     setShowReplaceModal(false);
     setDownloadStatus("loading");
     setError(null);
+    setNotice(null);
     try {
       await submitSpotifyImport(pendingImportPayload.lyricsToInclude, true);
       setPendingImportPayload(null);
@@ -376,19 +561,28 @@ export default function UploadPage() {
       return;
     }
     setError(null);
+    setNotice(null);
+    setPreparedBrowserSave(null);
     setDownloadStatus("loading");
     let resolvedLyrics = "";
+    let shouldStayOnPage = false;
+    let browserSavePrepared = false;
     try {
       resolvedLyrics = await fetchLyricsForImport();
       if (shouldSaveToLocalFolder()) {
         await saveSpotifyImportToLocalFolder(resolvedLyrics);
       } else if (hasReadOnlyPickedFolder()) {
-        throw new Error("This browser only gave read access to the selected folder. Use a desktop browser with folder write access to save downloads there.");
+        const prepared = await buildSpotifyBrowserSave(resolvedLyrics);
+        setPreparedBrowserSave(prepared);
+        browserSavePrepared = true;
+        const result = await savePreparedFilesThroughBrowser(prepared);
+        setNotice(browserSaveNotice(result));
+        shouldStayOnPage = true;
       } else {
         await submitSpotifyImport(resolvedLyrics);
       }
       setDownloadStatus("success");
-      navigate("/");
+      if (!shouldStayOnPage) navigate("/");
     } catch (err) {
       if (isDuplicateSongError(err)) {
         setPendingImportPayload({ lyricsToInclude: resolvedLyrics || lyricsText.trim() });
@@ -397,8 +591,33 @@ export default function UploadPage() {
         setDownloadStatus("idle");
         return;
       }
+      if (browserSavePrepared && isBrowserSaveDismissed(err)) {
+        setDownloadStatus("idle");
+        setNotice("Ready to save. Tap Save to Files to open the system save sheet.");
+        return;
+      }
       setDownloadStatus("error");
       setError(err instanceof Error ? err.message : "Failed to add song from Spotify");
+    }
+  }
+
+  async function handleSavePreparedToFiles() {
+    if (!preparedBrowserSave) return;
+    setError(null);
+    setNotice(null);
+    setDownloadStatus("loading");
+    try {
+      const result = await savePreparedFilesThroughBrowser(preparedBrowserSave);
+      setNotice(browserSaveNotice(result));
+      setDownloadStatus("success");
+    } catch (err) {
+      if (isBrowserSaveDismissed(err)) {
+        setDownloadStatus("idle");
+        setNotice("Ready to save. Tap Save to Files to open the system save sheet.");
+        return;
+      }
+      setDownloadStatus("error");
+      setError(err instanceof Error ? err.message : "Failed to save files");
     }
   }
 
@@ -493,12 +712,19 @@ export default function UploadPage() {
                       Download
                       <ActionIcon status={downloadStatus} />
                     </button>
+                    {preparedBrowserSave && (
+                      <button type="button" onClick={handleSavePreparedToFiles} disabled={downloadStatus === "loading"} className="h-11 flex-1 justify-center rounded-2xl border px-5 font-semibold inline-flex items-center gap-2 disabled:opacity-50 sm:flex-none">
+                        <Download size={16} />
+                        Save to Files
+                      </button>
+                    )}
                     {spotifyTrack.previewUrl && (
                       <button type="button" onClick={handlePreviewToggle} className="h-11 w-11 rounded-2xl border inline-flex items-center justify-center" aria-label={isPreviewPlaying ? "Stop preview" : "Play preview"}>
                         {isPreviewPlaying ? <Pause size={16} /> : <Play size={16} />}
                       </button>
                     )}
                   </div>
+                  {notice && <div className="text-sm text-green-500">{notice}</div>}
                 </div>
               </div>
             </div>
