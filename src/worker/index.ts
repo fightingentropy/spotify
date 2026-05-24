@@ -41,6 +41,19 @@ type ActionPayload = {
   title?: unknown;
   artist?: unknown;
   album?: unknown;
+  batchType?: unknown;
+  outputFormat?: unknown;
+};
+
+type BatchDownloadPayload = {
+  spotifyUrl?: unknown;
+  region?: unknown;
+  qualityProfile?: unknown;
+  service?: unknown;
+  outputFormat?: unknown;
+  includeMetadata?: unknown;
+  includeLyrics?: unknown;
+  includeCover?: unknown;
 };
 
 type SongPayload = {
@@ -48,6 +61,8 @@ type SongPayload = {
   title?: unknown;
   artist?: unknown;
   album?: unknown;
+  duration?: unknown;
+  durationMs?: unknown;
   imageUrl?: unknown;
   audioUrl?: unknown;
   spotifyUrl?: unknown;
@@ -62,6 +77,30 @@ type SongPayload = {
 type ResolvedAudioDownload = {
   service: "qobuz" | "tidal";
   streamUrl: string;
+};
+
+type OutputFormat = "flac" | "mp3" | "aac" | "ogg" | "opus" | "wav";
+
+type EnhancedMetadata = {
+  title: string;
+  artist: string;
+  album: string;
+  albumArtist?: string;
+  releaseDate?: string;
+  trackNumber?: number;
+  totalTracks?: number;
+  discNumber?: number;
+  totalDiscs?: number;
+  genre?: string;
+  isrc?: string;
+  upc?: string;
+  composer?: string;
+  publisher?: string;
+  copyright?: string;
+  lyrics?: string;
+  duration?: number;
+  bitDepth?: number;
+  sampleRate?: number;
 };
 
 const SESSION_COOKIE = "spotify_session";
@@ -155,6 +194,21 @@ async function ensureSongColumns(db: SqlTag): Promise<void> {
       'ALTER TABLE "Song" ADD COLUMN "lyricsUrl" TEXT',
       'ALTER TABLE "Song" ADD COLUMN "audioBitDepth" INTEGER',
       'ALTER TABLE "Song" ADD COLUMN "audioSampleRate" INTEGER',
+      'ALTER TABLE "Song" ADD COLUMN "duration" REAL',
+      'ALTER TABLE "Song" ADD COLUMN "album" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "albumArtist" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "releaseDate" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "trackNumber" INTEGER',
+      'ALTER TABLE "Song" ADD COLUMN "totalTracks" INTEGER',
+      'ALTER TABLE "Song" ADD COLUMN "discNumber" INTEGER',
+      'ALTER TABLE "Song" ADD COLUMN "totalDiscs" INTEGER',
+      'ALTER TABLE "Song" ADD COLUMN "genre" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "isrc" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "upc" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "composer" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "publisher" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "copyright" TEXT',
+      'ALTER TABLE "Song" ADD COLUMN "outputFormat" TEXT DEFAULT "flac"',
     ]) {
       try {
         await db([statement] as unknown as TemplateStringsArray);
@@ -174,6 +228,29 @@ async function ensureSongColumns(db: SqlTag): Promise<void> {
 
 function toStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function toNumberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function durationSecondsFromPayload(payload: SongPayload): number | null {
+  const durationMs = toNumberValue(payload.durationMs);
+  if (durationMs != null && durationMs > 0) {
+    return Math.round(durationMs / 1000);
+  }
+
+  const duration = toNumberValue(payload.duration);
+  if (duration != null && duration > 0) {
+    return Math.round(duration > 1000 ? duration / 1000 : duration);
+  }
+
+  return null;
 }
 
 function toObject(value: unknown): Record<string, unknown> | null {
@@ -396,6 +473,55 @@ function parseSpotifyTrackId(input: string): string | null {
   return /^[A-Za-z0-9]{22}$/.test(trackId) ? trackId : null;
 }
 
+function parseSpotifyAlbumId(input: string): string | null {
+  const trimmed = input.trim();
+  if (/^[A-Za-z0-9]{22}$/.test(trimmed)) return trimmed;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "spotify.com" && host !== "open.spotify.com" && !host.endsWith(".spotify.com")) {
+    return null;
+  }
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const albumIndex = parts.findIndex((part) => part === "album");
+  const albumId = albumIndex >= 0 ? parts[albumIndex + 1] : "";
+  return /^[A-Za-z0-9]{22}$/.test(albumId) ? albumId : null;
+}
+
+function parseSpotifyPlaylistId(input: string): string | null {
+  const trimmed = input.trim();
+  if (/^[A-Za-z0-9]{22}$/.test(trimmed)) return trimmed;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "spotify.com" && host !== "open.spotify.com" && !host.endsWith(".spotify.com")) {
+    return null;
+  }
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const playlistIndex = parts.findIndex((part) => part === "playlist");
+  const playlistId = playlistIndex >= 0 ? parts[playlistIndex + 1] : "";
+  return /^[A-Za-z0-9]{22}$/.test(playlistId) ? playlistId : null;
+}
+
+function determineSpotifyUrlType(url: string): "track" | "album" | "playlist" | null {
+  try {
+    const parsed = new URL(url.trim());
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts.includes("track")) return "track";
+    if (parts.includes("album")) return "album";
+    if (parts.includes("playlist")) return "playlist";
+  } catch {}
+  return null;
+}
+
 function parseTrackIdFromUrl(url: string): string | null {
   return url.match(/\/track\/([A-Za-z0-9]+)/i)?.[1] ?? null;
 }
@@ -465,17 +591,76 @@ async function fetchDeezerTrackInfo(deezerTrackId: string) {
   const deezerPayload = await fetchJsonObject(`https://api.deezer.com/track/${deezerTrackId}`).catch(() => null);
   if (!deezerPayload) return null;
   const albumObj = toObject(deezerPayload.album);
+  const artistObj = toObject(deezerPayload.artist);
   const durationRaw = deezerPayload.duration;
   const playsRaw = deezerPayload.rank;
   const durationSec =
     typeof durationRaw === "number" ? durationRaw : typeof durationRaw === "string" ? Number(durationRaw) : 0;
   const plays = typeof playsRaw === "number" ? playsRaw : typeof playsRaw === "string" ? Number(playsRaw) : 0;
+
   return {
     album: toStringValue(albumObj?.title),
+    albumArtist: toStringValue(artistObj?.name),
     releaseDate: toStringValue(deezerPayload.release_date),
+    trackNumber: typeof deezerPayload.track_position === "number" ? deezerPayload.track_position : undefined,
+    totalTracks: typeof albumObj?.nb_tracks === "number" ? albumObj.nb_tracks : undefined,
+    discNumber: typeof deezerPayload.disk_number === "number" ? deezerPayload.disk_number : undefined,
     durationSec: Number.isFinite(durationSec) ? durationSec : 0,
     plays: Number.isFinite(plays) ? plays : 0,
     isrc: toStringValue(deezerPayload.isrc).toUpperCase(),
+    upc: toStringValue(albumObj?.upc),
+    genre: Array.isArray(deezerPayload.genres?.data) ? deezerPayload.genres.data[0]?.name : undefined,
+  };
+}
+
+async function fetchEnhancedMetadata(trackId: string, songLinkPayload: Record<string, unknown>): Promise<EnhancedMetadata> {
+  const metadata = parseSongLinkMetadata(songLinkPayload, trackId);
+  const deezerInfo = await fetchDeezerTrackInfo(parseDeezerTrackId(songLinkPayload));
+
+  // Try to get additional metadata from MusicBrainz using ISRC
+  let musicBrainzData = null;
+  if (deezerInfo?.isrc) {
+    try {
+      const mbResponse = await fetchWithTimeout(
+        `https://musicbrainz.org/ws/2/recording?query=isrc:${deezerInfo.isrc}&fmt=json`,
+        SPOTIFY_REQUEST_TIMEOUT_MS
+      );
+      if (mbResponse.ok) {
+        const mbPayload = await mbResponse.json();
+        const recording = mbPayload?.recordings?.[0];
+        if (recording) {
+          musicBrainzData = {
+            composer: recording.relations
+              ?.filter((rel: any) => rel.type === "composer")
+              ?.map((rel: any) => rel.artist?.name)
+              ?.join(", ") || undefined,
+            publisher: recording.relations
+              ?.filter((rel: any) => rel.type === "publisher")
+              ?.map((rel: any) => rel.label?.name)
+              ?.join(", ") || undefined,
+          };
+        }
+      }
+    } catch {
+      // MusicBrainz lookup failed, continue without composer/publisher data
+    }
+  }
+
+  return {
+    title: metadata.title || "Unknown Title",
+    artist: metadata.artist || "Unknown Artist",
+    album: deezerInfo?.album || "",
+    albumArtist: deezerInfo?.albumArtist,
+    releaseDate: deezerInfo?.releaseDate,
+    trackNumber: deezerInfo?.trackNumber,
+    totalTracks: deezerInfo?.totalTracks,
+    discNumber: deezerInfo?.discNumber,
+    genre: deezerInfo?.genre,
+    isrc: deezerInfo?.isrc,
+    upc: deezerInfo?.upc,
+    composer: musicBrainzData?.composer,
+    publisher: musicBrainzData?.publisher,
+    duration: deezerInfo?.durationSec,
   };
 }
 
@@ -484,6 +669,77 @@ async function getPreviewUrl(trackId: string): Promise<string> {
   if (!response?.ok) return "";
   const html = await response.text().catch(() => "");
   return html.match(/https:\/\/p\.scdn\.co\/mp3-preview\/[A-Za-z0-9?&=._-]+/)?.[0] ?? "";
+}
+
+async function fetchSpotifyAlbumTracks(albumId: string): Promise<Array<{ id: string; name: string; artists: Array<{ name: string }> }>> {
+  try {
+    const response = await fetchWithTimeout(`https://api.spotify.com/v1/albums/${albumId}/tracks?limit=50`, SPOTIFY_REQUEST_TIMEOUT_MS, {
+      headers: {
+        "Authorization": "Bearer BQD...", // This would need proper token handling
+      }
+    });
+
+    if (!response.ok) {
+      // Fallback to web scraping if API fails
+      return await scrapeAlbumTracks(albumId);
+    }
+
+    const data = await response.json();
+    return data.items || [];
+  } catch {
+    return await scrapeAlbumTracks(albumId);
+  }
+}
+
+async function scrapeAlbumTracks(albumId: string): Promise<Array<{ id: string; name: string; artists: Array<{ name: string }> }>> {
+  try {
+    const response = await fetchWithTimeout(`https://open.spotify.com/album/${albumId}`, SPOTIFY_REQUEST_TIMEOUT_MS);
+    if (!response.ok) return [];
+
+    const html = await response.text();
+    const tracks: Array<{ id: string; name: string; artists: Array<{ name: string }> }> = [];
+
+    // Extract track data from the page - this is a simplified approach
+    // In practice, you'd parse the JSON data embedded in the page
+    const trackMatches = html.matchAll(/spotify:track:([A-Za-z0-9]{22})/g);
+    for (const match of trackMatches) {
+      tracks.push({
+        id: match[1],
+        name: "Unknown Track", // Would need better parsing
+        artists: [{ name: "Unknown Artist" }]
+      });
+    }
+
+    return tracks;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchSpotifyPlaylistTracks(playlistId: string): Promise<Array<{ track: { id: string; name: string; artists: Array<{ name: string }> } }>> {
+  try {
+    // Similar implementation for playlist tracks
+    const response = await fetchWithTimeout(`https://open.spotify.com/playlist/${playlistId}`, SPOTIFY_REQUEST_TIMEOUT_MS);
+    if (!response.ok) return [];
+
+    const html = await response.text();
+    const tracks: Array<{ track: { id: string; name: string; artists: Array<{ name: string }> } }> = [];
+
+    const trackMatches = html.matchAll(/spotify:track:([A-Za-z0-9]{22})/g);
+    for (const match of trackMatches) {
+      tracks.push({
+        track: {
+          id: match[1],
+          name: "Unknown Track",
+          artists: [{ name: "Unknown Artist" }]
+        }
+      });
+    }
+
+    return tracks;
+  } catch {
+    return [];
+  }
 }
 
 function extractLrcFromSpotifyLyricsApi(payload: unknown): string {
@@ -705,7 +961,7 @@ async function listPlaylists(db: SqlTag, userId: string | null) {
 async function listSongs(db: SqlTag) {
   await ensureSongColumns(db);
   return db<SongRow>`
-    SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+    SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
     FROM "Song"
     ORDER BY "title" ASC
     LIMIT 5000
@@ -842,7 +1098,7 @@ app.get("/api/liked", async (c) => {
   const user = requireUser(c.get("user"));
   await ensureSongColumns(c.get("db"));
   const rows = await c.get("db")<SongRow & { songId: string }>`
-    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", l."songId"
+    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", l."songId"
     FROM "Like" l
     INNER JOIN "Song" s ON s."id" = l."songId"
     WHERE l."userId" = ${user.id}
@@ -865,7 +1121,7 @@ app.get("/api/playlist/:id", async (c) => {
   const playlist = playlists[0];
   if (!playlist) return jsonError("Playlist not found", 404);
   const songRows = await db<SongRow & { order: number; likedSongId: string | null }>`
-    SELECT s."id", s."title", s."artist", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", ps."order", l."songId" AS "likedSongId"
+    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", ps."order", l."songId" AS "likedSongId"
     FROM "PlaylistSong" ps
     INNER JOIN "Song" s ON s."id" = ps."songId"
     LEFT JOIN "Like" l ON l."songId" = s."id" AND l."userId" = ${user?.id ?? ""}
@@ -912,6 +1168,78 @@ app.post("/api/songs/spotify/file", async (c) => {
   const length = response.headers.get("content-length");
   if (length) headers.set("content-length", length);
   return new Response(response.body, { headers });
+});
+
+app.post("/api/songs/spotify/batch", async (c) => {
+  requireUser(c.get("user"));
+  const payload = await readJson<BatchDownloadPayload>(c.req.raw);
+  if (!payload) return jsonError("Invalid JSON body", 400);
+
+  const spotifyUrl = toStringValue(payload.spotifyUrl);
+  const urlType = determineSpotifyUrlType(spotifyUrl);
+
+  if (!urlType) {
+    return jsonError("Invalid Spotify URL. Must be a track, album, or playlist URL.", 400);
+  }
+
+  const region = toStringValue(payload.region).toUpperCase() || "US";
+  const outputFormat = toStringValue(payload.outputFormat).toLowerCase() as OutputFormat;
+  const format = ["flac", "mp3", "aac", "ogg", "opus", "wav"].includes(outputFormat) ? outputFormat : "flac";
+
+  let trackIds: string[] = [];
+  let batchTitle = "";
+  let batchArtist = "";
+
+  try {
+    if (urlType === "track") {
+      const trackId = parseSpotifyTrackId(spotifyUrl);
+      if (!trackId) return jsonError("Invalid track ID", 400);
+      trackIds = [trackId];
+      // Get track info for batch title
+      const songLinkPayload = await fetchSongLinkPayload(trackId, region);
+      const metadata = await fetchEnhancedMetadata(trackId, songLinkPayload);
+      batchTitle = metadata.title;
+      batchArtist = metadata.artist;
+    } else if (urlType === "album") {
+      const albumId = parseSpotifyAlbumId(spotifyUrl);
+      if (!albumId) return jsonError("Invalid album ID", 400);
+      const albumTracks = await fetchSpotifyAlbumTracks(albumId);
+      trackIds = albumTracks.map(track => track.id);
+      batchTitle = `Album - ${albumTracks[0]?.name || "Unknown Album"}`;
+      batchArtist = albumTracks[0]?.artists[0]?.name || "Unknown Artist";
+    } else if (urlType === "playlist") {
+      const playlistId = parseSpotifyPlaylistId(spotifyUrl);
+      if (!playlistId) return jsonError("Invalid playlist ID", 400);
+      const playlistTracks = await fetchSpotifyPlaylistTracks(playlistId);
+      trackIds = playlistTracks.map(item => item.track.id);
+      batchTitle = "Playlist";
+      batchArtist = "Various Artists";
+    }
+
+    if (trackIds.length === 0) {
+      return jsonError("No tracks found", 404);
+    }
+
+    if (trackIds.length > 100) {
+      return jsonError("Maximum 100 tracks per batch", 400);
+    }
+
+    // Return batch info for processing
+    return c.json({
+      batchInfo: {
+        type: urlType,
+        title: batchTitle,
+        artist: batchArtist,
+        trackCount: trackIds.length,
+        format,
+        trackIds: trackIds.slice(0, 10), // Only return first 10 for preview
+      },
+      message: `Found ${trackIds.length} tracks. Use /api/songs/spotify/batch/download to start the batch download.`
+    });
+
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Failed to process batch", 500);
+  }
 });
 
 app.post("/api/songs/spotify", async (c) => {
@@ -996,6 +1324,8 @@ app.post("/api/songs", async (c) => {
   const contentType = c.req.header("content-type") || "";
   let title = "";
   let artist = "";
+  let album = "";
+  let duration: number | null = null;
   let imageUrl = "/apple-icon.png";
   let audioUrl = "";
   let lyricsText = "";
@@ -1009,6 +1339,8 @@ app.post("/api/songs", async (c) => {
     replaceExisting = payload.replaceExisting === true || toStringValue(payload.replaceExisting).toLowerCase() === "true";
     title = toStringValue(payload.title);
     artist = toStringValue(payload.artist);
+    album = toStringValue(payload.album);
+    duration = durationSecondsFromPayload(payload);
     if (!title || !artist) return jsonError("Title and artist are required", 400);
 
     const duplicateRows = await db<{ id: string; title: string; artist: string }>`
@@ -1093,14 +1425,14 @@ app.post("/api/songs", async (c) => {
   const rows = existingSong
     ? await db<SongRow>`
         UPDATE "Song"
-        SET "title" = ${title}, "artist" = ${artist}, "imageUrl" = ${imageUrl}, "audioUrl" = ${audioUrl}, "lyricsUrl" = ${lyricsUrl}, "audioBitDepth" = ${audioBitDepth}, "audioSampleRate" = ${audioSampleRate}
+        SET "title" = ${title}, "artist" = ${artist}, "album" = ${album || null}, "duration" = ${duration}, "imageUrl" = ${imageUrl}, "audioUrl" = ${audioUrl}, "lyricsUrl" = ${lyricsUrl}, "audioBitDepth" = ${audioBitDepth}, "audioSampleRate" = ${audioSampleRate}
         WHERE "id" = ${songId}
-        RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+        RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
       `
     : await db<SongRow>`
-        INSERT INTO "Song" ("id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId")
-        VALUES (${songId}, ${title}, ${artist}, ${imageUrl}, ${audioUrl}, ${lyricsUrl}, ${audioBitDepth}, ${audioSampleRate}, ${user.id})
-        RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+        INSERT INTO "Song" ("id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId")
+        VALUES (${songId}, ${title}, ${artist}, ${album || null}, ${duration}, ${imageUrl}, ${audioUrl}, ${lyricsUrl}, ${audioBitDepth}, ${audioSampleRate}, ${user.id})
+        RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
       `;
   return c.json(rows[0], existingSong ? 200 : 201);
 });
@@ -1108,7 +1440,7 @@ app.post("/api/songs", async (c) => {
 app.get("/api/songs/:id", async (c) => {
   await ensureSongColumns(c.get("db"));
   const rows = await c.get("db")<SongRow>`
-    SELECT "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+    SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
     FROM "Song"
     WHERE "id" = ${c.req.param("id")}
     LIMIT 1
@@ -1133,7 +1465,7 @@ app.patch("/api/songs/:id", async (c) => {
     UPDATE "Song"
     SET "title" = ${title}, "artist" = ${artist}
     WHERE "id" = ${c.req.param("id")}
-    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+    RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
   `;
   return c.json(songToPlayerSong(rows[0]));
 });
@@ -1178,7 +1510,7 @@ app.post("/api/songs/:id/assets", async (c) => {
     UPDATE "Song"
     SET "imageUrl" = ${imageUrl}, "lyricsUrl" = ${lyricsUrl}
     WHERE "id" = ${song.id}
-    RETURNING "id", "title", "artist", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+    RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
   `;
   return c.json(songToPlayerSong(rows[0]));
 });

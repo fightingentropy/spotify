@@ -16,6 +16,8 @@ type LikesState = {
   toggleLike: (songId: string, nextLiked: boolean) => Promise<LikeToggleResult>;
 };
 
+const LOCAL_LIKED_SONG_IDS_KEY = "spotify_local_liked_song_ids";
+
 function removeKey(source: Record<string, true>, key: string): Record<string, true> {
   if (!Object.prototype.hasOwnProperty.call(source, key)) return source;
   const next = { ...source };
@@ -23,22 +25,61 @@ function removeKey(source: Record<string, true>, key: string): Record<string, tr
   return next;
 }
 
+function isLocalSongId(songId: string): boolean {
+  return songId.startsWith("browser-local:") || songId.startsWith("picked-file:");
+}
+
+function readLocalLikedSongIds(): Record<string, true> {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const stored = localStorage.getItem(LOCAL_LIKED_SONG_IDS_KEY);
+    const ids = stored ? JSON.parse(stored) : [];
+    if (!Array.isArray(ids)) return {};
+
+    const liked: Record<string, true> = {};
+    for (const id of ids) {
+      if (typeof id === "string" && isLocalSongId(id)) liked[id] = true;
+    }
+    return liked;
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalLikedSongIds(likedSongIds: Record<string, true>): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    const ids = Object.keys(likedSongIds).filter(isLocalSongId);
+    localStorage.setItem(LOCAL_LIKED_SONG_IDS_KEY, JSON.stringify(ids));
+  } catch {}
+}
+
 export const useLikesStore = create<LikesState>((set, get) => ({
-  likedSongIds: {},
+  likedSongIds: readLocalLikedSongIds(),
   pending: {},
-  hydrated: false,
+  hydrated: true,
   mergeInitial: (ids) => {
     const list = Array.isArray(ids) ? ids : [];
     const current = get().likedSongIds;
-    let changed = false;
-    const next = { ...current };
+    const next: Record<string, true> = {};
+
+    for (const id of Object.keys(current)) {
+      if (isLocalSongId(id)) next[id] = true;
+    }
+
     for (const id of list) {
       if (typeof id !== "string" || id.length === 0) continue;
-      if (!next[id]) {
-        next[id] = true;
-        changed = true;
-      }
+      next[id] = true;
     }
+
+    const currentKeys = Object.keys(current);
+    const nextKeys = Object.keys(next);
+    const changed =
+      currentKeys.length !== nextKeys.length ||
+      nextKeys.some((id) => !current[id]);
+
     if (changed) set({ likedSongIds: next, hydrated: true });
     else if (!get().hydrated) set({ hydrated: true });
   },
@@ -54,6 +95,20 @@ export const useLikesStore = create<LikesState>((set, get) => ({
 
     const prevLiked = !!get().likedSongIds[songId];
     if (prevLiked === nextLiked) {
+      return { ok: true, status: 200 };
+    }
+
+    if (isLocalSongId(songId)) {
+      set((state) => {
+        const likedSongIds = nextLiked
+          ? { ...state.likedSongIds, [songId]: true }
+          : removeKey(state.likedSongIds, songId);
+        writeLocalLikedSongIds(likedSongIds);
+        return {
+          likedSongIds,
+          hydrated: true,
+        };
+      });
       return { ok: true, status: 200 };
     }
 

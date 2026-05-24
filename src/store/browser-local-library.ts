@@ -600,6 +600,7 @@ type EmbeddedAudioMetadata = {
   artist?: string;
   imageUrl?: string;
   lyricsUrl?: string;
+  duration?: number;
   audioBitDepth?: number;
   audioSampleRate?: number;
 };
@@ -611,7 +612,7 @@ async function parseEmbeddedMetadata(
   try {
     const { parseBlob, selectCover } = await import("music-metadata");
     const metadata = await parseBlob(file, {
-      duration: false,
+      duration: true,
       skipCovers: options?.skipCovers ?? false,
     });
 
@@ -652,6 +653,10 @@ async function parseEmbeddedMetadata(
     const sampleRate = metadata.format.sampleRate;
     if (typeof sampleRate === "number" && Number.isFinite(sampleRate)) {
       result.audioSampleRate = Math.round(sampleRate);
+    }
+    const duration = metadata.format.duration;
+    if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+      result.duration = duration;
     }
 
     return result;
@@ -809,6 +814,7 @@ async function songFromAudioHandle(input: {
     imageUrl,
     audioUrl,
     lyricsUrl,
+    duration: embedded.duration,
     audioBitDepth: embedded.audioBitDepth,
     audioSampleRate: embedded.audioSampleRate,
     createdAt: new Date(file.lastModified || Date.now()).toISOString(),
@@ -1001,6 +1007,7 @@ async function songFromPickedFolderFile(
     imageUrl,
     audioUrl,
     lyricsUrl,
+    duration: embedded.duration,
     audioBitDepth: embedded.audioBitDepth,
     audioSampleRate: embedded.audioSampleRate,
     createdAt: new Date(file.lastModified || Date.now()).toISOString(),
@@ -1079,6 +1086,7 @@ function pickedFileSong(file: File): LocalSongEntry {
     artist: parsed.artist,
     imageUrl: "/apple-icon.png",
     audioUrl: createTrackedObjectUrl(file),
+    duration: undefined,
     createdAt: new Date(file.lastModified || Date.now()).toISOString(),
     source: "picked-file",
     localPath: file.name,

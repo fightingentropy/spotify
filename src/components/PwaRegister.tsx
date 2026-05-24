@@ -2,6 +2,12 @@
 
 import { useEffect } from "react";
 
+function hasActiveAudio(): boolean {
+  return Array.from(document.querySelectorAll("audio")).some(
+    (audio) => !audio.paused && !audio.ended,
+  );
+}
+
 export default function PwaRegister() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -10,7 +16,19 @@ export default function PwaRegister() {
     const reloadOnControllerChange = () => {
       if (reloading) return;
       reloading = true;
-      window.location.reload();
+      if (!hasActiveAudio()) {
+        window.location.reload();
+        return;
+      }
+
+      const reloadWhenPlaybackStops = () => {
+        if (hasActiveAudio()) return;
+        window.location.reload();
+      };
+      for (const audio of Array.from(document.querySelectorAll("audio"))) {
+        audio.addEventListener("pause", reloadWhenPlaybackStops, { once: true });
+        audio.addEventListener("ended", reloadWhenPlaybackStops, { once: true });
+      }
     };
 
     const register = async () => {

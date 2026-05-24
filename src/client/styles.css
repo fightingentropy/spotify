@@ -35,6 +35,7 @@ body {
 html,
 body {
   overscroll-behavior-y: none;
+  overflow-x: hidden;
 }
 
 body.wf-now-playing-open {
@@ -42,6 +43,8 @@ body.wf-now-playing-open {
 }
 
 .wf-main {
+  min-width: 0;
+  overflow-x: hidden;
   padding-left: 0;
   padding-right: 0;
   padding-bottom: calc(

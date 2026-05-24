@@ -36,7 +36,7 @@ export default function MobileNav() {
   return (
     <nav
       aria-label="Main navigation"
-      className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 pb-[env(safe-area-inset-bottom)]"
+      className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.12] bg-background text-white pb-[env(safe-area-inset-bottom)]"
     >
       <div className="h-[var(--wf-mobile-nav-height)] grid grid-cols-4">
         {tabs.map((tab) => {
@@ -48,13 +48,13 @@ export default function MobileNav() {
               to={tab.href}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 min-h-[44px] touch-manipulation transition-colors",
-                active ? "text-[#1DB954]" : "text-foreground/60",
+                active ? "text-[#1ed760]" : "text-white/[0.62]",
               )}
             >
               {"home" in tab && tab.home ? (
                 <SpotifyIcon
                   size={22}
-                  className={cn(active && "ring-2 ring-[#1DB954]/40 ring-offset-2 ring-offset-background rounded-full")}
+                  className={cn(active && "ring-2 ring-[#1ed760]/40 ring-offset-2 ring-offset-background rounded-full")}
                 />
               ) : Icon ? (
                 <Icon size={22} strokeWidth={active ? 2.5 : 2} />

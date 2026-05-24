@@ -1,14 +1,18 @@
 {
-  "id": "/spotify-music-player/v2",
+  "id": "/",
   "name": "Spotify",
   "short_name": "Spotify",
   "description": "Local-first music player for your library",
   "lang": "en",
   "dir": "ltr",
-  "start_url": "/?source=pwa",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "browser"],
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "capture_links": "existing-client-navigate",
   "orientation": "portrait",
   "background_color": "#121212",
   "theme_color": "#121212",

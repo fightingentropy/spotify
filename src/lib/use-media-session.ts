@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, type RefObject } from "react";
 type MediaSessionSong = {
   title: string;
   artist: string;
+  album?: string;
   imageUrl: string;
 };
 
@@ -75,6 +76,7 @@ function applyMetadata(song: MediaSessionSong): void {
     navigator.mediaSession.metadata = new MediaMetadata({
       title: song.title,
       artist: song.artist,
+      album: song.album || "",
       artwork: [
         { src: `${location.origin}${FALLBACK_ARTWORK_SMALL}`, sizes: "180x180", type: "image/png" },
         { src: artworkSrc || `${location.origin}${FALLBACK_ARTWORK}`, sizes: "512x512", type: "image/png" },
@@ -163,7 +165,7 @@ export function useMediaSession({
     }
 
     syncMediaSession();
-  }, [song?.title, song?.artist, song?.imageUrl, song, syncMediaSession]);
+  }, [song?.title, song?.artist, song?.album, song?.imageUrl, song, syncMediaSession]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator) || !song) return;

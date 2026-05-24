@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v6";
+const CACHE_VERSION = "spotify-v7";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -15,6 +15,15 @@ const SHELL_URLS = [
   "/icon-512.png",
   "/apple-icon.png",
   "/favicon.ico",
+  "/manifest.webmanifest",
+];
+
+const API_CACHE_PATHS = [
+  "/api/home",
+  "/api/library",
+  "/api/liked",
+  "/api/likes",
+  "/api/songs",
 ];
 
 function isCacheableResponse(response) {
@@ -71,6 +80,84 @@ async function staleWhileRevalidate(event, request, cacheName) {
 
   const response = await refreshed;
   return response || fetch(request);
+}
+
+function isCacheableApiRequest(url) {
+  if (!url.pathname.startsWith("/api/")) return false;
+  if (url.pathname.startsWith("/api/auth/")) return false;
+  if (url.pathname.startsWith("/api/files/")) return false;
+  if (API_CACHE_PATHS.includes(url.pathname)) return true;
+  return url.pathname.startsWith("/api/playlist/");
+}
+
+function parseRangeHeader(rangeHeader, size) {
+  if (!rangeHeader || !rangeHeader.startsWith("bytes=") || size <= 0) return null;
+  const rangeValue = rangeHeader.slice("bytes=".length).trim();
+  if (!rangeValue || rangeValue.includes(",")) return null;
+  const dashIndex = rangeValue.indexOf("-");
+  if (dashIndex === -1) return null;
+  const startValue = rangeValue.slice(0, dashIndex);
+  const endValue = rangeValue.slice(dashIndex + 1);
+  if (!startValue) {
+    const suffixLength = Number(endValue);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null;
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+  const start = Number(startValue);
+  if (!Number.isFinite(start) || start < 0 || start >= size) return null;
+  let end = endValue ? Number(endValue) : size - 1;
+  if (!Number.isFinite(end) || end < 0) return null;
+  if (end >= size) end = size - 1;
+  if (end < start) return null;
+  return { start, end };
+}
+
+async function cachedRangeResponse(request) {
+  const rangeHeader = request.headers.get("range");
+  if (!rangeHeader) return null;
+
+  const cached = await caches.match(request.url);
+  if (!cached || !cached.ok) return null;
+
+  const blob = await cached.blob();
+  const range = parseRangeHeader(rangeHeader, blob.size);
+  if (!range) return null;
+
+  const body = blob.slice(range.start, range.end + 1);
+  const headers = new Headers(cached.headers);
+  headers.set("accept-ranges", "bytes");
+  headers.set("content-length", String(body.size));
+  headers.set("content-range", `bytes ${range.start}-${range.end}/${blob.size}`);
+  headers.set("content-type", cached.headers.get("content-type") || "application/octet-stream");
+
+  return new Response(body, {
+    status: 206,
+    statusText: "Partial Content",
+    headers,
+  });
+}
+
+async function cacheMediaUrls(urls) {
+  if (!Array.isArray(urls) || urls.length === 0) return;
+  const cache = await caches.open(RUNTIME_CACHE);
+  await Promise.all(
+    urls.map(async (value) => {
+      if (typeof value !== "string" || !value) return;
+      if (/^(blob:|data:)/i.test(value)) return;
+      try {
+        const url = new URL(value, self.location.origin);
+        if (url.origin !== self.location.origin) return;
+        const request = new Request(url.toString(), {
+          credentials: "include",
+          cache: "reload",
+        });
+        const cached = await cache.match(url.toString());
+        if (cached) return;
+        const response = await fetch(request);
+        await putCache(RUNTIME_CACHE, url.toString(), response);
+      } catch {}
+    }),
+  );
 }
 
 async function navigationResponse(event, request) {
@@ -134,6 +221,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (request.headers.has("range")) {
+    event.respondWith(cachedRangeResponse(request).then((response) => response || fetch(request)));
     return;
   }
 
@@ -143,6 +231,11 @@ self.addEventListener("fetch", (event) => {
 
   if (url.pathname === "/manifest.webmanifest") {
     event.respondWith(networkFirst(request, STATIC_CACHE));
+    return;
+  }
+
+  if (isCacheableApiRequest(url)) {
+    event.respondWith(networkFirst(request, RUNTIME_CACHE));
     return;
   }
 
@@ -166,4 +259,9 @@ self.addEventListener("fetch", (event) => {
   ) {
     event.respondWith(staleWhileRevalidate(event, request, RUNTIME_CACHE));
   }
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "CACHE_MEDIA") return;
+  event.waitUntil(cacheMediaUrls(event.data.urls));
 });

@@ -98,21 +98,21 @@ export default function NowPlayingSidebar() {
   return (
     <aside
       className={cn(
-        "hidden lg:flex fixed top-14 bottom-[84px] right-0 z-30 border-l border-black/10 dark:border-white/10 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 transition-all duration-200",
+        "hidden lg:flex fixed top-14 bottom-[84px] right-0 z-30 border-l border-white/[0.12] bg-background text-white transition-all duration-200",
         collapsed ? "w-16" : "w-80",
       )}
     >
-      <div className="h-full w-full overflow-y-auto p-3">
-        <div className="mb-3 flex items-center justify-between">
+      <div className={cn("h-full w-full overflow-y-auto", collapsed ? "p-2" : "p-4")}>
+        <div className="mb-4 flex items-center justify-between">
           {!collapsed && (
-            <div className="text-xs uppercase tracking-wide opacity-70">
+            <div className="text-[13px] uppercase tracking-wide text-white/[0.55]">
               Now Playing
             </div>
           )}
           <button
             type="button"
             onClick={() => setCollapsed((value) => !value)}
-            className="h-8 w-8 rounded-full grid place-items-center hover:bg-black/10 hover:dark:bg-white/10 ml-auto"
+            className="h-8 w-8 rounded-full grid place-items-center text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white ml-auto"
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
@@ -121,41 +121,41 @@ export default function NowPlayingSidebar() {
         </div>
 
         {collapsed ? (
-          <div className="mt-6 flex flex-col items-center gap-3 opacity-80">
+          <div className="mt-6 flex flex-col items-center gap-3 text-white/[0.68]">
             <Music4 size={18} />
             <span className="[writing-mode:vertical-rl] rotate-180 text-xs tracking-wider">
               Now Playing
             </span>
           </div>
         ) : !currentSong ? (
-          <div className="h-full grid place-items-center text-sm opacity-70 text-center px-4">
+          <div className="h-full grid place-items-center text-[15px] leading-6 text-white/[0.62] text-center px-4">
             Select a song to see now playing details.
           </div>
         ) : (
-          <div className="space-y-4 pb-4">
+          <div className="space-y-5 pb-4">
             <img
               src={normalizeCoverImageUrl(currentSong.imageUrl)}
               alt={currentSong.title}
               loading="eager"
-              className="w-full aspect-square rounded-xl object-cover"
+              className="w-full aspect-square rounded-md object-cover bg-white/[0.08]"
             />
 
             <div>
-              <div className="text-xl font-semibold leading-tight">{currentSong.title}</div>
-              <div className="text-sm opacity-80 mt-1">{currentSong.artist}</div>
-              <div className="text-xs opacity-70 mt-1">
+              <div className="text-[22px] font-semibold leading-tight text-white">{currentSong.title}</div>
+              <div className="text-[16px] leading-6 text-white/[0.68] mt-1">{currentSong.artist}</div>
+              <div className="text-[13px] leading-5 text-white/[0.55] mt-1">
                 {isPlaying ? "Playing" : "Paused"}
               </div>
             </div>
 
-            <div className="rounded-xl border border-black/10 dark:border-white/10 p-3 space-y-3">
+            <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5 space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <div className="font-medium text-sm">Lyrics</div>
+                <div className="font-medium text-[16px] text-white">Lyrics</div>
                 <button
                   type="button"
                   onClick={() => setShowLyrics((value) => !value)}
                   onMouseUp={(event) => event.currentTarget.blur()}
-                  className="inline-flex items-center gap-1 h-7 px-2 rounded-full border border-black/15 dark:border-white/20 text-xs hover:bg-black/5 hover:dark:bg-white/5"
+                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-full border border-white/[0.16] text-[13px] text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white"
                 >
                   <FileText size={13} />
                   {showLyrics ? "Hide" : "Show"}
@@ -163,7 +163,7 @@ export default function NowPlayingSidebar() {
               </div>
 
               {showLyrics && (
-                <div className="rounded-lg bg-black/5 dark:bg-white/5 p-2 whitespace-pre-wrap text-xs max-h-48 overflow-auto">
+                <div className="rounded-md bg-white/[0.06] p-3 whitespace-pre-wrap text-[13px] leading-5 text-white/[0.72] max-h-48 overflow-auto">
                   {lyricsState.status === "idle" && "No lyrics available for this song."}
                   {lyricsState.status === "loading" && "Loading lyrics..."}
                   {lyricsState.status === "error" && "Unable to load lyrics."}
@@ -173,19 +173,19 @@ export default function NowPlayingSidebar() {
               )}
             </div>
 
-            <div className="rounded-xl border border-black/10 dark:border-white/10 p-3">
-              <div className="font-medium text-sm mb-2">Credits</div>
-              <div className="space-y-2">
+            <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+              <div className="font-medium text-[16px] text-white mb-3">Credits</div>
+              <div className="space-y-2.5">
                 {credits.map((credit) => (
                   <div
                     key={`${credit.name}-${credit.role}`}
                     className="flex items-start justify-between gap-2"
                   >
                     <div>
-                      <div className="text-sm font-medium">{credit.name}</div>
-                      <div className="text-xs opacity-70">{credit.role}</div>
+                      <div className="text-[15px] font-medium leading-5 text-white">{credit.name}</div>
+                      <div className="text-[13px] leading-5 text-white/[0.58]">{credit.role}</div>
                     </div>
-                    <CheckCircle2 size={14} className="opacity-50 mt-1" />
+                    <CheckCircle2 size={15} className="text-white/[0.45] mt-1" />
                   </div>
                 ))}
               </div>

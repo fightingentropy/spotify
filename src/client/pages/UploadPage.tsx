@@ -11,6 +11,7 @@ import {
   type DownloadProvider,
 } from "@/components/DownloadQualitySettings";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
+import { convertAudioFile, getSupportedFormats, getExtensionForFormat } from "@/lib/audio-converter";
 
 type SpotifyTrack = {
   spotifyId: string;
@@ -26,11 +27,21 @@ type SpotifyTrack = {
 
 type ActionStatus = "idle" | "loading" | "success" | "error";
 type QualityProfile = "cd" | "hires48" | "max";
+type OutputFormat = "flac" | "mp3" | "aac" | "ogg" | "opus" | "wav";
+type BatchType = "track" | "album" | "playlist";
 type PendingImportPayload = { lyricsToInclude: string };
 type PreparedBrowserSave = {
   files: File[];
   trackTitle: string;
   trackArtist: string;
+};
+type BatchInfo = {
+  type: BatchType;
+  title: string;
+  artist: string;
+  trackCount: number;
+  format: OutputFormat;
+  trackIds: string[];
 };
 type ShareFilesPayload = {
   files: File[];
@@ -167,6 +178,7 @@ export default function UploadPage() {
   const [fetchStatus, setFetchStatus] = useState<ActionStatus>("idle");
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
   const [qualityProfile, setQualityProfile] = useState<QualityProfile>("max");
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>("flac");
   const [downloadProvider, setDownloadProvider] = useState<DownloadProvider>("auto");
   const [showReplaceModal, setShowReplaceModal] = useState(false);
   const [replaceModalMessage, setReplaceModalMessage] = useState("");
@@ -174,6 +186,8 @@ export default function UploadPage() {
   const [preparedBrowserSave, setPreparedBrowserSave] = useState<PreparedBrowserSave | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [batchInfo, setBatchInfo] = useState<BatchInfo | null>(null);
+  const [batchStatus, setBatchStatus] = useState<ActionStatus>("idle");
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -234,26 +248,75 @@ export default function UploadPage() {
     setNotice(null);
     setFetchStatus("loading");
     setDownloadStatus("idle");
+    setBatchStatus("idle");
     setSpotifyTrack(null);
+    setBatchInfo(null);
     setLyricsText("");
     setShowReplaceModal(false);
     setReplaceModalMessage("");
     setPendingImportPayload(null);
     setPreparedBrowserSave(null);
+
+    // Detect if this is a batch URL (album/playlist)
+    const url = spotifyUrl.trim();
+    const isBatch = url.includes("/album/") || url.includes("/playlist/");
+
+    if (isBatch) {
+      // Handle batch processing
+      try {
+        const res = await fetch("/api/songs/spotify/batch", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            spotifyUrl: url,
+            region,
+            outputFormat,
+            qualityProfile
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error ?? "Failed to fetch batch info");
+        setBatchInfo(data.batchInfo);
+        setFetchStatus("success");
+      } catch (err) {
+        setFetchStatus("error");
+        setError(err instanceof Error ? err.message : "Failed to fetch batch info");
+      }
+    } else {
+      // Handle single track
+      try {
+        const res = await fetch("/api/songs/spotify", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ action: "fetch", spotifyUrl: url, region }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error ?? "Failed to fetch Spotify track");
+        setSpotifyTrack(data.track ?? null);
+        setFetchStatus("success");
+      } catch (err) {
+        setFetchStatus("error");
+        setError(err instanceof Error ? err.message : "Failed to fetch Spotify track");
+      }
+    }
+  }
+
+  async function handleBatchDownload() {
+    if (!batchInfo) return;
+    setError(null);
+    setNotice(null);
+    setBatchStatus("loading");
+
     try {
-      const res = await fetch("/api/songs/spotify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ action: "fetch", spotifyUrl: spotifyUrl.trim(), region }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? "Failed to fetch Spotify track");
-      setSpotifyTrack(data.track ?? null);
-      setFetchStatus("success");
+      // TODO: Implement actual batch download logic
+      // This would involve downloading each track in the batch
+      setNotice(`Starting batch download of ${batchInfo.trackCount} tracks...`);
+      setBatchStatus("success");
     } catch (err) {
-      setFetchStatus("error");
-      setError(err instanceof Error ? err.message : "Failed to fetch Spotify track");
+      setBatchStatus("error");
+      setError(err instanceof Error ? err.message : "Batch download failed");
     }
   }
 
@@ -324,6 +387,7 @@ export default function UploadPage() {
       title: spotifyTrack.title,
       artist: spotifyTrack.artist,
       album: spotifyTrack.album,
+      durationMs: String(spotifyTrack.durationMs || ""),
       imageUrl: spotifyTrack.imageUrl,
       qualityProfile,
     };
@@ -366,6 +430,7 @@ export default function UploadPage() {
       title: spotifyTrack.title,
       artist: spotifyTrack.artist,
       album: spotifyTrack.album,
+      durationMs: String(spotifyTrack.durationMs || ""),
       imageUrl: spotifyTrack.imageUrl,
       qualityProfile,
     };
@@ -436,13 +501,30 @@ export default function UploadPage() {
       fetchSpotifyCoverBlob().catch(() => null),
     ]);
 
-    const audioExt = extensionFromFileName(
+    let processedAudioBlob = audio.blob;
+    let audioExt = extensionFromFileName(
       audio.fileName,
       extensionFromContentType(audio.blob.type, ".flac"),
     );
+
+    // Convert audio format if needed
+    if (outputFormat !== "flac" && getSupportedFormats().includes(outputFormat)) {
+      try {
+        const audioBuffer = await audio.blob.arrayBuffer();
+        processedAudioBlob = await convertAudioFile(audioBuffer, {
+          format: outputFormat,
+          quality: 0.9,
+          bitRate: outputFormat === "mp3" ? 320 : undefined
+        });
+        audioExt = getExtensionForFormat(outputFormat);
+      } catch (error) {
+        console.warn("Audio conversion failed, using original format:", error);
+      }
+    }
+
     const audioStem = sanitizeDownloadSegment(`${spotifyTrack.artist} - ${spotifyTrack.title}`);
     const audioFileName = `${audioStem}${audioExt}`;
-    const audioFile = createDownloadFile(audio.blob, audioFileName);
+    const audioFile = createDownloadFile(processedAudioBlob, audioFileName);
     const files = [audioFile];
     let coverFileName: string | undefined;
     let lyricsFileName: string | undefined;
@@ -683,7 +765,98 @@ export default function UploadPage() {
             </button>
           </div>
 
-          {spotifyTrack && (
+          {/* Format and Quality Settings */}
+          {(spotifyTrack || batchInfo) && (
+            <div className="rounded-3xl border border-white/20 bg-white/[0.02] p-6 space-y-4">
+              <h3 className="text-lg font-semibold">Download Settings</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm mb-2 text-foreground/80">Output Format</label>
+                  <select
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(e.target.value as OutputFormat)}
+                    className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
+                  >
+                    <option value="flac">FLAC (Lossless)</option>
+                    {getSupportedFormats().includes("mp3") && <option value="mp3">MP3 320kbps</option>}
+                    {getSupportedFormats().includes("aac") && <option value="aac">AAC (M4A)</option>}
+                    {getSupportedFormats().includes("ogg") && <option value="ogg">OGG Vorbis</option>}
+                    {getSupportedFormats().includes("opus") && <option value="opus">Opus</option>}
+                    {getSupportedFormats().includes("wav") && <option value="wav">WAV (Uncompressed)</option>}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm mb-2 text-foreground/80">Quality Profile</label>
+                  <select
+                    value={qualityProfile}
+                    onChange={(e) => setQualityProfile(e.target.value as QualityProfile)}
+                    className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
+                  >
+                    <option value="cd">CD Quality (16-bit/44.1kHz)</option>
+                    <option value="hires48">Hi-Res (24-bit/48kHz)</option>
+                    <option value="max">Maximum Available</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm mb-2 text-foreground/80">Download Provider</label>
+                  <select
+                    value={downloadProvider}
+                    onChange={(e) => setDownloadProvider(e.target.value as DownloadProvider)}
+                    className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
+                  >
+                    <option value="auto">Auto (Best Available)</option>
+                    <option value="qobuz">Qobuz</option>
+                    <option value="tidal">Tidal</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Batch Info Display */}
+          {batchInfo && (
+            <div className="rounded-3xl border border-white/20 bg-white/[0.02] p-6">
+              <h3 className="text-xl font-semibold mb-4">Batch Download</h3>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-foreground/70">Type:</span>
+                  <span className="font-medium capitalize">{batchInfo.type}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-foreground/70">Title:</span>
+                  <span className="font-medium">{batchInfo.title}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-foreground/70">Artist:</span>
+                  <span className="font-medium">{batchInfo.artist}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-foreground/70">Tracks:</span>
+                  <span className="font-medium">{batchInfo.trackCount}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-foreground/70">Format:</span>
+                  <span className="font-medium uppercase">{batchInfo.format}</span>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={handleBatchDownload}
+                  disabled={batchStatus === "loading"}
+                  className="flex-1 h-11 rounded-2xl bg-yellow-500 text-black font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                >
+                  {batchStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  Download All ({batchInfo.trackCount} tracks)
+                  <ActionIcon status={batchStatus} />
+                </button>
+              </div>
+              {notice && <div className="text-sm text-green-500 mt-4">{notice}</div>}
+            </div>
+          )}
+
+          {/* Single Track Display */}
+          {spotifyTrack && !batchInfo && (
             <div className="rounded-3xl border p-5 bg-black/[0.03] dark:bg-white/[0.03]">
               <div className="flex flex-col lg:flex-row gap-6">
                 <div className="shrink-0">

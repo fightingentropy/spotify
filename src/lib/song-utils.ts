@@ -42,10 +42,15 @@ export function songToPlayerSong(song: SongRow): PlayerSong {
     id: song.id,
     title: song.title,
     artist: song.artist,
+    album: typeof song.album === "string" && song.album.trim() ? song.album.trim() : undefined,
     imageUrl: normalizeMediaUrl(song.imageUrl, "image"),
     audioUrl: normalizeMediaUrl(song.audioUrl, "audio"),
     lyricsUrl: normalizeMediaUrl(song.lyricsUrl, "lyrics"),
     createdAt: createdAtIso,
+    duration:
+      typeof song.duration === "number" && Number.isFinite(song.duration)
+        ? song.duration
+        : undefined,
     audioBitDepth:
       typeof song.audioBitDepth === "number" ? song.audioBitDepth : undefined,
     audioSampleRate:

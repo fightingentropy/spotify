@@ -1,5 +1,5 @@
 import { Link, Route, Routes } from "react-router-dom";
-import { AuthProvider } from "@/client/auth";
+import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
 import { BrowserLocalLibraryHydrator } from "@/components/BrowserLocalLibraryHydrator";
 import InstallPrompt from "@/components/InstallPrompt";
@@ -21,35 +21,39 @@ import RegisterPage from "@/client/pages/RegisterPage";
 import { useApiData, type LibraryPayload } from "@/client/api";
 
 function Shell() {
-  const { data: library } = useApiData<LibraryPayload>("/api/library", {
-    playlists: [],
-    userId: null,
-  });
+  const { user, status } = useAuth();
+  const { data: library } = useApiData<LibraryPayload>(
+    `/api/library?auth=${encodeURIComponent(user?.id ?? status)}`,
+    {
+      playlists: [],
+      userId: null,
+    },
+  );
 
   return (
     <>
       <PwaRegister />
       <InstallPrompt />
-      <header className="fixed top-0 inset-x-0 z-50 border-b border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 pt-[env(safe-area-inset-top)]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-          <Link to="/" className="font-semibold inline-flex items-center gap-2 touch-manipulation">
+      <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:max-w-7xl">
+          <Link to="/" className="font-semibold inline-flex shrink-0 items-center gap-2 touch-manipulation">
             <SpotifyIcon size={24} className="h-6 w-6 rounded-md" />
             <span className="hidden sm:inline">Spotify</span>
           </Link>
           <nav className="hidden lg:flex items-center gap-6">
-            <Link to="/" className="opacity-80 hover:opacity-100">Home</Link>
-            <Link to="/search" className="opacity-80 hover:opacity-100">Search</Link>
-            <Link to="/library" className="opacity-80 hover:opacity-100">Library</Link>
-            <Link to="/upload" className="opacity-80 hover:opacity-100">Upload</Link>
+            <Link to="/" className="text-white/[0.68] transition hover:text-white">Home</Link>
+            <Link to="/search" className="text-white/[0.68] transition hover:text-white">Search</Link>
+            <Link to="/library" className="text-white/[0.68] transition hover:text-white">Library</Link>
+            <Link to="/upload" className="text-white/[0.68] transition hover:text-white">Upload</Link>
             <AuthButtons />
           </nav>
-          <div className="lg:hidden">
-            <AuthButtons />
+          <div className="ml-auto flex min-w-0 justify-end overflow-hidden lg:hidden">
+            <AuthButtons compact />
           </div>
         </div>
       </header>
       <LibrarySidebarClient
-        userId={library.userId}
+        userId={status === "loading" ? library.userId : user?.id ?? null}
         playlists={library.playlists}
         initialCollapsed={localStorage.getItem("spotify_left_sidebar_collapsed") === "1"}
       />

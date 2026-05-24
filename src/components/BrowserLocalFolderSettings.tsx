@@ -44,9 +44,8 @@ export default function BrowserLocalFolderSettings() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-medium mb-2">Local Folder</h2>
         <p className="text-sm opacity-70 mb-4">
-          Choose a folder on this device for Spotify to read, play, and optionally save music to.
+          Choose a folder on this device to read, play, and optionally save music to.
           {folderPickerKind === "webkit"
             ? " On iPhone and iPad, pick a folder from Files or iCloud Drive."
             : " Your selection stays in this browser and is remembered across visits."}

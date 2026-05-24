@@ -17,6 +17,23 @@ function resolvePlayableSrc(src: string): string {
   return `${location.origin}${src}`;
 }
 
+function requestMediaCache(song: PlayerSong | null): void {
+  if (!song || !("serviceWorker" in navigator)) return;
+  const urls = [song.audioUrl, song.imageUrl].filter((url) => {
+    return typeof url === "string" && url.length > 0 && !/^(blob:|data:)/i.test(url);
+  });
+  if (urls.length === 0) return;
+
+  const message = { type: "CACHE_MEDIA", urls };
+  if (navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage(message);
+    return;
+  }
+  navigator.serviceWorker.ready
+    .then((registration) => registration.active?.postMessage(message))
+    .catch(() => {});
+}
+
 function PlayerBar(): React.ReactElement | null {
   // Individual selectors so we only re-render when each specific value changes
   // (instead of on every store mutation, as a full destructure would cause).
@@ -117,6 +134,10 @@ function PlayerBar(): React.ReactElement | null {
     getActiveAudio,
     audioRefs: mediaSessionAudioRefs,
   });
+
+  useEffect(() => {
+    requestMediaCache(currentSong);
+  }, [currentSong?.id, currentSong?.audioUrl, currentSong?.imageUrl]);
 
   // Client hydration of crossfade settings to ensure feature works without visiting /settings
   const hydratedRef = useRef(false);
@@ -499,7 +520,7 @@ function PlayerBar(): React.ReactElement | null {
         duration={duration}
         onSeek={onSeek}
       />
-      <div className="fixed inset-x-0 z-40 border-t border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/85 bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
+      <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
       <audio
         ref={audioARef}
         hidden
@@ -569,7 +590,7 @@ function PlayerBar(): React.ReactElement | null {
       {/* Mobile mini player */}
       <div className="lg:hidden relative">
         <div
-          className="absolute inset-x-0 top-0 h-0.5 bg-black/10 dark:bg-white/10"
+          className="absolute inset-x-0 top-0 h-0.5 bg-white/[0.12]"
           aria-hidden
         >
           <div
@@ -593,8 +614,8 @@ function PlayerBar(): React.ReactElement | null {
               sizes="48px"
             />
             <div className="min-w-0">
-              <div className="text-sm font-medium truncate">{currentSong.title}</div>
-              <div className="text-xs opacity-70 truncate">{currentSong.artist}</div>
+              <div className="text-[15px] font-medium leading-5 truncate text-white">{currentSong.title}</div>
+              <div className="text-[13px] leading-5 text-white/[0.62] truncate">{currentSong.artist}</div>
             </div>
           </button>
           <button
@@ -605,7 +626,7 @@ function PlayerBar(): React.ReactElement | null {
             className={cn(
               "h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
               likePending ? "opacity-60" : "",
-              songIsLiked ? "text-emerald-500" : "text-foreground/70",
+              songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
             )}
           >
             <Heart size={20} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
@@ -614,7 +635,7 @@ function PlayerBar(): React.ReactElement | null {
             type="button"
             aria-label={isPlaying ? "Pause" : "Play"}
             onClick={toggle}
-            className="h-11 w-11 rounded-full grid place-items-center bg-foreground text-background touch-manipulation shrink-0"
+            className="h-11 w-11 rounded-full grid place-items-center bg-white text-black touch-manipulation shrink-0"
           >
             {isPlaying ? <Pause size={20} /> : <Play size={20} className="translate-x-[1px]" />}
           </button>
@@ -631,13 +652,13 @@ function PlayerBar(): React.ReactElement | null {
                 alt="cover"
                 width={48}
                 height={48}
-                className="w-12 h-12 rounded object-cover"
+                className="w-12 h-12 rounded-[5px] object-cover"
                 sizes="48px"
               />
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-medium truncate">{currentSong.title}</div>
-              <div className="text-xs opacity-70 truncate">{currentSong.artist}</div>
+              <div className="text-[15px] font-medium leading-5 truncate text-white">{currentSong.title}</div>
+              <div className="text-[13px] leading-5 text-white/[0.62] truncate">{currentSong.artist}</div>
             </div>
             <button
               type="button"
@@ -647,8 +668,8 @@ function PlayerBar(): React.ReactElement | null {
               className={cn(
                 "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
                 nowPlayingOpen
-                  ? "text-emerald-500 bg-black/10 dark:bg-white/10"
-                  : "text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10",
+                  ? "text-[#1ed760] bg-white/[0.08]"
+                  : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
               )}
             >
               {nowPlayingOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
@@ -661,8 +682,8 @@ function PlayerBar(): React.ReactElement | null {
               disabled={!likesHydrated || likePending || !currentSongId}
               className={cn(
                 "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-                likePending ? "opacity-60 cursor-wait" : "hover:bg-black/10 hover:dark:bg-white/10",
-                songIsLiked ? "text-emerald-500" : "text-foreground/70",
+                likePending ? "opacity-60 cursor-wait" : "hover:bg-white/[0.09] hover:text-white",
+                songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
               )}
             >
               <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
@@ -671,7 +692,7 @@ function PlayerBar(): React.ReactElement | null {
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3">
-              <span className="text-xs tabular-nums opacity-70 w-10 text-right">{formatTime(currentTime)}</span>
+              <span className="text-[12px] tabular-nums text-white/[0.62] w-10 text-right">{formatTime(currentTime)}</span>
               <input
                 type="range"
                 min={0}
@@ -681,34 +702,34 @@ function PlayerBar(): React.ReactElement | null {
                 onChange={(e) => onSeek(Number(e.target.value))}
                 tabIndex={-1}
                 onFocus={(e) => e.currentTarget.blur()}
-                className="w-full h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500 focus:outline-none focus-visible:outline-none"
+                className="w-full h-1.5 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
                 style={{
                   background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
                 }}
               />
-              <span className="text-xs tabular-nums opacity-70 w-10">{formatTime(duration)}</span>
+              <span className="text-[12px] tabular-nums text-white/[0.62] w-10">{formatTime(duration)}</span>
             </div>
           </div>
 
           <div className="flex items-center gap-3 sm:gap-4">
-            <button aria-label="Shuffle" onClick={toggleShuffle} className={cn("p-2 rounded-full", shuffle && "text-emerald-500")}>
+            <button aria-label="Shuffle" onClick={toggleShuffle} className={cn("p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", shuffle && "text-[#1ed760]")}>
               <Shuffle size={18} />
             </button>
-            <button aria-label="Previous" onClick={previous} className="p-2 rounded-full">
+            <button aria-label="Previous" onClick={previous} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipBack size={18} />
             </button>
-            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={toggle} className="h-9 w-9 rounded-full grid place-items-center bg-foreground text-background">
+            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={toggle} className="h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
               {isPlaying ? <Pause size={18} /> : <Play size={18} />}
             </button>
-            <button aria-label="Next" onClick={next} className="p-2 rounded-full">
+            <button aria-label="Next" onClick={next} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipForward size={18} />
             </button>
-            <button aria-label="Repeat" onClick={cycleRepeatMode} className={cn("p-2 rounded-full", repeatMode !== "off" && "text-emerald-500")}>
+            <button aria-label="Repeat" onClick={cycleRepeatMode} className={cn("p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", repeatMode !== "off" && "text-[#1ed760]")}>
               <Repeat size={18} />
             </button>
 
             <div className="hidden sm:flex items-center gap-2 ml-2">
-              <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="p-2 rounded-full">
+              <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
                 <VolumeIcon size={18} />
               </button>
               <input
@@ -720,7 +741,7 @@ function PlayerBar(): React.ReactElement | null {
                 onChange={(e) => setVolume(Number(e.target.value))}
                 tabIndex={-1}
                 onFocus={(e) => e.currentTarget.blur()}
-                className="w-28 h-1.5 appearance-none rounded bg-black/10 dark:bg-white/10 accent-emerald-500 focus:outline-none focus-visible:outline-none"
+                className="w-28 h-1.5 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
               />
             </div>
           </div>

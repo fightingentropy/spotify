@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS "Song" (
   "imageUrl" TEXT NOT NULL,
   "audioUrl" TEXT NOT NULL,
   "lyricsUrl" TEXT,
+  "duration" REAL,
   "audioBitDepth" INTEGER,
   "audioSampleRate" INTEGER,
   "userId" TEXT NOT NULL,
