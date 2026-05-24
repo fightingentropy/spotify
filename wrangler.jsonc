@@ -1,22 +1,16 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"main": ".open-next/worker.js",
-	"name": "waveform",
+	"main": "src/worker/index.ts",
+	"name": "spotify",
 	"compatibility_date": "2026-05-23",
 	"compatibility_flags": [
 		"nodejs_compat",
 		"global_fetch_strictly_public"
 	],
 	"assets": {
-		"directory": ".open-next/assets",
-		"binding": "ASSETS"
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application"
 	},
-	"services": [
-		{
-			"binding": "WORKER_SELF_REFERENCE",
-			"service": "waveform"
-		}
-	],
 	"d1_databases": [
 		{
 			"binding": "DB",

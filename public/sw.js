@@ -147,7 +147,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (
-    url.pathname.startsWith("/_next/static/") ||
+    url.pathname.startsWith("/assets/") ||
     url.pathname === "/icon.svg" ||
     url.pathname === "/icon-512.png" ||
     url.pathname === "/apple-icon.png" ||
@@ -162,7 +162,6 @@ self.addEventListener("fetch", (event) => {
     request.destination === "font" ||
     request.destination === "style" ||
     request.destination === "script" ||
-    url.pathname.startsWith("/_next/image") ||
     url.pathname.startsWith("/api/artwork/")
   ) {
     event.respondWith(staleWhileRevalidate(event, request, RUNTIME_CACHE));

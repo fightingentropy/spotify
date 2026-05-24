@@ -6,7 +6,7 @@ export const DOWNLOAD_QUALITY_PROFILE_KEY = "wf_download_quality_profile";
 export const DOWNLOAD_PROVIDER_KEY = "wf_download_provider";
 
 type QualityProfile = "cd" | "hires48" | "max";
-export type DownloadProvider = "auto" | "qobuz" | "amazon" | "tidal";
+export type DownloadProvider = "auto" | "qobuz" | "tidal";
 
 const QUALITY_OPTIONS: Array<{
   value: QualityProfile;
@@ -38,17 +38,12 @@ const PROVIDER_OPTIONS: Array<{
   {
     value: "auto",
     label: "Auto",
-    note: "Try Qobuz, then Amazon Music, then Tidal",
+    note: "Try Qobuz, then Tidal",
   },
   {
     value: "qobuz",
     label: "Qobuz",
     note: "Use Qobuz only",
-  },
-  {
-    value: "amazon",
-    label: "Amazon Music",
-    note: "Use Amazon Music only",
   },
   {
     value: "tidal",
@@ -62,7 +57,7 @@ function isQualityProfile(value: string): value is QualityProfile {
 }
 
 export function isDownloadProvider(value: string): value is DownloadProvider {
-  return value === "auto" || value === "qobuz" || value === "amazon" || value === "tidal";
+  return value === "auto" || value === "qobuz" || value === "tidal";
 }
 
 export default function DownloadQualitySettings() {

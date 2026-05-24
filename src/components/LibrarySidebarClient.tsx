@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Heart, Library, ListMusic, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -77,7 +77,7 @@ export default function LibrarySidebarClient({
 
         <div className="space-y-1">
           <Link
-            href="/liked"
+            to="/liked"
             title="Liked Songs"
             className={cn(
               "flex items-center rounded hover:bg-black/5 dark:hover:bg-white/5",
@@ -106,7 +106,7 @@ export default function LibrarySidebarClient({
                   {playlists.map((pl) => (
                     <Link
                       key={pl.id}
-                      href={`/playlist/${pl.id}`}
+                      to={`/playlist/${pl.id}`}
                       title={pl.name}
                       className={cn(
                         "flex items-center rounded hover:bg-black/5 dark:hover:bg-white/5",
@@ -133,7 +133,7 @@ export default function LibrarySidebarClient({
                 <>
                   <div className="px-2 mb-2 text-xs uppercase tracking-wide opacity-60">Playlists</div>
                   <div className="px-2 text-sm opacity-70">
-                    <Link className="underline" href="/signin">
+                    <Link className="underline" to="/signin">
                       Sign in
                     </Link>{" "}
                     to manage playlists.

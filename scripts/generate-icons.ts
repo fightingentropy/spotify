@@ -3,8 +3,8 @@ import { join } from "node:path";
 import sharp from "sharp";
 
 const root = join(import.meta.dir, "..");
-const svgPath = join(root, "src/app/icon.svg");
-const appleSvgPath = join(root, "src/app/apple-icon.svg");
+const svgPath = join(root, "public/icon.svg");
+const appleSvgPath = join(root, "public/apple-icon.svg");
 const svg = readFileSync(svgPath);
 const appleSvg = readFileSync(appleSvgPath);
 
@@ -23,10 +23,8 @@ async function applePng(size: number) {
 const png16 = await png(16);
 const png32 = await png(32);
 const png48 = await png(48);
-const png180 = await png(180);
 const png512 = await png(512);
 
-writeFileSync(join(root, "src/app/apple-icon.png"), await applePng(180));
 writeFileSync(join(root, "public/apple-icon.png"), await applePng(180));
 writeFileSync(join(root, "public/icon-512.png"), png512);
 
@@ -60,7 +58,7 @@ function buildIco(images: Array<{ size: number; data: Buffer }>) {
 }
 
 writeFileSync(
-  join(root, "src/app/favicon.ico"),
+  join(root, "public/favicon.ico"),
   buildIco([
     { size: 16, data: png16 },
     { size: 32, data: png32 },
@@ -68,4 +66,4 @@ writeFileSync(
   ]),
 );
 
-console.log("Generated src/app/favicon.ico, src/app/apple-icon.png, public/apple-icon.png, public/icon-512.png");
+console.log("Generated public/favicon.ico, public/apple-icon.png, public/icon-512.png");

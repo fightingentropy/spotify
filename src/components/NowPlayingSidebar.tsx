@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
 import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4 } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
@@ -134,14 +133,11 @@ export default function NowPlayingSidebar() {
           </div>
         ) : (
           <div className="space-y-4 pb-4">
-            <Image
+            <img
               src={normalizeCoverImageUrl(currentSong.imageUrl)}
               alt={currentSong.title}
-              width={500}
-              height={500}
               loading="eager"
               className="w-full aspect-square rounded-xl object-cover"
-              sizes="320px"
             />
 
             <div>

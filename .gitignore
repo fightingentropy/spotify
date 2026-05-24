@@ -13,12 +13,9 @@
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
-
 # production
 /build
+/dist
 
 # misc
 .DS_Store
@@ -39,16 +36,12 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # local media + sqlite runtime data
 /local-media/
 /music/
 /waveform.sqlite
 /waveform.sqlite-*
-
-# OpenNext
-.open-next
 
 # wrangler files
 .wrangler

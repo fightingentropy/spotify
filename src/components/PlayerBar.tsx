@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
@@ -45,7 +45,7 @@ function PlayerBar(): React.ReactElement | null {
   const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
   const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
 
-  const router = useRouter();
+  const navigate = useNavigate();
   const toggleLike = useLikesStore((state) => state.toggleLike);
   const likedLookup = useLikesStore((state) => state.likedSongIds);
   const pendingLookup = useLikesStore((state) => state.pending);
@@ -60,9 +60,9 @@ function PlayerBar(): React.ReactElement | null {
     if (!currentSongId || !likesHydrated || likePending) return;
     const result = await toggleLike(currentSongId, !songIsLiked);
     if (!result.ok && result.status === 401) {
-      router.push("/signin");
+      navigate("/signin");
     }
-  }, [currentSongId, likesHydrated, likePending, toggleLike, songIsLiked, router]);
+  }, [currentSongId, likesHydrated, likePending, toggleLike, songIsLiked, navigate]);
 
   // Dual audio elements for real crossfade
   const audioARef = useRef<HTMLAudioElement | null>(null);
@@ -130,7 +130,6 @@ function PlayerBar(): React.ReactElement | null {
       if (enabled !== crossfadeEnabled) setCrossfadeEnabled(enabled);
       if (secs !== crossfadeSeconds) setCrossfadeSeconds(secs);
     } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep mute state in sync on both elements
@@ -388,7 +387,6 @@ function PlayerBar(): React.ReactElement | null {
       isMounted = false;
       if (raf) cancelAnimationFrame(raf); 
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crossfadeEnabled, crossfadeSeconds, duration, isPlaying, repeatMode]);
 
   // Save queue/song and playback position right before page unload

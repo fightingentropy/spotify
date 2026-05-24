@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { SongGrid } from "@/components/SongGrid";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 
@@ -31,7 +31,7 @@ export function HomeNoServerLibrary() {
   return (
     <div className="opacity-70">
       No songs in your library yet.{" "}
-      <Link href="/settings" className="underline">
+      <Link to="/settings" className="underline">
         Set up a local folder in Settings
       </Link>{" "}
       or upload a track to get started.

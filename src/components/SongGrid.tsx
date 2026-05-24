@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useLocation, useNavigate } from "react-router-dom";
 import { LayoutGrid, Loader2, Rows3, X } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
@@ -76,8 +76,8 @@ export function SongGrid({
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [virtualRange, setVirtualRange] = useState({ start: 0, end: 0 });
-  const router = useRouter();
-  const pathname = usePathname();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
   const setQueue = usePlayerStore((state) => state.setQueue);
   const mergeInitial = useLikesStore((state) => state.mergeInitial);
   const toggleLike = useLikesStore((state) => state.toggleLike);
@@ -339,14 +339,14 @@ export function SongGrid({
 
   const handleToggleLike = useCallback(async (songId: string, nextLiked: boolean) => {
     if (!canLike) {
-      router.push("/signin");
+      navigate("/signin");
       return;
     }
     const result = await toggleLike(songId, nextLiked);
     if (!result.ok && result.status === 401) {
-      router.push("/signin");
+      navigate("/signin");
     }
-  }, [canLike, router, toggleLike]);
+  }, [canLike, navigate, toggleLike]);
 
   const openEditModal = useCallback((song: PlayerSong) => {
     setEditingSong(song);

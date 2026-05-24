@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
 import { Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
@@ -153,13 +152,11 @@ export function HomeSearchCommandPalette({ songs }: HomeSearchCommandPaletteProp
                 }`}
               >
                 <div className="relative h-10 w-10 rounded-md overflow-hidden shrink-0">
-                <Image
+                <img
                   src={normalizeCoverImageUrl(song.imageUrl)}
                   alt={song.title}
-                  fill
-                    sizes="40px"
-                    className="object-cover"
-                  />
+                  className="h-full w-full object-cover"
+                />
                 </div>
                 <div className="min-w-0">
                   <div className="text-sm font-medium truncate">{song.title}</div>

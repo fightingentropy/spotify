@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, useLocation } from "react-router-dom";
 import { Library, Search, Settings } from "lucide-react";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import { cn } from "@/lib/utils";
@@ -32,7 +31,7 @@ const tabs = [
 ] as const;
 
 export default function MobileNav() {
-  const pathname = usePathname();
+  const { pathname } = useLocation();
 
   return (
     <nav
@@ -46,7 +45,7 @@ export default function MobileNav() {
           return (
             <Link
               key={tab.href}
-              href={tab.href}
+              to={tab.href}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 min-h-[44px] touch-manipulation transition-colors",
                 active ? "text-[#1DB954]" : "text-foreground/60",

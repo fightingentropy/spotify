@@ -1,25 +1,26 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useSession, signOut } from "next-auth/react";
-import Link from "next/link";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, LogOut, Settings } from "lucide-react";
+import { useAuth } from "@/client/auth";
 
 export function AuthButtons() {
-  const { data: session, status } = useSession();
+  const { user, status, signOut } = useAuth();
+  const navigate = useNavigate();
 
   if (status === "loading") {
     return <div className="text-sm opacity-70">Checking auth…</div>;
   }
 
-  if (!session) {
+  if (!user) {
     return (
       <div className="flex items-center gap-2">
-        <Link className="underline" href="/signin">
+        <Link className="underline" to="/signin">
           Sign in
         </Link>
         <span className="opacity-60">/</span>
-        <Link className="underline" href="/register">
+        <Link className="underline" to="/register">
           Register
         </Link>
       </div>
@@ -28,8 +29,11 @@ export function AuthButtons() {
 
   return (
     <UserMenu
-      name={session.user?.name ?? session.user?.email ?? "Account"}
-      onSignOut={() => signOut({ callbackUrl: "/" })}
+      name={user.name ?? user.email ?? "Account"}
+      onSignOut={async () => {
+        await signOut();
+        navigate("/");
+      }}
     />
   );
 }
@@ -73,7 +77,7 @@ function UserMenu({ name, onSignOut }: { name: string; onSignOut: () => void }) 
           className="absolute right-0 mt-2 w-48 rounded-md border border-black/10 dark:border-white/10 bg-background shadow-lg z-50 overflow-hidden"
         >
           <Link
-            href="/settings"
+            to="/settings"
             className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-black/5 dark:hover:bg-white/5"
             role="menuitem"
             onClick={() => setOpen(false)}
@@ -94,4 +98,3 @@ function UserMenu({ name, onSignOut }: { name: string; onSignOut: () => void }) 
     </div>
   );
 }
-

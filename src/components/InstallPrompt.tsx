@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import { X } from "lucide-react";
 
 const DISMISS_KEY = "wf_ios_install_dismissed";
@@ -43,11 +42,9 @@ export default function InstallPrompt() {
     <div className="lg:hidden fixed top-[calc(3.5rem+env(safe-area-inset-top))] inset-x-3 z-[60] rounded-2xl border border-[#1DB954]/30 bg-[#1DB954]/10 backdrop-blur-lg p-4 shadow-lg">
       <div className="flex items-start gap-3">
         <div className="h-10 w-10 rounded-xl overflow-hidden shrink-0 shadow-sm">
-          <Image
+          <img
             src="/apple-icon.png"
             alt="Spotify icon"
-            width={40}
-            height={40}
             className="h-full w-full object-cover"
           />
         </div>

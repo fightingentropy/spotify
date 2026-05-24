@@ -1,22 +1,28 @@
-import nextVitals from "eslint-config-next/core-web-vitals";
-import nextTypescript from "eslint-config-next/typescript";
+import js from "@eslint/js";
+import tseslint from "typescript-eslint";
 
 const eslintConfig = [
   {
     ignores: [
-      "src/generated/**",
-      ".next/**",
-      ".open-next/**",
+      ".wrangler/**",
+      "dist/**",
       "node_modules/**",
       "cloudflare-env.d.ts",
+      "public/sw.js",
       "src/global-types.d.ts",
     ],
   },
-  ...nextVitals,
-  ...nextTypescript,
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
   {
     rules: {
-      "react-hooks/set-state-in-effect": "off",
+      "no-empty": "off",
+      "no-self-assign": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" },
+      ],
     },
   },
 ];

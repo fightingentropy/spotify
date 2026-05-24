@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Image from "next/image";
 import { Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
@@ -83,12 +82,10 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
               className="w-full min-h-[56px] px-2 rounded-xl flex items-center gap-3 text-left active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
             >
               <div className="relative h-12 w-12 rounded-md overflow-hidden shrink-0">
-                <Image
+                <img
                   src={normalizeCoverImageUrl(song.imageUrl)}
                   alt={song.title}
-                  fill
-                  sizes="48px"
-                  className="object-cover"
+                  className="h-full w-full object-cover"
                 />
               </div>
               <div className="min-w-0 flex-1">

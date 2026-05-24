@@ -13,7 +13,7 @@ import {
   SkipBack,
   SkipForward,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
@@ -67,7 +67,7 @@ export default function NowPlayingSheet({
   duration,
   onSeek,
 }: NowPlayingSheetProps) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const toggle = usePlayerStore((s) => s.toggle);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
@@ -162,7 +162,7 @@ export default function NowPlayingSheet({
     if (!likesHydrated || likePending) return;
     const result = await toggleLike(song.id, !songIsLiked);
     if (!result.ok && result.status === 401) {
-      router.push("/signin");
+      navigate("/signin");
     }
   }
 
