@@ -10,6 +10,8 @@ import {
   isDownloadProvider,
   type DownloadProvider,
 } from "@/components/DownloadQualitySettings";
+import { readSpotifyCookie, writeSpotifyCookie } from "@/components/SpotifyCookieSettings";
+import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 import { convertAudioFile, getSupportedFormats, getExtensionForFormat } from "@/lib/audio-converter";
 
@@ -42,6 +44,14 @@ type BatchInfo = {
   trackCount: number;
   format: OutputFormat;
   trackIds: string[];
+};
+type BatchProgress = {
+  current: number;
+  total: number;
+  currentTrack: string;
+  succeeded: number;
+  skipped: number;
+  failed: number;
 };
 type ShareFilesPayload = {
   files: File[];
@@ -149,6 +159,14 @@ function triggerBrowserDownloads(files: File[]) {
   }
 }
 
+function normalizeTrackKey(title: string, artist: string): string {
+  return `${artist} - ${title}`.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function isBrowserSaveDismissed(errorValue: unknown): boolean {
   return (
     errorValue instanceof DOMException &&
@@ -163,6 +181,7 @@ export default function UploadPage() {
   const localFolderPickerKind = useBrowserLocalLibraryStore((state) => state.folderPickerKind);
   const localFolderWritable = useBrowserLocalLibraryStore((state) => state.writable);
   const localSongsCount = useBrowserLocalLibraryStore((state) => state.songs.length);
+  const localSongs = useBrowserLocalLibraryStore((state) => state.songs);
   const saveDownloadedTrack = useBrowserLocalLibraryStore((state) => state.saveDownloadedTrack);
   const [mode, setMode] = useState<"upload" | "spotify">("spotify");
   const [title, setTitle] = useState("");
@@ -188,6 +207,12 @@ export default function UploadPage() {
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [batchInfo, setBatchInfo] = useState<BatchInfo | null>(null);
   const [batchStatus, setBatchStatus] = useState<ActionStatus>("idle");
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [batchFailures, setBatchFailures] = useState<string[]>([]);
+  const autoStartRef = useRef<"fetch" | "download" | null>(null);
+  const [autoDownloadPending, setAutoDownloadPending] = useState(false);
+  const autoDownloadStartedRef = useRef(false);
+  const batchDownloadRunnerRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -204,6 +229,65 @@ export default function UploadPage() {
       const storedProvider = localStorage.getItem(DOWNLOAD_PROVIDER_KEY);
       if (storedProvider && isDownloadProvider(storedProvider)) setDownloadProvider(storedProvider);
     } catch {}
+
+    const params = new URLSearchParams(window.location.search);
+    const cookieParam = params.get("spotifyCookie");
+    const urlParam = params.get("url");
+    const autostart = params.get("autostart") === "1";
+    if (cookieParam) writeSpotifyCookie(cookieParam);
+    if (urlParam) setSpotifyUrl(decodeURIComponent(urlParam));
+    if (autostart && urlParam) {
+      autoStartRef.current = "download";
+      window.history.replaceState({}, "", "/upload");
+    } else if (urlParam) {
+      autoStartRef.current = "fetch";
+      window.history.replaceState({}, "", "/upload");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (status === "loading" || !user) return;
+    const pending = autoStartRef.current;
+    if (!pending || !spotifyUrl.trim()) return;
+    autoStartRef.current = null;
+    if (pending === "download") setAutoDownloadPending(true);
+
+    void (async () => {
+      setError(null);
+      setNotice(null);
+      setFetchStatus("loading");
+      setBatchStatus("idle");
+      setBatchProgress(null);
+      setBatchFailures([]);
+      setBatchInfo(null);
+
+      const url = spotifyUrl.trim();
+      try {
+        const cookie = readSpotifyCookie();
+        const clientBatch = await resolveSpotifyBatchOnClient(url, cookie, outputFormat);
+        setBatchInfo(clientBatch);
+        setFetchStatus("success");
+        setNotice(`Found ${clientBatch.trackCount} tracks from Spotify.`);
+      } catch (err) {
+        setFetchStatus("error");
+        setError(err instanceof Error ? err.message : "Failed to fetch batch info");
+      }
+    })();
+  }, [user, status, spotifyUrl, outputFormat]);
+
+  useEffect(() => {
+    if (!batchInfo || !autoDownloadPending || autoDownloadStartedRef.current) return;
+    autoDownloadStartedRef.current = true;
+    setAutoDownloadPending(false);
+    window.dispatchEvent(new CustomEvent("spotify-start-batch-download"));
+  }, [batchInfo, autoDownloadPending]);
+
+  useEffect(() => {
+    const handler = () => {
+      void batchDownloadRunnerRef.current();
+    };
+    window.addEventListener("spotify-start-batch-download", handler);
+    return () => window.removeEventListener("spotify-start-batch-download", handler);
   }, []);
 
   if (status === "loading") return <div className="max-w-md mx-auto py-16 px-4">Loading...</div>;
@@ -249,6 +333,8 @@ export default function UploadPage() {
     setFetchStatus("loading");
     setDownloadStatus("idle");
     setBatchStatus("idle");
+    setBatchProgress(null);
+    setBatchFailures([]);
     setSpotifyTrack(null);
     setBatchInfo(null);
     setLyricsText("");
@@ -259,26 +345,39 @@ export default function UploadPage() {
 
     // Detect if this is a batch URL (album/playlist)
     const url = spotifyUrl.trim();
-    const isBatch = url.includes("/album/") || url.includes("/playlist/");
+    const isBatch = url.includes("/album/") || url.includes("/playlist/") || url.includes("/collection/");
 
     if (isBatch) {
-      // Handle batch processing
       try {
-        const res = await fetch("/api/songs/spotify/batch", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            spotifyUrl: url,
-            region,
-            outputFormat,
-            qualityProfile
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.error ?? "Failed to fetch batch info");
-        setBatchInfo(data.batchInfo);
-        setFetchStatus("success");
+        const cookie = readSpotifyCookie();
+        try {
+          const clientBatch = await resolveSpotifyBatchOnClient(url, cookie, outputFormat);
+          setBatchInfo(clientBatch);
+          setFetchStatus("success");
+          setNotice(`Found ${clientBatch.trackCount} tracks from Spotify.`);
+          return;
+        } catch (clientError) {
+          const res = await fetch("/api/songs/spotify/batch", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              spotifyUrl: url,
+              region,
+              outputFormat,
+              qualityProfile,
+              spotifyCookie: cookie,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw clientError instanceof Error
+              ? clientError
+              : new Error(data?.error ?? "Failed to fetch batch info");
+          }
+          setBatchInfo(data.batchInfo);
+          setFetchStatus("success");
+        }
       } catch (err) {
         setFetchStatus("error");
         setError(err instanceof Error ? err.message : "Failed to fetch batch info");
@@ -303,22 +402,379 @@ export default function UploadPage() {
     }
   }
 
+  async function fetchSpotifyTrackById(trackId: string): Promise<SpotifyTrack> {
+    const res = await fetch("/api/songs/spotify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        action: "fetch",
+        spotifyUrl: `https://open.spotify.com/track/${trackId}`,
+        region,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error ?? "Failed to fetch Spotify track");
+    if (!data.track) throw new Error("Spotify track metadata missing");
+    return data.track as SpotifyTrack;
+  }
+
+  async function fetchLyricsForTrack(track: SpotifyTrack, trackUrl: string): Promise<string> {
+    try {
+      const res = await fetch("/api/songs/spotify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          action: "lyrics",
+          spotifyUrl: trackUrl,
+          title: track.title,
+          artist: track.artist,
+          region,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return "";
+      return typeof data.lyrics === "string" ? data.lyrics.trim() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function buildDownloadPayloadForTrack(
+    track: SpotifyTrack,
+    trackUrl: string,
+    lyricsToInclude = "",
+  ): Record<string, string> {
+    const payload: Record<string, string> = {
+      mode: "spotify",
+      spotifyUrl: trackUrl,
+      region,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      durationMs: String(track.durationMs || ""),
+      imageUrl: track.imageUrl,
+      qualityProfile,
+    };
+    if (downloadProvider !== "auto") payload.service = downloadProvider;
+    if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
+    return payload;
+  }
+
+  async function fetchSpotifyAudioBlobForTrack(
+    track: SpotifyTrack,
+    payload: Record<string, string>,
+  ) {
+    const res = await fetch("/api/songs/spotify/file", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error ?? "Failed to download audio");
+    }
+    const blob = await res.blob();
+    const fallback = `${track.artist || "Unknown Artist"} - ${track.title || "Track"}${extensionFromContentType(blob.type, ".flac")}`;
+    return {
+      blob,
+      fileName: filenameFromContentDisposition(res.headers.get("content-disposition"), fallback),
+    };
+  }
+
+  async function fetchSpotifyCoverBlobForTrack(track: SpotifyTrack) {
+    if (!track.imageUrl) return null;
+    const res = await fetch(
+      `/api/songs/spotify/cover?url=${encodeURIComponent(track.imageUrl)}&filename=${encodeURIComponent(`${track.title} cover`)}`,
+      { credentials: "include" },
+    );
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return {
+      blob,
+      fileName: filenameFromContentDisposition(
+        res.headers.get("content-disposition"),
+        `cover${extensionFromContentType(blob.type, ".jpg")}`,
+      ),
+    };
+  }
+
+  async function saveTrackToLocalFolder(
+    track: SpotifyTrack,
+    trackUrl: string,
+    lyricsToInclude: string,
+  ) {
+    const payload = buildDownloadPayloadForTrack(track, trackUrl, lyricsToInclude);
+    const [audio, cover] = await Promise.all([
+      fetchSpotifyAudioBlobForTrack(track, payload),
+      fetchSpotifyCoverBlobForTrack(track).catch(() => null),
+    ]);
+    await saveDownloadedTrack({
+      title: track.title,
+      artist: track.artist,
+      audioBlob: audio.blob,
+      audioFileName: audio.fileName,
+      coverBlob: cover?.blob ?? null,
+      coverFileName: cover?.fileName,
+      lyricsText: lyricsToInclude,
+    });
+  }
+
+  async function buildBrowserSaveForTrack(
+    track: SpotifyTrack,
+    trackUrl: string,
+    lyricsToInclude: string,
+  ): Promise<PreparedBrowserSave> {
+    const payload = buildDownloadPayloadForTrack(track, trackUrl, lyricsToInclude);
+    const [audio, cover] = await Promise.all([
+      fetchSpotifyAudioBlobForTrack(track, payload),
+      fetchSpotifyCoverBlobForTrack(track).catch(() => null),
+    ]);
+
+    let processedAudioBlob = audio.blob;
+    let audioExt = extensionFromFileName(
+      audio.fileName,
+      extensionFromContentType(audio.blob.type, ".flac"),
+    );
+
+    if (outputFormat !== "flac" && getSupportedFormats().includes(outputFormat)) {
+      try {
+        const audioBuffer = await audio.blob.arrayBuffer();
+        processedAudioBlob = await convertAudioFile(audioBuffer, {
+          format: outputFormat,
+          quality: 0.9,
+          bitRate: outputFormat === "mp3" ? 320 : undefined,
+        });
+        audioExt = getExtensionForFormat(outputFormat);
+      } catch (conversionError) {
+        console.warn("Audio conversion failed, using original format:", conversionError);
+      }
+    }
+
+    const audioStem = sanitizeDownloadSegment(`${track.artist} - ${track.title}`);
+    const audioFileName = `${audioStem}${audioExt}`;
+    const files = [createDownloadFile(processedAudioBlob, audioFileName)];
+    let coverFileName: string | undefined;
+    let lyricsFileName: string | undefined;
+
+    if (cover?.blob) {
+      const coverExt = extensionFromFileName(
+        cover.fileName,
+        extensionFromContentType(cover.blob.type, ".jpg"),
+      );
+      coverFileName = `${audioStem}.cover${coverExt}`;
+      files.push(createDownloadFile(cover.blob, coverFileName));
+    }
+
+    if (lyricsToInclude.trim()) {
+      lyricsFileName = `${audioStem}.lrc`;
+      files.push(
+        createDownloadFile(
+          new Blob([lyricsToInclude.trim()], { type: "text/plain;charset=utf-8" }),
+          lyricsFileName,
+          "text/plain;charset=utf-8",
+        ),
+      );
+    }
+
+    const sidecar = {
+      version: 1,
+      title: track.title,
+      artist: track.artist,
+      coverFile: coverFileName,
+      lyricsFile: lyricsFileName,
+      updatedAt: new Date().toISOString(),
+    };
+    files.push(
+      createDownloadFile(
+        new Blob([`${JSON.stringify(sidecar, null, 2)}\n`], { type: "application/json" }),
+        `${stemFromFileName(audioFileName)}.spotify.json`,
+        "application/json",
+      ),
+    );
+
+    return {
+      files,
+      trackTitle: track.title,
+      trackArtist: track.artist,
+    };
+  }
+
+  async function submitTrackImport(
+    track: SpotifyTrack,
+    trackUrl: string,
+    lyricsToInclude: string,
+    replaceExisting = false,
+  ) {
+    const payload: Record<string, string> = {
+      mode: "spotify",
+      spotifyUrl: trackUrl,
+      region,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      durationMs: String(track.durationMs || ""),
+      imageUrl: track.imageUrl,
+      qualityProfile,
+    };
+    if (downloadProvider !== "auto") payload.service = downloadProvider;
+    if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
+    if (replaceExisting) payload.replaceExisting = "true";
+    const res = await fetch("/api/songs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 409 && data?.code === "DUPLICATE_SONG") {
+      return "skipped" as const;
+    }
+    if (!res.ok) throw new Error(data?.error ?? "Failed to add song from Spotify");
+    return "imported" as const;
+  }
+
+  function isTrackAlreadyLocal(track: SpotifyTrack, knownKeys: Set<string>) {
+    return knownKeys.has(normalizeTrackKey(track.title, track.artist));
+  }
+
   async function handleBatchDownload() {
     if (!batchInfo) return;
     setError(null);
     setNotice(null);
+    setBatchFailures([]);
     setBatchStatus("loading");
 
+    const total = batchInfo.trackIds.length;
+    const knownKeys = new Set(
+      localSongs.map((song) => normalizeTrackKey(song.title, song.artist)),
+    );
+    const failures: string[] = [];
+    let succeeded = 0;
+    let skipped = 0;
+    let failed = 0;
+    const saveLocally = shouldSaveToLocalFolder();
+    const saveViaBrowserDownloads = hasReadOnlyPickedFolder();
+
+    setBatchProgress({
+      current: 0,
+      total,
+      currentTrack: "",
+      succeeded: 0,
+      skipped: 0,
+      failed: 0,
+    });
+
     try {
-      // TODO: Implement actual batch download logic
-      // This would involve downloading each track in the batch
-      setNotice(`Starting batch download of ${batchInfo.trackCount} tracks...`);
-      setBatchStatus("success");
+      for (let index = 0; index < batchInfo.trackIds.length; index += 1) {
+        const trackId = batchInfo.trackIds[index];
+        const trackUrl = `https://open.spotify.com/track/${trackId}`;
+        let track: SpotifyTrack;
+
+        try {
+          track = await fetchSpotifyTrackById(trackId);
+        } catch (err) {
+          failed += 1;
+          failures.push(
+            `${trackId}: ${err instanceof Error ? err.message : "Failed to fetch track metadata"}`,
+          );
+          setBatchProgress({
+            current: index + 1,
+            total,
+            currentTrack: trackId,
+            succeeded,
+            skipped,
+            failed,
+          });
+          await delay(400);
+          continue;
+        }
+
+        setBatchProgress({
+          current: index + 1,
+          total,
+          currentTrack: `${track.artist} - ${track.title}`,
+          succeeded,
+          skipped,
+          failed,
+        });
+
+        if (isTrackAlreadyLocal(track, knownKeys)) {
+          skipped += 1;
+          setBatchProgress({
+            current: index + 1,
+            total,
+            currentTrack: `${track.artist} - ${track.title}`,
+            succeeded,
+            skipped,
+            failed,
+          });
+          await delay(200);
+          continue;
+        }
+
+        try {
+          const lyrics = await fetchLyricsForTrack(track, trackUrl);
+          if (saveLocally) {
+            await saveTrackToLocalFolder(track, trackUrl, lyrics);
+          } else if (saveViaBrowserDownloads) {
+            const prepared = await buildBrowserSaveForTrack(track, trackUrl, lyrics);
+            triggerBrowserDownloads(
+              prepared.files.filter((file) => !file.name.endsWith(".spotify.json")),
+            );
+          } else {
+            const result = await submitTrackImport(track, trackUrl, lyrics);
+            if (result === "skipped") {
+              skipped += 1;
+              knownKeys.add(normalizeTrackKey(track.title, track.artist));
+              setBatchProgress({
+                current: index + 1,
+                total,
+                currentTrack: `${track.artist} - ${track.title}`,
+                succeeded,
+                skipped,
+                failed,
+              });
+              await delay(400);
+              continue;
+            }
+          }
+          knownKeys.add(normalizeTrackKey(track.title, track.artist));
+          succeeded += 1;
+        } catch (err) {
+          failed += 1;
+          failures.push(
+            `${track.artist} - ${track.title}: ${err instanceof Error ? err.message : "Download failed"}`,
+          );
+        }
+
+        setBatchProgress({
+          current: index + 1,
+          total,
+          currentTrack: `${track.artist} - ${track.title}`,
+          succeeded,
+          skipped,
+          failed,
+        });
+        await delay(500);
+      }
+
+      setBatchFailures(failures);
+      setBatchStatus(failed > 0 && succeeded === 0 ? "error" : "success");
+      setNotice(
+        `Batch complete: ${succeeded} downloaded, ${skipped} skipped, ${failed} failed out of ${total} tracks.`,
+      );
+      if (failures.length > 0) {
+        setError(failures.slice(0, 3).join(" · "));
+      }
     } catch (err) {
       setBatchStatus("error");
       setError(err instanceof Error ? err.message : "Batch download failed");
     }
   }
+  batchDownloadRunnerRef.current = handleBatchDownload;
 
   async function handlePreviewToggle() {
     if (!spotifyTrack) return;
@@ -750,7 +1206,7 @@ export default function UploadPage() {
       ) : (
         <div className="space-y-5">
           <div className="flex flex-col md:flex-row gap-3">
-            <input value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="https://open.spotify.com/track/..." />
+            <input value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="Spotify playlist, album, or Liked Songs URL" />
             <select value={region} onChange={(e) => setRegion(e.target.value.toUpperCase())} className="w-full md:w-24 border border-white/25 rounded-2xl px-3 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50">
               <option value="US">US</option>
               <option value="GB">GB</option>
@@ -851,6 +1307,41 @@ export default function UploadPage() {
                   <ActionIcon status={batchStatus} />
                 </button>
               </div>
+              {batchProgress && (
+                <div className="mt-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-foreground/70 truncate pr-3">
+                      {batchProgress.currentTrack || "Starting..."}
+                    </span>
+                    <span className="shrink-0 tabular-nums">
+                      {batchProgress.current}/{batchProgress.total}
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full bg-yellow-500 transition-all duration-300"
+                      style={{
+                        width: `${batchProgress.total > 0 ? (batchProgress.current / batchProgress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-xs text-foreground/60">
+                    {batchProgress.succeeded} downloaded · {batchProgress.skipped} skipped · {batchProgress.failed} failed
+                  </div>
+                </div>
+              )}
+              {batchFailures.length > 0 && (
+                <details className="mt-4 text-sm">
+                  <summary className="cursor-pointer text-red-400">
+                    {batchFailures.length} track{batchFailures.length === 1 ? "" : "s"} failed
+                  </summary>
+                  <ul className="mt-2 space-y-1 text-foreground/70 max-h-40 overflow-y-auto">
+                    {batchFailures.map((failure) => (
+                      <li key={failure}>{failure}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
               {notice && <div className="text-sm text-green-500 mt-4">{notice}</div>}
             </div>
           )}

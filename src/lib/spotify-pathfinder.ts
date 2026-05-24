@@ -1,0 +1,448 @@
+const SPOTIFY_TOKEN_URL = "https://open.spotify.com/api/token";
+const SPOTIFY_SERVER_TIME_URL = "https://open.spotify.com/api/server-time";
+const SPOTIFY_PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v1/query";
+const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+const PAGE_SIZE = 100;
+const TOKEN_PRODUCT_TYPE = "web-player";
+const TOKEN_TOTP_PERIOD_SECONDS = 30;
+const TOKEN_TOTP_DIGITS = 6;
+const TOKEN_TOTP_ALGORITHM = "SHA-1";
+
+const PATHFINDER_QUERIES = {
+  fetchPlaylistContents: "c56c706a062f82052d87fdaeeb300a258d2d54153222ef360682a0ee625284d9",
+  fetchPlaylistMetadata: "6f7fef1ef9760ba77aeb68d8153d458eeec2dce3430cef02b5f094a8ef9a465d",
+  fetchLibraryTracks: "8474ec383b530ce3e54611fca2d8e3da57ef5612877838b8dbf00bd9fc692dfb",
+  getAlbum: "46ae954ef2d2fe7732b4b2b4022157b2e18b7ea84f70591ceb164e4de1b5d5d3",
+} as const;
+
+const TOKEN_TOTP_SECRETS = [
+  { secret: ',7/*F("rLJ2oxaKL^f+E1xvP@N', version: 61 },
+  { secret: 'OmE{ZA.J^":0FG\\Uz?[@WW', version: 60 },
+  { secret: "{iOFn;4}<1PFYKPV?5{%u14]M>/V0hDH", version: 59 },
+] as const;
+
+export class SpotifyPathfinderError extends Error {
+  status: number;
+
+  constructor(message: string, status = 502) {
+    super(message);
+    this.status = status;
+  }
+}
+
+export type SpotifyBatchTrack = {
+  id: string;
+  name: string;
+  artists: string[];
+};
+
+type SpotifyAccessTokenCache = {
+  accessToken: string;
+  expiresAtMs: number;
+  cookieKey: string;
+};
+
+let tokenCache: SpotifyAccessTokenCache | null = null;
+
+function toObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function toStringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeCookie(cookie?: string): string {
+  const trimmed = toStringValue(cookie);
+  if (!trimmed) return "";
+  return trimmed.includes("=") ? trimmed : `sp_dc=${trimmed}`;
+}
+
+function cookieKey(cookie?: string): string {
+  return normalizeCookie(cookie) || "__anonymous__";
+}
+
+function tokenSecretBytes(secret: string): Uint8Array {
+  const decoded = secret
+    .split("")
+    .map((char, index) => char.charCodeAt(0) ^ ((index % 33) + 9))
+    .join("");
+  return new TextEncoder().encode(decoded);
+}
+
+function hotpMessage(counter: number): Uint8Array {
+  const message = new Uint8Array(8);
+  const high = Math.floor(counter / 0x100000000);
+  const low = counter >>> 0;
+  message[0] = (high >>> 24) & 0xff;
+  message[1] = (high >>> 16) & 0xff;
+  message[2] = (high >>> 8) & 0xff;
+  message[3] = high & 0xff;
+  message[4] = (low >>> 24) & 0xff;
+  message[5] = (low >>> 16) & 0xff;
+  message[6] = (low >>> 8) & 0xff;
+  message[7] = low & 0xff;
+  return message;
+}
+
+async function hmacSha1(secret: Uint8Array, message: Uint8Array): Promise<Uint8Array> {
+  const secretBuffer = new ArrayBuffer(secret.byteLength);
+  new Uint8Array(secretBuffer).set(secret);
+  const messageBuffer = new ArrayBuffer(message.byteLength);
+  new Uint8Array(messageBuffer).set(message);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBuffer,
+    { name: "HMAC", hash: TOKEN_TOTP_ALGORITHM },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, messageBuffer));
+}
+
+async function generateTotp(secret: Uint8Array, timestampMs: number): Promise<string> {
+  const counter = Math.floor(timestampMs / 1000 / TOKEN_TOTP_PERIOD_SECONDS);
+  const digest = await hmacSha1(secret, hotpMessage(counter));
+  const offset = digest[digest.length - 1] & 0xf;
+  const code =
+    ((digest[offset] & 0x7f) << 24) |
+    ((digest[offset + 1] & 0xff) << 16) |
+    ((digest[offset + 2] & 0xff) << 8) |
+    (digest[offset + 3] & 0xff);
+  return String(code % 10 ** TOKEN_TOTP_DIGITS).padStart(TOKEN_TOTP_DIGITS, "0");
+}
+
+async function fetchSpotifyServerTime(): Promise<number | null> {
+  const response = await fetch(SPOTIFY_SERVER_TIME_URL, {
+    headers: {
+      accept: "application/json",
+    },
+  }).catch(() => null);
+  if (!response?.ok) return null;
+  const payload = toObject(await response.json().catch(() => null));
+  const serverTime = Number(payload?.serverTime);
+  return Number.isFinite(serverTime) ? serverTime : null;
+}
+
+async function tokenQueryParams(reason: string, productType: string): Promise<URLSearchParams> {
+  const { secret, version } = TOKEN_TOTP_SECRETS[0];
+  const secretBytes = tokenSecretBytes(secret);
+  const serverTime = await fetchSpotifyServerTime();
+  return new URLSearchParams({
+    reason,
+    productType,
+    totp: await generateTotp(secretBytes, Date.now()),
+    totpServer: serverTime === null ? "unavailable" : await generateTotp(secretBytes, serverTime * 1000),
+    totpVer: String(version),
+  });
+}
+
+function parseTrackIdFromUri(uri: string): string | null {
+  const match = uri.match(/^spotify:track:([A-Za-z0-9]{22})$/);
+  return match?.[1] ?? null;
+}
+
+function trackFromPathfinderItem(item: unknown): SpotifyBatchTrack | null {
+  const root = toObject(item);
+  const itemV2 = toObject(root?.itemV2);
+  const data = toObject(itemV2?.data);
+  const uri = toStringValue(data?.uri);
+  const id = parseTrackIdFromUri(uri);
+  if (!id) return null;
+
+  const artistsValue = toObject(data?.artists);
+  const artistItems = Array.isArray(artistsValue?.items) ? artistsValue.items : [];
+  const artists = artistItems
+    .map((entry) => toStringValue(toObject(toObject(entry)?.profile)?.name))
+    .filter(Boolean);
+
+  const albumValue = toObject(data?.albumOfTrack);
+  if (artists.length === 0) {
+    const albumArtists = toObject(albumValue?.artists);
+    const albumArtistItems = Array.isArray(albumArtists?.items) ? albumArtists.items : [];
+    for (const entry of albumArtistItems) {
+      const name = toStringValue(toObject(toObject(entry)?.profile)?.name);
+      if (name) artists.push(name);
+    }
+  }
+
+  return {
+    id,
+    name: toStringValue(data?.name) || "Unknown Track",
+    artists: artists.length > 0 ? artists : ["Unknown Artist"],
+  };
+}
+
+function trackFromLibraryItem(item: unknown): SpotifyBatchTrack | null {
+  const root = toObject(item);
+  const trackWrapper = toObject(root?.track);
+  const data = toObject(trackWrapper?.data);
+  if (!data) return null;
+
+  const uri = toStringValue(trackWrapper?._uri) || toStringValue(data?.uri);
+  const id = parseTrackIdFromUri(uri);
+  if (!id) return null;
+
+  const artistsValue = toObject(data?.artists);
+  const artistItems = Array.isArray(artistsValue?.items) ? artistsValue.items : [];
+  const artists = artistItems
+    .map((entry) => toStringValue(toObject(toObject(entry)?.profile)?.name))
+    .filter(Boolean);
+
+  const albumValue = toObject(data?.albumOfTrack);
+  if (artists.length === 0) {
+    const albumArtists = toObject(albumValue?.artists);
+    const albumArtistItems = Array.isArray(albumArtists?.items) ? albumArtists.items : [];
+    for (const entry of albumArtistItems) {
+      const name = toStringValue(toObject(toObject(entry)?.profile)?.name);
+      if (name) artists.push(name);
+    }
+  }
+
+  return {
+    id,
+    name: toStringValue(data?.name) || "Unknown Track",
+    artists: artists.length > 0 ? artists : ["Unknown Artist"],
+  };
+}
+
+async function fetchSpotifyAccessToken(spotifyCookie?: string): Promise<string> {
+  const key = cookieKey(spotifyCookie);
+  if (tokenCache && tokenCache.cookieKey === key && tokenCache.expiresAtMs > Date.now()) {
+    return tokenCache.accessToken;
+  }
+
+  const headers: Record<string, string> = {
+    "user-agent": DEFAULT_USER_AGENT,
+    "app-platform": "WebPlayer",
+    accept: "application/json",
+    referer: "https://open.spotify.com/",
+  };
+  const cookie = normalizeCookie(spotifyCookie);
+  if (cookie) headers.cookie = cookie;
+
+  const tokenUrl = `${SPOTIFY_TOKEN_URL}?${(await tokenQueryParams("transport", TOKEN_PRODUCT_TYPE)).toString()}`;
+  const response = await fetch(tokenUrl, {
+    headers,
+    credentials: "include",
+  }).catch(() => null);
+  if (!response?.ok) {
+    throw new SpotifyPathfinderError(
+      cookie
+        ? "Could not authenticate with Spotify. Check your sp_dc cookie in Settings."
+        : "Could not reach Spotify. For private playlists or Liked Songs, add your sp_dc cookie in Settings.",
+      response?.status === 403 ? 403 : 502,
+    );
+  }
+
+  const payload = toObject(await response.json().catch(() => null));
+  const accessToken = toStringValue(payload?.accessToken);
+  const expiresAtMs = Number(payload?.accessTokenExpirationTimestampMs);
+  if (!accessToken) {
+    throw new SpotifyPathfinderError("Spotify returned an empty access token", 502);
+  }
+
+  tokenCache = {
+    accessToken,
+    expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : Date.now() + 3_600_000,
+    cookieKey: key,
+  };
+  return accessToken;
+}
+
+async function pathfinderQuery(
+  operationName: string,
+  variables: Record<string, unknown>,
+  hash: string,
+  spotifyCookie?: string,
+): Promise<Record<string, unknown>> {
+  const accessToken = await fetchSpotifyAccessToken(spotifyCookie);
+  const params = new URLSearchParams({
+    operationName,
+    variables: JSON.stringify(variables),
+    extensions: JSON.stringify({
+      persistedQuery: { version: 1, sha256Hash: hash },
+    }),
+  });
+
+  const response = await fetch(`${SPOTIFY_PATHFINDER_URL}?${params.toString()}`, {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "user-agent": DEFAULT_USER_AGENT,
+      accept: "application/json",
+    },
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    throw new SpotifyPathfinderError(`Spotify pathfinder returned ${response?.status ?? "unknown"}`, 502);
+  }
+
+  const payload = toObject(await response.json().catch(() => null));
+  if (!payload) throw new SpotifyPathfinderError("Spotify pathfinder returned invalid JSON", 502);
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    const message = payload.errors
+      .map((entry) => toStringValue(toObject(entry)?.message))
+      .filter(Boolean)
+      .join(" | ");
+    throw new SpotifyPathfinderError(message || "Spotify pathfinder query failed", 502);
+  }
+  return payload;
+}
+
+async function fetchPaginatedTracks(options: {
+  fetchPage: (offset: number, limit: number) => Promise<{ items: unknown[]; totalCount: number }>;
+  maxTracks?: number;
+}): Promise<SpotifyBatchTrack[]> {
+  const maxTracks = options.maxTracks ?? 10_000;
+  const seen = new Set<string>();
+  const tracks: SpotifyBatchTrack[] = [];
+  let offset = 0;
+  let totalCount = Number.POSITIVE_INFINITY;
+
+  while (offset < totalCount && tracks.length < maxTracks) {
+    const page = await options.fetchPage(offset, PAGE_SIZE);
+    totalCount = Number.isFinite(page.totalCount) ? page.totalCount : totalCount;
+    if (page.items.length === 0) break;
+
+    for (const item of page.items) {
+      const track = trackFromPathfinderItem(item) ?? trackFromLibraryItem(item);
+      if (!track || seen.has(track.id)) continue;
+      seen.add(track.id);
+      tracks.push(track);
+      if (tracks.length >= maxTracks) break;
+    }
+
+    offset += PAGE_SIZE;
+    if (page.items.length < PAGE_SIZE) break;
+  }
+
+  return tracks;
+}
+
+export async function fetchSpotifyPlaylistTracks(
+  playlistId: string,
+  spotifyCookie?: string,
+  maxTracks = 10_000,
+): Promise<{ title: string; tracks: SpotifyBatchTrack[] }> {
+  const metadata = await pathfinderQuery(
+    "fetchPlaylistMetadata",
+    { uri: `spotify:playlist:${playlistId}`, offset: 0, limit: 1 },
+    PATHFINDER_QUERIES.fetchPlaylistMetadata,
+    spotifyCookie,
+  );
+  const playlistMeta = toObject(toObject(toObject(metadata.data)?.playlistV2));
+  const title = toStringValue(playlistMeta?.name) || "Playlist";
+
+  const tracks = await fetchPaginatedTracks({
+    maxTracks,
+    fetchPage: async (offset, limit) => {
+      const payload = await pathfinderQuery(
+        "fetchPlaylistContents",
+        { uri: `spotify:playlist:${playlistId}`, offset, limit },
+        PATHFINDER_QUERIES.fetchPlaylistContents,
+        spotifyCookie,
+      );
+      const content = toObject(toObject(toObject(payload.data)?.playlistV2)?.content);
+      const items = Array.isArray(content?.items) ? content.items : [];
+      return {
+        items,
+        totalCount: Number(content?.totalCount ?? items.length),
+      };
+    },
+  });
+
+  return { title, tracks };
+}
+
+export async function fetchSpotifyLikedTracks(
+  spotifyCookie: string,
+  maxTracks = 10_000,
+): Promise<{ title: string; tracks: SpotifyBatchTrack[] }> {
+  const cookie = normalizeCookie(spotifyCookie);
+  if (!cookie) {
+    throw new SpotifyPathfinderError(
+      "Liked Songs requires your Spotify sp_dc cookie. Add it in Settings.",
+      400,
+    );
+  }
+
+  const tracks = await fetchPaginatedTracks({
+    maxTracks,
+    fetchPage: async (offset, limit) => {
+      const payload = await pathfinderQuery(
+        "fetchLibraryTracks",
+        { offset, limit },
+        PATHFINDER_QUERIES.fetchLibraryTracks,
+        cookie,
+      );
+      const me = toObject(toObject(payload.data)?.me);
+      const tracksRoot = toObject(toObject(me?.library)?.tracks);
+      const items = Array.isArray(tracksRoot?.items) ? tracksRoot.items : [];
+      return {
+        items,
+        totalCount: Number(tracksRoot?.totalCount ?? items.length),
+      };
+    },
+  });
+
+  return { title: "Liked Songs", tracks };
+}
+
+export async function fetchSpotifyAlbumTracks(
+  albumId: string,
+  spotifyCookie?: string,
+  maxTracks = 500,
+): Promise<{ title: string; artist: string; tracks: SpotifyBatchTrack[] }> {
+  const payload = await pathfinderQuery(
+    "getAlbum",
+    { uri: `spotify:album:${albumId}`, locale: "", offset: 0, limit: maxTracks },
+    PATHFINDER_QUERIES.getAlbum,
+    spotifyCookie,
+  );
+  const album = toObject(toObject(payload.data)?.albumUnion) ?? toObject(toObject(payload.data)?.album);
+  const title = toStringValue(album?.name) || "Unknown Album";
+  const artistsValue = toObject(album?.artists);
+  const artistItems = Array.isArray(artistsValue?.items) ? artistsValue.items : [];
+  const artist =
+    toStringValue(toObject(artistItems[0]?.profile)?.name) ||
+    toStringValue(toObject(artistItems[0])?.name) ||
+    "Unknown Artist";
+
+  const tracksRoot = toObject(album?.tracks);
+  const items = Array.isArray(tracksRoot?.items) ? tracksRoot.items : [];
+  const seen = new Set<string>();
+  const tracks: SpotifyBatchTrack[] = [];
+
+  for (const item of items) {
+    const data = toObject(item);
+    const uri = toStringValue(data?.uri);
+    const id = parseTrackIdFromUri(uri) || toStringValue(data?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const trackArtistsValue = toObject(data?.artists);
+    const trackArtistItems = Array.isArray(trackArtistsValue?.items) ? trackArtistsValue.items : [];
+    const trackArtists = trackArtistItems
+      .map((entry) => toStringValue(toObject(toObject(entry)?.profile)?.name))
+      .filter(Boolean);
+    tracks.push({
+      id,
+      name: toStringValue(data?.name) || "Unknown Track",
+      artists: trackArtists.length > 0 ? trackArtists : [artist],
+    });
+  }
+
+  return { title, artist, tracks };
+}
+
+export function scrapeSpotifyTrackIdsFromHtml(html: string): string[] {
+  const seen = new Set<string>();
+  const trackIds: string[] = [];
+  for (const match of html.matchAll(/spotify:track:([A-Za-z0-9]{22})/g)) {
+    if (seen.has(match[1])) continue;
+    seen.add(match[1]);
+    trackIds.push(match[1]);
+  }
+  return trackIds;
+}

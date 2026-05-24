@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "upload": "vite build && wrangler deploy --dry-run",
+    "download:liked": "bun scripts/download-liked-to-music.ts",
     "icons": "bun scripts/generate-icons.ts",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },

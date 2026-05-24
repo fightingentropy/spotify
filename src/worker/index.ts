@@ -16,6 +16,13 @@ import {
   TidalDownloadError,
   resolveTidalStreamUrl as resolveTidalProviderStreamUrl,
 } from "@/lib/tidal-download";
+import {
+  SpotifyPathfinderError,
+  fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
+  fetchSpotifyLikedTracks,
+  fetchSpotifyPlaylistTracks as fetchPathfinderPlaylistTracks,
+  scrapeSpotifyTrackIdsFromHtml,
+} from "@/lib/spotify-pathfinder";
 
 type Variables = {
   user: AuthUser | null;
@@ -54,6 +61,7 @@ type BatchDownloadPayload = {
   includeMetadata?: unknown;
   includeLyrics?: unknown;
   includeCover?: unknown;
+  spotifyCookie?: unknown;
 };
 
 type SongPayload = {
@@ -511,13 +519,14 @@ function parseSpotifyPlaylistId(input: string): string | null {
   return /^[A-Za-z0-9]{22}$/.test(playlistId) ? playlistId : null;
 }
 
-function determineSpotifyUrlType(url: string): "track" | "album" | "playlist" | null {
+function determineSpotifyUrlType(url: string): "track" | "album" | "playlist" | "collection" | null {
   try {
     const parsed = new URL(url.trim());
     const parts = parsed.pathname.split("/").filter(Boolean);
     if (parts.includes("track")) return "track";
     if (parts.includes("album")) return "album";
     if (parts.includes("playlist")) return "playlist";
+    if (parts.includes("collection")) return "collection";
   } catch {}
   return null;
 }
@@ -597,6 +606,9 @@ async function fetchDeezerTrackInfo(deezerTrackId: string) {
   const durationSec =
     typeof durationRaw === "number" ? durationRaw : typeof durationRaw === "string" ? Number(durationRaw) : 0;
   const plays = typeof playsRaw === "number" ? playsRaw : typeof playsRaw === "string" ? Number(playsRaw) : 0;
+  const genresObj = toObject(deezerPayload.genres);
+  const genreItems = Array.isArray(genresObj?.data) ? genresObj.data : [];
+  const firstGenre = toObject(genreItems[0]);
 
   return {
     album: toStringValue(albumObj?.title),
@@ -609,7 +621,7 @@ async function fetchDeezerTrackInfo(deezerTrackId: string) {
     plays: Number.isFinite(plays) ? plays : 0,
     isrc: toStringValue(deezerPayload.isrc).toUpperCase(),
     upc: toStringValue(albumObj?.upc),
-    genre: Array.isArray(deezerPayload.genres?.data) ? deezerPayload.genres.data[0]?.name : undefined,
+    genre: toStringValue(firstGenre?.name) || undefined,
   };
 }
 
@@ -671,74 +683,52 @@ async function getPreviewUrl(trackId: string): Promise<string> {
   return html.match(/https:\/\/p\.scdn\.co\/mp3-preview\/[A-Za-z0-9?&=._-]+/)?.[0] ?? "";
 }
 
-async function fetchSpotifyAlbumTracks(albumId: string): Promise<Array<{ id: string; name: string; artists: Array<{ name: string }> }>> {
+async function fetchSpotifyAlbumTracks(albumId: string, spotifyCookie = ""): Promise<Array<{ id: string; name: string; artists: Array<{ name: string }> }>> {
   try {
-    const response = await fetchWithTimeout(`https://api.spotify.com/v1/albums/${albumId}/tracks?limit=50`, SPOTIFY_REQUEST_TIMEOUT_MS, {
-      headers: {
-        "Authorization": "Bearer BQD...", // This would need proper token handling
-      }
-    });
-
-    if (!response.ok) {
-      // Fallback to web scraping if API fails
-      return await scrapeAlbumTracks(albumId);
-    }
-
-    const data = await response.json();
-    return data.items || [];
+    const result = await fetchPathfinderAlbumTracks(albumId, spotifyCookie || undefined);
+    return result.tracks.map((track) => ({
+      id: track.id,
+      name: track.name,
+      artists: track.artists.map((name) => ({ name })),
+    }));
   } catch {
-    return await scrapeAlbumTracks(albumId);
+    try {
+      const response = await fetchWithTimeout(`https://open.spotify.com/album/${albumId}`, SPOTIFY_REQUEST_TIMEOUT_MS);
+      if (!response.ok) return [];
+      const html = await response.text();
+      return scrapeSpotifyTrackIdsFromHtml(html).map((id) => ({
+        id,
+        name: "Unknown Track",
+        artists: [{ name: "Unknown Artist" }],
+      }));
+    } catch {
+      return [];
+    }
   }
 }
 
-async function scrapeAlbumTracks(albumId: string): Promise<Array<{ id: string; name: string; artists: Array<{ name: string }> }>> {
+async function fetchSpotifyPlaylistTracks(playlistId: string, spotifyCookie = ""): Promise<Array<{ track: { id: string; name: string; artists: Array<{ name: string }> } }>> {
   try {
-    const response = await fetchWithTimeout(`https://open.spotify.com/album/${albumId}`, SPOTIFY_REQUEST_TIMEOUT_MS);
-    if (!response.ok) return [];
-
-    const html = await response.text();
-    const tracks: Array<{ id: string; name: string; artists: Array<{ name: string }> }> = [];
-
-    // Extract track data from the page - this is a simplified approach
-    // In practice, you'd parse the JSON data embedded in the page
-    const trackMatches = html.matchAll(/spotify:track:([A-Za-z0-9]{22})/g);
-    for (const match of trackMatches) {
-      tracks.push({
-        id: match[1],
-        name: "Unknown Track", // Would need better parsing
-        artists: [{ name: "Unknown Artist" }]
-      });
+    const result = await fetchPathfinderPlaylistTracks(playlistId, spotifyCookie || undefined);
+    return result.tracks.map((track) => ({
+      track: {
+        id: track.id,
+        name: track.name,
+        artists: track.artists.map((name) => ({ name })),
+      },
+    }));
+  } catch (error) {
+    if (error instanceof SpotifyPathfinderError && error.status !== 502) throw error;
+    try {
+      const response = await fetchWithTimeout(`https://open.spotify.com/playlist/${playlistId}`, SPOTIFY_REQUEST_TIMEOUT_MS);
+      if (!response.ok) return [];
+      const html = await response.text();
+      return scrapeSpotifyTrackIdsFromHtml(html).map((id) => ({
+        track: { id, name: "Unknown Track", artists: [{ name: "Unknown Artist" }] },
+      }));
+    } catch {
+      return [];
     }
-
-    return tracks;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchSpotifyPlaylistTracks(playlistId: string): Promise<Array<{ track: { id: string; name: string; artists: Array<{ name: string }> } }>> {
-  try {
-    // Similar implementation for playlist tracks
-    const response = await fetchWithTimeout(`https://open.spotify.com/playlist/${playlistId}`, SPOTIFY_REQUEST_TIMEOUT_MS);
-    if (!response.ok) return [];
-
-    const html = await response.text();
-    const tracks: Array<{ track: { id: string; name: string; artists: Array<{ name: string }> } }> = [];
-
-    const trackMatches = html.matchAll(/spotify:track:([A-Za-z0-9]{22})/g);
-    for (const match of trackMatches) {
-      tracks.push({
-        track: {
-          id: match[1],
-          name: "Unknown Track",
-          artists: [{ name: "Unknown Artist" }]
-        }
-      });
-    }
-
-    return tracks;
-  } catch {
-    return [];
   }
 }
 
@@ -796,10 +786,10 @@ function qualityLists(payload: SongPayload) {
   const qobuz = qualityProfile === "cd" ? ["6"] : qualityProfile === "hires48" ? ["7", "6"] : ["27", "7", "6"];
   const tidal =
     qualityProfile === "cd"
-      ? ["LOSSLESS", "HIGH"]
+      ? ["LOSSLESS"]
       : qualityProfile === "hires48"
-        ? ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH"]
-        : ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH"];
+        ? ["HI_RES_LOSSLESS", "LOSSLESS"]
+        : ["HI_RES_LOSSLESS", "LOSSLESS"];
   return {
     qobuz: qualityRaw ? [qualityRaw] : qobuz,
     tidal: qualityRaw ? [qualityRaw] : tidal,
@@ -1179,12 +1169,13 @@ app.post("/api/songs/spotify/batch", async (c) => {
   const urlType = determineSpotifyUrlType(spotifyUrl);
 
   if (!urlType) {
-    return jsonError("Invalid Spotify URL. Must be a track, album, or playlist URL.", 400);
+    return jsonError("Invalid Spotify URL. Must be a track, album, playlist, or Liked Songs URL.", 400);
   }
 
   const region = toStringValue(payload.region).toUpperCase() || "US";
   const outputFormat = toStringValue(payload.outputFormat).toLowerCase() as OutputFormat;
   const format = ["flac", "mp3", "aac", "ogg", "opus", "wav"].includes(outputFormat) ? outputFormat : "flac";
+  const spotifyCookie = toStringValue(payload.spotifyCookie);
 
   let trackIds: string[] = [];
   let batchTitle = "";
@@ -1195,7 +1186,6 @@ app.post("/api/songs/spotify/batch", async (c) => {
       const trackId = parseSpotifyTrackId(spotifyUrl);
       if (!trackId) return jsonError("Invalid track ID", 400);
       trackIds = [trackId];
-      // Get track info for batch title
       const songLinkPayload = await fetchSongLinkPayload(trackId, region);
       const metadata = await fetchEnhancedMetadata(trackId, songLinkPayload);
       batchTitle = metadata.title;
@@ -1203,16 +1193,48 @@ app.post("/api/songs/spotify/batch", async (c) => {
     } else if (urlType === "album") {
       const albumId = parseSpotifyAlbumId(spotifyUrl);
       if (!albumId) return jsonError("Invalid album ID", 400);
-      const albumTracks = await fetchSpotifyAlbumTracks(albumId);
-      trackIds = albumTracks.map(track => track.id);
-      batchTitle = `Album - ${albumTracks[0]?.name || "Unknown Album"}`;
-      batchArtist = albumTracks[0]?.artists[0]?.name || "Unknown Artist";
+      const albumResult = await fetchPathfinderAlbumTracks(albumId, spotifyCookie || undefined).catch(async () => {
+        const albumTracks = await fetchSpotifyAlbumTracks(albumId, spotifyCookie);
+        return {
+          title: albumTracks[0]?.name || "Unknown Album",
+          artist: albumTracks[0]?.artists[0]?.name || "Unknown Artist",
+          tracks: albumTracks.map((track) => ({
+            id: track.id,
+            name: track.name,
+            artists: track.artists.map((artist) => artist.name),
+          })),
+        };
+      });
+      trackIds = albumResult.tracks.map((track) => track.id);
+      batchTitle = albumResult.title;
+      batchArtist = albumResult.artist;
     } else if (urlType === "playlist") {
       const playlistId = parseSpotifyPlaylistId(spotifyUrl);
       if (!playlistId) return jsonError("Invalid playlist ID", 400);
-      const playlistTracks = await fetchSpotifyPlaylistTracks(playlistId);
-      trackIds = playlistTracks.map(item => item.track.id);
-      batchTitle = "Playlist";
+      const playlistResult = await fetchPathfinderPlaylistTracks(playlistId, spotifyCookie || undefined).catch(async () => {
+        const playlistTracks = await fetchSpotifyPlaylistTracks(playlistId, spotifyCookie);
+        return {
+          title: "Playlist",
+          tracks: playlistTracks.map((item) => ({
+            id: item.track.id,
+            name: item.track.name,
+            artists: item.track.artists.map((artist) => artist.name),
+          })),
+        };
+      });
+      trackIds = playlistResult.tracks.map((track) => track.id);
+      batchTitle = playlistResult.title;
+      batchArtist = "Various Artists";
+    } else if (urlType === "collection") {
+      if (!spotifyCookie) {
+        return jsonError(
+          "Liked Songs requires your Spotify sp_dc cookie. Add it in Settings, then try again.",
+          400,
+        );
+      }
+      const likedResult = await fetchSpotifyLikedTracks(spotifyCookie);
+      trackIds = likedResult.tracks.map((track) => track.id);
+      batchTitle = likedResult.title;
       batchArtist = "Various Artists";
     }
 
@@ -1220,24 +1242,28 @@ app.post("/api/songs/spotify/batch", async (c) => {
       return jsonError("No tracks found", 404);
     }
 
-    if (trackIds.length > 100) {
-      return jsonError("Maximum 100 tracks per batch", 400);
+    trackIds = Array.from(new Set(trackIds));
+
+    if (trackIds.length > 10_000) {
+      return jsonError("Maximum 10,000 tracks per batch", 400);
     }
 
-    // Return batch info for processing
     return c.json({
       batchInfo: {
-        type: urlType,
+        type: urlType === "collection" ? "playlist" : urlType,
         title: batchTitle,
         artist: batchArtist,
         trackCount: trackIds.length,
         format,
-        trackIds: trackIds.slice(0, 10), // Only return first 10 for preview
+        trackIds,
       },
-      message: `Found ${trackIds.length} tracks. Use /api/songs/spotify/batch/download to start the batch download.`
+      message: `Found ${trackIds.length} tracks. Click Download All to start.`,
     });
 
   } catch (error) {
+    if (error instanceof SpotifyPathfinderError) {
+      return jsonError(error.message, error.status);
+    }
     return jsonError(error instanceof Error ? error.message : "Failed to process batch", 500);
   }
 });
