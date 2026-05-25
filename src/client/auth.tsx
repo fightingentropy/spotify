@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { invalidateApiCache } from "@/client/api";
 
 export type AuthUser = {
   id: string;
@@ -53,6 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!response.ok || !data.user) {
       throw new Error(data.error || "Invalid email or password");
     }
+    invalidateApiCache();
     setUser(data.user);
     setStatus("authenticated");
   }, []);
@@ -62,6 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       method: "POST",
       credentials: "include",
     }).catch(() => null);
+    invalidateApiCache();
     setUser(null);
     setStatus("unauthenticated");
   }, []);

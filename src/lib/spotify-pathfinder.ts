@@ -363,7 +363,7 @@ export async function fetchSpotifyLikedTracks(
   const cookie = normalizeCookie(spotifyCookie);
   if (!cookie) {
     throw new SpotifyPathfinderError(
-      "Liked Songs requires your Spotify sp_dc cookie. Add it in Settings.",
+      "Liked Songs import requires a Spotify sp_dc cookie.",
       400,
     );
   }

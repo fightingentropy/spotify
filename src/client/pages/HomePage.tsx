@@ -406,9 +406,9 @@ export default function HomePage() {
               >
                 <div className="hidden md:block" />
                 <div className={cn("min-w-0 max-w-[18rem] whitespace-normal leading-7 text-wrap md:max-w-none", viewMode === "list" && "md:col-span-6")}>
-                  <span>No songs in your Mac mini music source yet.</span>{" "}
-                  <Link to="/settings" className="underline underline-offset-2 hover:text-white">
-                    Check the source
+                  <span>No songs in your library yet.</span>{" "}
+                  <Link to="/upload" className="underline underline-offset-2 hover:text-white">
+                    Add music
                   </Link>
                   .
                 </div>

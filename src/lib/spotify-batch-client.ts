@@ -38,7 +38,7 @@ export async function resolveSpotifyBatchOnClient(
 
   if (isCollectionUrl(url)) {
     if (!cookie) {
-      throw new Error("Liked Songs requires your Spotify sp_dc cookie. Add it in Settings.");
+      throw new Error("Liked Songs import requires a Spotify sp_dc cookie.");
     }
     const liked = await fetchSpotifyLikedTracks(cookie);
     return batchFromTracks("playlist", liked.title, "Various Artists", liked.tracks, format);

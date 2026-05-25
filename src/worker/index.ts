@@ -1332,7 +1332,7 @@ app.post("/api/songs/spotify/batch", async (c) => {
     } else if (urlType === "collection") {
       if (!spotifyCookie) {
         return jsonError(
-          "Liked Songs requires your Spotify sp_dc cookie. Add it in Settings, then try again.",
+          "Liked Songs import requires a Spotify sp_dc cookie.",
           400,
         );
       }

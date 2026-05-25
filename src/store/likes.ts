@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { invalidateLibraryApiCache } from "@/client/api";
 
 type LikeToggleResult = {
   ok: boolean;
@@ -151,6 +152,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         pending: removeKey(state.pending, songId),
         hydrated: true,
       }));
+      invalidateLibraryApiCache();
 
       return { ok: true, status: response.status };
     } catch (error) {

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { CheckCircle2, Download, Loader2, Pause, Play, XCircle } from "lucide-react";
+import { invalidateLibraryApiCache } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import {
   DOWNLOAD_PROVIDER_KEY,
@@ -319,6 +320,7 @@ export default function UploadPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error ?? "Upload failed");
       }
+      invalidateLibraryApiCache();
       navigate("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -633,6 +635,7 @@ export default function UploadPage() {
       return "skipped" as const;
     }
     if (!res.ok) throw new Error(data?.error ?? "Failed to add song from Spotify");
+    invalidateLibraryApiCache();
     return "imported" as const;
   }
 
@@ -766,6 +769,7 @@ export default function UploadPage() {
       setNotice(
         `Batch complete: ${succeeded} downloaded, ${skipped} skipped, ${failed} failed out of ${total} tracks.`,
       );
+      if (succeeded > 0) invalidateLibraryApiCache();
       if (failures.length > 0) {
         setError(failures.slice(0, 3).join(" · "));
       }
@@ -867,6 +871,7 @@ export default function UploadPage() {
       throw duplicateError;
     }
     if (!res.ok) throw new Error(data?.error ?? "Failed to add song from Spotify");
+    invalidateLibraryApiCache();
   }
 
   function shouldSaveToLocalFolder() {
