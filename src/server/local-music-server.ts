@@ -116,6 +116,34 @@ function json(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), { ...init, headers });
 }
 
+function ifNoneMatchMatches(value: string | null, etag: string): boolean {
+  if (!value) return false;
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .some((item) => item === "*" || item === etag);
+}
+
+function jsonCached(
+  request: Request,
+  payload: unknown,
+  init?: ResponseInit & { cacheControl?: string },
+): Response {
+  const { cacheControl, ...responseInit } = init ?? {};
+  const body = JSON.stringify(payload);
+  const etag = `W/"${createHash("sha1").update(body).digest("hex").slice(0, 32)}"`;
+  const headers = new Headers(responseInit.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+  headers.set("cache-control", cacheControl || "private, max-age=30, stale-while-revalidate=300");
+  headers.set("etag", etag);
+
+  if (ifNoneMatchMatches(request.headers.get("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+
+  return new Response(body, { ...responseInit, headers });
+}
+
 function text(value: string, status = 200): Response {
   return new Response(value, {
     status,
@@ -263,8 +291,13 @@ async function serveFile(path: string, request: Request, cacheControl = "public,
   headers.set("cache-control", cacheControl);
   headers.set("content-type", contentTypeForPath(path));
   headers.set("last-modified", fileStat.mtime.toUTCString());
+  headers.set("etag", `W/"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`);
 
   const range = parseRangeHeader(request.headers.get("range"), fileStat.size);
+  if (!range && ifNoneMatchMatches(request.headers.get("if-none-match"), headers.get("etag") || "")) {
+    return new Response(null, { status: 304, headers });
+  }
+
   if (range) {
     headers.set("content-range", `bytes ${range.start}-${range.end}/${fileStat.size}`);
     headers.set("content-length", String(range.end - range.start + 1));
@@ -678,7 +711,7 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
 
 async function handleLikes(request: Request): Promise<Response> {
   if (request.method === "GET") {
-    return json({ likedSongIds: await readLikes() });
+    return jsonCached(request, { likedSongIds: await readLikes() });
   }
 
   if (request.method !== "POST" && request.method !== "DELETE") return methodNotAllowed();
@@ -1170,26 +1203,28 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/music/source" && request.method === "GET") {
     const snapshot = await getLibrary(url.searchParams.get("refresh") === "1");
-    return json({
+    return jsonCached(request, {
       root: musicRoot,
       songsCount: snapshot.songs.length,
       scannedAt: new Date(snapshot.scannedAt).toISOString(),
-    });
+    }, { cacheControl: "private, max-age=15, stale-while-revalidate=120" });
   }
 
   if (pathname === "/api/home" && request.method === "GET") {
     const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes()]);
-    return json({ songs: snapshot.songs, likedSongIds });
+    return jsonCached(request, { songs: snapshot.songs, likedSongIds });
   }
 
   if (pathname === "/api/library" && request.method === "GET") {
-    return json({ playlists: [], userId: LOCAL_USER.id });
+    return jsonCached(request, { playlists: [], userId: LOCAL_USER.id }, {
+      cacheControl: "private, max-age=300, stale-while-revalidate=600",
+    });
   }
 
   if (pathname === "/api/liked" && request.method === "GET") {
     const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes()]);
     const liked = new Set(likedSongIds);
-    return json({
+    return jsonCached(request, {
       songs: snapshot.songs.filter((song) => liked.has(song.id)),
       likedSongIds,
     });
@@ -1201,7 +1236,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/songs" && request.method === "GET") {
     const snapshot = await getLibrary();
-    return json(snapshot.songs);
+    return jsonCached(request, snapshot.songs);
   }
 
   if (pathname === "/api/songs" && request.method === "POST") {
@@ -1218,7 +1253,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     if (request.method === "GET") {
       const snapshot = await getLibrary();
       const entry = snapshot.entriesById.get(id);
-      return entry ? json(entry.song) : notFound("Song not found");
+      return entry ? jsonCached(request, entry.song) : notFound("Song not found");
     }
     if (request.method === "PATCH") {
       return handlePatchSong(id, request);
@@ -1257,7 +1292,17 @@ async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
   const absolutePath = resolveInside(distDir, relativePath);
 
   if (absolutePath && existsSync(absolutePath)) {
-    return serveFile(absolutePath, request, "public, max-age=31536000, immutable");
+    const cacheControl =
+      relativePath === "index.html"
+        ? "no-store"
+        : relativePath === "sw.js"
+          ? "no-cache"
+          : relativePath === "manifest.webmanifest"
+            ? "public, max-age=3600"
+            : relativePath.startsWith("assets/")
+              ? "public, max-age=31536000, immutable"
+              : "public, max-age=3600";
+    return serveFile(absolutePath, request, cacheControl);
   }
 
   const indexPath = resolve(distDir, "index.html");

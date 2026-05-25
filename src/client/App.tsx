@@ -1,3 +1,4 @@
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Link, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -9,16 +10,67 @@ import { PlayerBar } from "@/components/PlayerBar";
 import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
-import SearchPage from "@/client/pages/SearchPage";
-import LibraryPage from "@/client/pages/LibraryPage";
-import LikedPage from "@/client/pages/LikedPage";
-import PlaylistPage from "@/client/pages/PlaylistPage";
-import UploadPage from "@/client/pages/UploadPage";
-import SettingsPage from "@/client/pages/SettingsPage";
-import ProfilePage from "@/client/pages/ProfilePage";
-import SignInPage from "@/client/pages/SignInPage";
-import RegisterPage from "@/client/pages/RegisterPage";
 import { useApiData, type LibraryPayload } from "@/client/api";
+
+const loadSearchPage = () => import("@/client/pages/SearchPage");
+const loadLibraryPage = () => import("@/client/pages/LibraryPage");
+const loadLikedPage = () => import("@/client/pages/LikedPage");
+const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
+const loadUploadPage = () => import("@/client/pages/UploadPage");
+const loadSettingsPage = () => import("@/client/pages/SettingsPage");
+const loadProfilePage = () => import("@/client/pages/ProfilePage");
+const loadSignInPage = () => import("@/client/pages/SignInPage");
+const loadRegisterPage = () => import("@/client/pages/RegisterPage");
+
+const SearchPage = lazy(loadSearchPage);
+const LibraryPage = lazy(loadLibraryPage);
+const LikedPage = lazy(loadLikedPage);
+const PlaylistPage = lazy(loadPlaylistPage);
+const UploadPage = lazy(loadUploadPage);
+const SettingsPage = lazy(loadSettingsPage);
+const ProfilePage = lazy(loadProfilePage);
+const SignInPage = lazy(loadSignInPage);
+const RegisterPage = lazy(loadRegisterPage);
+
+function RouteLoading({ label = "Loading..." }: { label?: string }) {
+  return (
+    <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white/[0.7] sm:px-6">
+      {label}
+    </div>
+  );
+}
+
+function lazyRoute(element: ReactNode, label?: string) {
+  return <Suspense fallback={<RouteLoading label={label} />}>{element}</Suspense>;
+}
+
+function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthenticated") {
+  useEffect(() => {
+    const prefetch = () => {
+      void loadSearchPage();
+      void loadLibraryPage();
+      void loadLikedPage();
+      void loadProfilePage();
+      void loadSettingsPage();
+      if (status === "unauthenticated") {
+        void loadSignInPage();
+        void loadRegisterPage();
+      }
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
+      const id = idleWindow.requestIdleCallback(prefetch, { timeout: 5_000 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+
+    const id = window.setTimeout(prefetch, 2_000);
+    return () => window.clearTimeout(id);
+  }, [status]);
+}
 
 function Shell() {
   const { user, status } = useAuth();
@@ -29,6 +81,7 @@ function Shell() {
       userId: null,
     },
   );
+  useIdleRoutePrefetch(status);
 
   return (
     <>
@@ -61,15 +114,15 @@ function Shell() {
       <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/library" element={<LibraryPage />} />
-          <Route path="/liked" element={<LikedPage />} />
-          <Route path="/playlist/:id" element={<PlaylistPage />} />
-          <Route path="/upload" element={<UploadPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/signin" element={<SignInPage />} />
-          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/search" element={lazyRoute(<SearchPage />, "Loading search...")} />
+          <Route path="/library" element={lazyRoute(<LibraryPage />, "Loading library...")} />
+          <Route path="/liked" element={lazyRoute(<LikedPage />, "Loading liked songs...")} />
+          <Route path="/playlist/:id" element={lazyRoute(<PlaylistPage />, "Loading playlist...")} />
+          <Route path="/upload" element={lazyRoute(<UploadPage />, "Loading upload...")} />
+          <Route path="/settings" element={lazyRoute(<SettingsPage />, "Loading settings...")} />
+          <Route path="/profile" element={lazyRoute(<ProfilePage />, "Loading profile...")} />
+          <Route path="/signin" element={lazyRoute(<SignInPage />, "Loading sign in...")} />
+          <Route path="/register" element={lazyRoute(<RegisterPage />, "Loading registration...")} />
           <Route
             path="*"
             element={
