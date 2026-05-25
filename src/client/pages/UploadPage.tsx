@@ -11,7 +11,7 @@ import {
   isDownloadProvider,
   type DownloadProvider,
 } from "@/components/DownloadQualitySettings";
-import { readSpotifyCookie, writeSpotifyCookie } from "@/components/SpotifyCookieSettings";
+import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
 import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 import { convertAudioFile, getSupportedFormats, getExtensionForFormat } from "@/lib/audio-converter";

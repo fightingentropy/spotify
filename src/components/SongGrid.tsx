@@ -9,7 +9,7 @@ import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { SongCard } from "@/components/SongCard";
 import { SongListItem } from "@/components/SongListItem";
-import { EDIT_MODE_EVENT, EDIT_MODE_KEY } from "@/components/EditModeSettings";
+import { EDIT_MODE_EVENT, EDIT_MODE_KEY } from "@/lib/edit-mode";
 import {
   isBrowserLocalSong,
   saveBrowserLocalSongEdits,

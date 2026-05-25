@@ -1,113 +1,201 @@
 # Spotify
 
-Spotify is a local-first music player built as a Vite React SPA served by a single Cloudflare Worker. By default the Worker owns auth, D1 library data, R2 media storage, Spotify import helpers, and range-capable media streaming.
+Spotify is a Vite React music app served by a Cloudflare Worker. The current
+production setup uses Cloudflare for the public app, auth, and API edge, while
+the Mac mini is the music storage and streaming backend.
 
-The Mac mini setup can also run the app as a fixed local music server. In that mode
-the mobile app reads `/api/home` from the Mac mini and streams songs directly from
-`SPOTIFY_MUSIC_DIR`, so the phone never needs to pick a folder. Album artwork is
-served from sidecar/embedded covers when available, then cached from an online
-music artwork lookup when local files do not contain cover art.
+## Current Production Setup
 
-## Tech Stack
+- Public app: `https://spotify.erlinhoxha.workers.dev`
+- Mac mini LAN app/server: `http://m4mini.local:5174`
+- Private Worker-to-Mac-mini origin: `https://spotify-mini.fightingentropy.org`
+- Mac mini music folder: `/Users/hermes/Music`
+- Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
+- Tunnel name: `spotify-mini`
+- Tunnel launchd service: `com.fightingentropy.spotify-tunnel`
+- Music server launchd service: `com.fightingentropy.spotify-app`
 
-- Vite + React 19
-- Cloudflare Workers static assets + Hono API
-- Cloudflare D1 for users, sessions, songs, likes, and playlists
-- Cloudflare R2 for audio, cover art, and lyrics
-- Zustand for player, likes, and browser-local library state
+The public tunnel hostname is only an origin for the Worker. Direct public
+requests to `spotify-mini.fightingentropy.org` should return `401` unless the
+request includes the shared proxy token. The Netflix app is not routed through
+this Spotify tunnel; it uses separate hostnames and tunnel routing.
 
-## Quick Start
+## Architecture
+
+```text
+Phone/browser
+  -> Cloudflare Worker + static assets
+       -> auth/session in D1
+       -> Spotify metadata/import helpers
+       -> proxy music APIs to Mac mini when MAC_MINI_ORIGIN is set
+            -> Cloudflare Tunnel: spotify-mini.fightingentropy.org
+                 -> Mac mini local server on 127.0.0.1:5174
+                      -> /Users/hermes/Music
+```
+
+In the active deployed mode, uploaded/imported music is not stored in R2. R2 is
+still configured as a fallback/legacy storage mode, but `MAC_MINI_ORIGIN` makes
+the Worker use the Mac mini for library reads, uploads, artwork, audio, lyrics,
+and likes.
+
+## Data Flow
+
+- Library load: app calls `/api/home`; Worker proxies to the Mac mini; Mac mini
+  returns the scanned songs and liked ids.
+- Audio streaming: song `audioUrl` values point at `/api/files/local/*`; Worker
+  proxies range requests to the Mac mini so seeking works.
+- Artwork: local sidecar/embedded art is served first; missing art can be cached
+  from online artwork lookup by the Mac mini server.
+- Manual upload: browser posts to `/api/songs`; Worker requires auth, forwards
+  the upload to the Mac mini, and the Mac mini saves it into `/Users/hermes/Music`.
+- Spotify import: Worker resolves metadata/provider stream URLs, then sends the
+  final remote audio URL to the Mac mini; the Mac mini downloads and stores the
+  audio, cover, lyrics, and sidecar metadata.
+
+## Important Runtime Notes
+
+- Keep both Mac mini launchd services running:
+  - `com.fightingentropy.spotify-app`
+  - `com.fightingentropy.spotify-tunnel`
+- `m4mini.local` only works on the LAN. Cloudflare reaches the Mac mini through
+  the tunnel hostname instead.
+- `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
+- `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
+- The Settings page intentionally only shows user-facing playback/download
+  settings now. Source status, edit-mode toggles, and Spotify cookie UI were
+  removed from normal app chrome.
+- The client caches API responses in memory for a short window and dedupes
+  in-flight fetches, so navigating between Home/Search/etc does not reload the
+  full song list every render. Uploads, imports, likes, sign-in, and sign-out
+  invalidate the cache.
+
+## Repository Structure
+
+- `src/client/` - React app shell, routes, auth provider, shared API cache.
+- `src/components/` - reusable UI, player bar, song list/grid, upload controls.
+- `src/store/` - Zustand stores for player state, likes, and older browser-local
+  library helpers.
+- `src/worker/index.ts` - Cloudflare Worker API, auth, D1/R2 fallback paths,
+  Spotify import helpers, and Mac mini proxy mode.
+- `src/server/local-music-server.ts` - Bun server deployed to the Mac mini. It
+  scans the music folder, serves media with range support, accepts uploads, and
+  writes `.spotify.json` sidecars.
+- `scripts/deploy-mini.sh` - builds/syncs the app and local server to Mac mini.
+- `scripts/install-mini-server.sh` - installs/restarts the Mac mini launchd app
+  service.
+- `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
+  `/Users/hermes/Music`.
+- `scripts/check-mini.sh` - health check for Mac mini server, launchd, library
+  scan count, and LAN reachability.
+- `wrangler.jsonc` - Cloudflare Worker bindings and `MAC_MINI_ORIGIN`.
+
+## Local Development
 
 ```bash
 bun install
 bun run dev
 ```
 
-The Worker applies the D1 schema at runtime. Local development uses Wrangler's local D1/R2 simulation unless configured otherwise.
-
-## Mac mini Music Server
+Wrangler simulates the Worker bindings during local development. For the local
+Mac mini-style server on this machine:
 
 ```bash
-bun run mini:sync-music
+bun run build
+SPOTIFY_MUSIC_DIR="$HOME/Music" bun run local:music
+```
+
+## Mac mini Operations
+
+Deploy app/server updates to the Mac mini:
+
+```bash
 bun run mini:deploy
 ```
 
-Defaults mirror the Netflix mini setup:
+Reuse the current local `dist/` build:
 
-- Remote host: `hermes@m4mini.local`
-- Remote app: `/Users/hermes/Developer/spotify`
-- Remote music source: `/Users/hermes/Music`
-- App URL on the LAN: `http://m4mini.local:5174`
+```bash
+bash scripts/deploy-mini.sh --skip-build
+```
 
-`mini:sync-music` copies audio, cover, lyrics, and `.spotify.json` sidecar files only.
-It does not delete local files. To include audio clips from another folder:
+Check the Mac mini server:
+
+```bash
+bun run mini:check
+```
+
+Sync music to the Mac mini:
+
+```bash
+bun run mini:sync-music
+```
+
+Sync music from a specific local folder:
 
 ```bash
 bash scripts/sync-mini-music.sh --source /Users/erlinhoxha/Movies
 ```
 
-The local server caches missing album art automatically. Set `SPOTIFY_ARTWORK_LOOKUP=0`
-to disable online artwork lookup.
+The sync copies audio, cover, lyrics, and `.spotify.json` sidecar files. It does
+not delete remote files.
 
-## Cloudflare App With Mac mini Storage
+## Cloudflare Deployment
 
-The Cloudflare deployment can use the Mac mini as the music source and upload
-target. In that setup the Worker still serves the public app and keeps the
-Spotify lookup/import helpers, but `/api/home`, `/api/songs`, `/api/files/local/*`,
-`/api/artwork/local/*`, and likes proxy to the Mac mini.
-
-Cloudflare cannot reach `m4mini.local` because that hostname only exists on the
-local network. Expose the Mac mini server through a public HTTPS origin first,
-preferably a Cloudflare Tunnel, then set:
+Deploy the public app:
 
 ```bash
-MAC_MINI_ORIGIN=https://music.example.com
-MAC_MINI_PROXY_TOKEN=use-a-long-random-shared-token
+bun run deploy
 ```
 
-`MAC_MINI_ORIGIN` can live in `wrangler.jsonc`; put `MAC_MINI_PROXY_TOKEN` in a
-Worker secret rather than committing it to the config.
+The active `wrangler.jsonc` contains:
+
+```json
+"MAC_MINI_ORIGIN": "https://spotify-mini.fightingentropy.org"
+```
+
+Set or rotate the Worker secret:
 
 ```bash
 wrangler secret put MAC_MINI_PROXY_TOKEN
 ```
 
-On the Mac mini, set the matching server token before starting the launchd service:
+Mac mini server env lives at `/Users/hermes/.config/spotify/env` and should
+include:
 
 ```bash
-SPOTIFY_PROXY_TOKEN=use-a-long-random-shared-token
+HOST=0.0.0.0
+PORT=5174
+SPOTIFY_MUSIC_DIR=/Users/hermes/Music
+SPOTIFY_DIST_DIR=/Users/hermes/Developer/spotify/dist/client
+SPOTIFY_CACHE_DIR=/Users/hermes/Developer/spotify/cache
+SPOTIFY_ARTWORK_LOOKUP=1
+SPOTIFY_ARTWORK_COUNTRY=GB
+SPOTIFY_PROXY_TOKEN=...
 SPOTIFY_PROXY_HOSTNAMES=spotify-mini.fightingentropy.org
 ```
 
-With `MAC_MINI_ORIGIN` configured, manual uploads are saved into
-`SPOTIFY_MUSIC_DIR` on the Mac mini. Spotify imports are resolved by the Worker,
-then the Mac mini downloads and stores the final audio, cover, and lyrics files.
+## Verification
 
-## Current App Features
+Useful checks after deploy:
 
-- Home, Search, Library, Liked Songs, and Playlist routes
-- Grid/List library views with persisted sort/view preferences
-- Manual file upload and Spotify-link import
-- Spotify import fetches audio, cover art, and lyrics automatically
-- Qobuz/Tidal provider resolution with quality profile settings
-- Duplicate song detection with replace confirmation
-- R2 media streaming with range request support
-- Mac mini local music streaming with range request support and cached album art
-- Cloudflare Worker proxy mode for Mac mini music storage via a public HTTPS origin
-- Worker-native credentials auth with opaque `spotify_session` cookie sessions
-- Likes with optimistic updates
-- Per-song edit mode for metadata, cover art, and lyrics
-- PWA install support, mobile nav, player bar, now-playing sidebar, and mobile sheet
+```bash
+bun --bun tsc --noEmit
+bun run lint
+bun run build
+bun run mini:check
+curl -I https://spotify.erlinhoxha.workers.dev
+curl -sS -o /dev/null -w "%{http_code}\n" https://spotify-mini.fightingentropy.org/api/music/source
+```
 
-## Settings
+Expected behavior:
 
-- Mac mini music source
-- Crossfade
-- Edit mode
-- Download provider (`Auto`, `Qobuz`, `Tidal`)
-- Download quality profile (`Max`, `24-bit/48kHz`, `16-bit/44.1kHz`)
+- Cloudflare app returns `200`.
+- Worker `/api/home` returns the Mac mini song library.
+- Audio range requests through the Worker return `206`.
+- Direct tunnel origin without the proxy token returns `401`.
+- Mac mini LAN health check returns `200`.
 
-## API Endpoints
+## API Surface
 
 - `GET /api/home`
 - `GET /api/library`
@@ -121,20 +209,26 @@ then the Mac mini downloads and stores the final audio, cover, and lyrics files.
 - `POST /api/songs/:id/assets`
 - `POST /api/songs/spotify`
 - `POST /api/songs/spotify/file`
+- `POST /api/songs/spotify/batch`
 - `GET /api/songs/spotify/cover`
 - `GET /api/files/*`
+- `GET /api/artwork/*`
 - `GET/POST/DELETE /api/likes`
 - `POST /api/register`
 - `GET /api/auth/session`
 - `POST /api/auth/signin`
 - `POST /api/auth/signout`
-- `GET /api/artwork/*`
 
 ## Scripts
 
-- `bun run dev`
-- `bun run build`
-- `bun run preview`
-- `bun run deploy`
-- `bun run lint`
-- `bun run cf-typegen`
+- `bun run dev` - local Vite/Worker dev server.
+- `bun run build` - production build for Worker and client assets.
+- `bun run deploy` - build and deploy to Cloudflare.
+- `bun run upload` - build and dry-run deploy.
+- `bun run lint` - ESLint.
+- `bun run local:music` - run the Bun local music server.
+- `bun run mini:deploy` - deploy build/server to Mac mini.
+- `bun run mini:install-server` - install Mac mini launchd app service.
+- `bun run mini:sync-music` - sync music files to Mac mini.
+- `bun run mini:check` - verify Mac mini health.
+- `bun run cf-typegen` - regenerate Cloudflare binding types.
