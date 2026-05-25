@@ -336,20 +336,20 @@ export default function HomePage() {
             title={shuffle ? "Disable shuffle" : "Enable shuffle"}
             onClick={toggleShuffle}
             className={cn(
-              "hidden h-12 w-12 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:grid",
+              "grid h-11 w-11 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:h-12 sm:w-12",
               shuffle && "text-[#1ed760]",
             )}
           >
-            <Shuffle size={34} />
+            <Shuffle size={30} className="sm:h-[34px] sm:w-[34px]" />
           </button>
 
           <button
             type="button"
             aria-label="Download"
             title="Download"
-            className="hidden h-12 w-12 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:grid"
+            className="grid h-11 w-11 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:h-12 sm:w-12"
           >
-            <CircleArrowDown size={36} />
+            <CircleArrowDown size={31} className="sm:h-9 sm:w-9" />
           </button>
 
           <div className="ml-auto flex items-center gap-1 rounded-full border border-white/[0.12] bg-white/[0.04] p-1 text-white/[0.68]">
