@@ -1,7 +1,6 @@
 import { Link, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
-import { BrowserLocalLibraryHydrator } from "@/components/BrowserLocalLibraryHydrator";
 import InstallPrompt from "@/components/InstallPrompt";
 import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
@@ -89,7 +88,6 @@ function Shell() {
 export function App() {
   return (
     <AuthProvider>
-      <BrowserLocalLibraryHydrator />
       <Shell />
     </AuthProvider>
   );

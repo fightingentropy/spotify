@@ -16,7 +16,6 @@ import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette"
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData, type HomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
-import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { cn, formatTime } from "@/lib/utils";
@@ -31,6 +30,8 @@ type HomeSong = PlayerSong & {
 type HomeViewMode = "list" | "grid";
 
 const HOME_VIEW_MODE_KEY = "spotify_home_view_mode";
+const HOME_LIST_GRID =
+  "md:grid-cols-[3rem_minmax(0,2.1fr)_minmax(0,1.05fr)_minmax(7.75rem,0.78fr)_2.75rem_5rem_2.25rem] xl:grid-cols-[4.25rem_minmax(0,2.4fr)_minmax(0,1.15fr)_minmax(8rem,0.9fr)_3rem_5.25rem_2.5rem]";
 
 function formatDateAdded(dateStr: string | undefined): string {
   if (!dateStr) return "Unknown";
@@ -147,7 +148,6 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState<HomeViewMode>("list");
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
-  const localSongs = useBrowserLocalLibraryStore((state) => state.songs) as HomeSong[];
   const { data, loading, error } = useApiData<HomePayload>("/api/home", {
     songs: [],
     likedSongIds: [],
@@ -191,14 +191,14 @@ export default function HomePage() {
   const likedLookup = likesHydrated ? likedSongLookup : initialLikedLookup;
 
   const sortedSongs = useMemo(() => {
-    return ([...(data.songs as HomeSong[]), ...localSongs] as HomeSong[]).sort((left, right) => {
+    return ([...(data.songs as HomeSong[])] as HomeSong[]).sort((left, right) => {
       const leftTime = Date.parse(left.createdAt || "");
       const rightTime = Date.parse(right.createdAt || "");
       const a = Number.isFinite(leftTime) ? leftTime : 0;
       const b = Number.isFinite(rightTime) ? rightTime : 0;
       return b - a;
     });
-  }, [data.songs, localSongs]);
+  }, [data.songs]);
 
   useEffect(() => {
     const songsToProbe: HomeSong[] = [];
@@ -315,8 +315,8 @@ export default function HomePage() {
     <div className="relative min-h-[calc(100vh-3.5rem)] overflow-x-hidden bg-background text-white">
       <HomeSearchCommandPalette songs={sortedSongs} />
 
-      <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-12 xl:px-16">
-        <section className="mb-9 flex items-center gap-5 md:mb-11 md:gap-8">
+      <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-6 xl:px-8 2xl:px-10">
+        <section className="mb-9 flex items-center gap-5 md:mb-10 md:gap-8">
           <button
             type="button"
             aria-label={listIsPlaying ? "Pause library" : "Play library"}
@@ -382,7 +382,7 @@ export default function HomePage() {
 
         <section aria-label="Library tracks" className="w-full">
           {viewMode === "list" ? (
-            <div className="hidden grid-cols-[3.25rem_minmax(0,2.1fr)_minmax(0,1.15fr)_minmax(8rem,0.85fr)_2.75rem_4.25rem_2.5rem] items-center gap-4 border-b border-white/[0.12] px-5 pb-4 text-[16px] font-medium text-white/[0.66] md:grid">
+            <div className={cn("hidden items-center gap-3 border-b border-white/[0.12] px-1 pb-4 text-[16px] font-medium text-white/[0.66] md:grid xl:gap-4", HOME_LIST_GRID)}>
               <div className="text-center">#</div>
               <div>Title</div>
               <div>Album</div>
@@ -399,24 +399,18 @@ export default function HomePage() {
             {sortedSongs.length === 0 ? (
               <div
                 className={cn(
-                  "grid min-h-[4.5rem] grid-cols-1 items-center rounded-md px-5 py-5 text-[17px] text-white/[0.68]",
+                  "grid min-h-[5rem] grid-cols-1 items-center rounded-md py-5 text-[17px] text-white/[0.68]",
                   viewMode === "list" &&
-                    "md:grid-cols-[3.25rem_minmax(0,2.1fr)_minmax(0,1.15fr)_minmax(8rem,0.85fr)_2.75rem_4.25rem_2.5rem] md:gap-4",
+                    cn("md:gap-3 xl:gap-4", HOME_LIST_GRID),
                 )}
               >
                 <div className="hidden md:block" />
                 <div className={cn("min-w-0 max-w-[18rem] whitespace-normal leading-7 text-wrap md:max-w-none", viewMode === "list" && "md:col-span-6")}>
-                  <span>No songs in your library yet.</span>{" "}
-                  <span className="block sm:inline">
-                    <Link to="/settings" className="underline underline-offset-2 hover:text-white">
-                      Set up a local folder
-                    </Link>{" "}
-                    or{" "}
-                    <Link to="/upload" className="underline underline-offset-2 hover:text-white">
-                      upload a track
-                    </Link>{" "}
-                    to get started.
-                  </span>
+                  <span>No songs in your Mac mini music source yet.</span>{" "}
+                  <Link to="/settings" className="underline underline-offset-2 hover:text-white">
+                    Check the source
+                  </Link>
+                  .
                 </div>
               </div>
             ) : viewMode === "grid" ? (
@@ -505,13 +499,14 @@ export default function HomePage() {
                   key={song.id}
                   onClick={() => handlePlaySong(index)}
                   className={cn(
-                    "group grid min-h-[4.5rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:grid-cols-[3.25rem_minmax(0,2.1fr)_minmax(0,1.15fr)_minmax(8rem,0.85fr)_2.75rem_4.25rem_2.5rem] md:gap-4 md:px-5",
-                    active ? "bg-[#2a2a2a]" : "hover:bg-white/[0.09]",
+                    "group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
+                    HOME_LIST_GRID,
+                    active ? "bg-white/[0.11]" : "hover:bg-white/[0.07]",
                   )}
                 >
                   <div
                     className={cn(
-                      "flex h-11 items-center justify-center text-lg tabular-nums text-white/[0.68]",
+                      "flex h-11 items-center justify-center text-[18px] tabular-nums text-white/[0.68]",
                       active && "text-[#1ed760]",
                     )}
                   >
@@ -525,7 +520,7 @@ export default function HomePage() {
                     )}
                   </div>
 
-                  <div className="flex min-w-0 items-center gap-4">
+                  <div className="flex min-w-0 items-center gap-5">
                     <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
                       <CoverImage
                         src={song.imageUrl}
@@ -539,21 +534,21 @@ export default function HomePage() {
                     <div className="min-w-0">
                       <div
                         className={cn(
-                          "truncate text-[18px] font-medium leading-6 text-white",
+                          "truncate text-[20px] font-medium leading-7 text-white",
                           active && "text-[#1ed760]",
                         )}
                       >
                         {song.title}
                       </div>
-                      <div className="truncate text-[16px] leading-6 text-white/[0.66]">{artists}</div>
+                      <div className="truncate text-[18px] leading-7 text-white/[0.66]">{artists}</div>
                     </div>
                   </div>
 
-                  <div className="hidden min-w-0 items-center text-[17px] text-white/[0.66] md:flex">
+                  <div className="hidden min-w-0 items-center text-[18px] text-white/[0.66] md:flex">
                     <span className="truncate">{getSongAlbum(song)}</span>
                   </div>
 
-                  <div className="hidden items-center text-[17px] text-white/[0.66] md:flex">
+                  <div className="hidden items-center text-[18px] text-white/[0.66] md:flex">
                     {formatDateAdded(song.createdAt)}
                   </div>
 
@@ -567,7 +562,7 @@ export default function HomePage() {
                     />
                   </div>
 
-                  <div className="text-right text-[17px] tabular-nums text-white/[0.66] md:text-left">
+                  <div className="flex justify-end text-[18px] tabular-nums text-white/[0.66] md:justify-center md:text-center">
                     {getSongDuration(song, durationLookup[song.id])}
                   </div>
 

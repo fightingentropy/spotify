@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
 import { compare, hash } from "bcryptjs";
 import { basename, extname, join } from "node:path";
@@ -32,6 +32,11 @@ type Variables = {
 type AppEnv = {
   Bindings: CloudflareEnv;
   Variables: Variables;
+};
+
+type MusicProxyEnv = CloudflareEnv & {
+  MAC_MINI_ORIGIN?: string;
+  MAC_MINI_PROXY_TOKEN?: string;
 };
 
 type AuthUser = {
@@ -980,7 +985,106 @@ function parseRangeHeader(rangeHeader: string, size: number): { start: number; e
   return { start, end };
 }
 
+function getMacMiniOrigin(env: CloudflareEnv): string {
+  const origin = ((env as MusicProxyEnv).MAC_MINI_ORIGIN || "").trim();
+  return origin.replace(/\/+$/, "");
+}
+
+function getMacMiniProxyToken(env: CloudflareEnv): string {
+  return ((env as MusicProxyEnv).MAC_MINI_PROXY_TOKEN || "").trim();
+}
+
+function isMacMiniMusicConfigured(env: CloudflareEnv): boolean {
+  const origin = getMacMiniOrigin(env);
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
+  if (!isMacMiniMusicConfigured(c.env)) return false;
+  const pathname = new URL(c.req.url).pathname;
+  const method = c.req.method.toUpperCase();
+
+  if (pathname.startsWith("/api/songs/spotify")) return false;
+  if (pathname.startsWith("/api/files/local/")) return true;
+  if (pathname.startsWith("/api/artwork/local/")) return true;
+  if (pathname.startsWith("/api/songs/")) return true;
+  if (["/api/music/source", "/api/home", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
+    return true;
+  }
+  if (pathname === "/api/songs") {
+    if (method === "GET") return true;
+    if (method !== "POST") return false;
+    const contentType = c.req.header("content-type") || "";
+    return !contentType.toLowerCase().startsWith("application/json");
+  }
+  return false;
+}
+
+function macMiniProxyHeaders(c: Context<AppEnv>): Headers {
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete("host");
+  headers.delete("content-length");
+  headers.delete("cookie");
+  headers.delete("authorization");
+  const token = getMacMiniProxyToken(c.env);
+  if (token) headers.set("x-spotify-proxy-token", token);
+  return headers;
+}
+
+async function proxyToMacMini(c: Context<AppEnv>): Promise<Response> {
+  const sourceUrl = new URL(c.req.url);
+  const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, getMacMiniOrigin(c.env));
+  const method = c.req.method.toUpperCase();
+  return fetch(targetUrl.toString(), {
+    method,
+    headers: macMiniProxyHeaders(c),
+    body: method === "GET" || method === "HEAD" ? undefined : c.req.raw.body,
+    redirect: "manual",
+  });
+}
+
+async function authorizeMacMiniMutation(c: Context<AppEnv>): Promise<Response | null> {
+  const method = c.req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return null;
+
+  await ensureSchema(c.env);
+  const db = createD1SqlTag(c.env.DB);
+  const user = await getCurrentUser(c.req.raw, db);
+  if (!user) return jsonError("Unauthorized", 401);
+  return null;
+}
+
+async function postJsonToMacMini(c: Context<AppEnv>, payload: Record<string, unknown>): Promise<Response> {
+  const targetUrl = new URL("/api/songs", getMacMiniOrigin(c.env));
+  const headers = new Headers({
+    accept: "application/json",
+    "content-type": "application/json",
+  });
+  const token = getMacMiniProxyToken(c.env);
+  if (token) headers.set("x-spotify-proxy-token", token);
+  return fetch(targetUrl.toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+}
+
 const app = new Hono<AppEnv>();
+
+app.use("/api/*", async (c, next) => {
+  if (shouldProxyMusicRequest(c)) {
+    const unauthorized = await authorizeMacMiniMutation(c);
+    if (unauthorized) return unauthorized;
+    return proxyToMacMini(c);
+  }
+  await next();
+});
 
 app.use("/api/*", async (c, next) => {
   await ensureSchema(c.env);
@@ -1368,6 +1472,23 @@ app.post("/api/songs", async (c) => {
     album = toStringValue(payload.album);
     duration = durationSecondsFromPayload(payload);
     if (!title || !artist) return jsonError("Title and artist are required", 400);
+
+    if (isMacMiniMusicConfigured(c.env)) {
+      const isSpotifyImport = toStringValue(payload.mode).toLowerCase() === "spotify" || Boolean(toStringValue(payload.spotifyUrl));
+      const remoteAudioUrl = toStringValue(payload.audioUrl);
+      const resolvedAudioUrl = isSpotifyImport ? (await resolveStreamUrl(payload)).streamUrl : remoteAudioUrl;
+      if (!resolvedAudioUrl) return jsonError("Audio URL is required", 400);
+      return postJsonToMacMini(c, {
+        title,
+        artist,
+        album,
+        durationMs: toNumberValue(payload.durationMs) ?? (duration ? duration * 1000 : undefined),
+        imageUrl: toStringValue(payload.imageUrl),
+        audioUrl: resolvedAudioUrl,
+        lyricsText: toStringValue(payload.lyricsText),
+        replaceExisting,
+      });
+    }
 
     const duplicateRows = await db<{ id: string; title: string; artist: string }>`
       SELECT "id", "title", "artist"

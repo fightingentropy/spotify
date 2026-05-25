@@ -1,14 +1,12 @@
 import MobileSearch from "@/components/MobileSearch";
 import { useApiData, type HomePayload } from "@/client/api";
-import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 
 export default function SearchPage() {
-  const localSongs = useBrowserLocalLibraryStore((state) => state.songs);
   const { data, loading, error } = useApiData<HomePayload>("/api/home", {
     songs: [],
     likedSongIds: [],
   });
-  const songs = [...data.songs, ...localSongs];
+  const songs = data.songs;
 
   if (loading) {
     return <div className="px-4 py-6 max-w-7xl mx-auto opacity-70">Loading search...</div>;

@@ -53,10 +53,27 @@ body.wf-now-playing-open {
 }
 
 @media (min-width: 1024px) {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
   .wf-main {
-    padding-left: var(--wf-left-sidebar-width, 16rem);
-    padding-right: 20rem;
-    padding-bottom: 5.5rem;
+    position: fixed;
+    top: calc(3.5rem + env(safe-area-inset-top));
+    right: 20rem;
+    bottom: 84px;
+    left: var(--wf-left-sidebar-width, 16rem);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0;
+    scrollbar-gutter: stable;
   }
 }
 

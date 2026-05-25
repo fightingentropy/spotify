@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
+REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
+REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
+PORT="${PORT:-5174}"
+HOST="${HOST:-0.0.0.0}"
+BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/install-mini-server.sh [options]
+
+Installs/updates the Mac mini Spotify music server:
+  - /Users/hermes/.local/bin/spotify-run-server
+  - /Library/LaunchDaemons/com.fightingentropy.spotify-app.plist
+  - /Users/hermes/.config/spotify/env
+
+Options:
+  --port <port>          Server port. Default: 5174.
+  --host <host>          Bind host. Default: 0.0.0.0.
+  --music-dir <path>     Remote music source. Default: /Users/hermes/Music.
+  -h, --help             Show this help.
+
+Environment:
+  MINI_HOST              Default: hermes@m4mini.local
+  SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
+  REMOTE_APP             Default: /Users/hermes/Developer/spotify
+  REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
+  BUN_BIN                Default: /opt/homebrew/bin/bun
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --port)
+      [[ $# -ge 2 ]] || { echo "--port requires a value" >&2; exit 2; }
+      PORT="$2"
+      shift 2
+      ;;
+    --host)
+      [[ $# -ge 2 ]] || { echo "--host requires a value" >&2; exit 2; }
+      HOST="$2"
+      shift 2
+      ;;
+    --music-dir)
+      [[ $# -ge 2 ]] || { echo "--music-dir requires a path" >&2; exit 2; }
+      REMOTE_MUSIC_DIR="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
+  "REMOTE_APP='$REMOTE_APP' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' PORT='$PORT' HOST='$HOST' BUN_BIN='$BUN_BIN' bash -s" <<'REMOTE'
+set -euo pipefail
+
+state_dir="$HOME/.local/state/spotify"
+bin_dir="$HOME/.local/bin"
+config_dir="$HOME/.config/spotify"
+env_file="$config_dir/env"
+app_plist="/Library/LaunchDaemons/com.fightingentropy.spotify-app.plist"
+
+mkdir -p "$state_dir" "$bin_dir" "$config_dir" "$REMOTE_MUSIC_DIR" "$REMOTE_APP/cache"
+chmod 700 "$state_dir" "$bin_dir" "$config_dir"
+
+if [[ ! -x "$BUN_BIN" ]]; then
+  echo "Missing Bun runtime at $BUN_BIN" >&2
+  exit 1
+fi
+
+if [[ ! -f "$REMOTE_APP/src/server/local-music-server.ts" ]]; then
+  echo "Missing server source: $REMOTE_APP/src/server/local-music-server.ts" >&2
+  exit 1
+fi
+
+if [[ ! -f "$REMOTE_APP/dist/client/index.html" ]]; then
+  echo "Missing frontend build: $REMOTE_APP/dist/client/index.html" >&2
+  exit 1
+fi
+
+if [[ ! -f "$env_file" ]]; then
+  cat > "$env_file" <<ENV
+HOST=$HOST
+PORT=$PORT
+SPOTIFY_MUSIC_DIR=$REMOTE_MUSIC_DIR
+SPOTIFY_DIST_DIR=$REMOTE_APP/dist/client
+SPOTIFY_CACHE_DIR=$REMOTE_APP/cache
+ENV
+  chmod 600 "$env_file"
+fi
+
+cat > "$bin_dir/spotify-run-server" <<'SCRIPT'
+#!/bin/bash
+set -uo pipefail
+
+export PATH="/opt/homebrew/bin:/Users/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export SPOTIFY_ENV_FILE="${SPOTIFY_ENV_FILE:-/Users/hermes/.config/spotify/env}"
+cd /Users/hermes/Developer/spotify
+
+if [[ -f "$SPOTIFY_ENV_FILE" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "${line//[[:space:]]/}" || "$line" == \#* || "$line" != *=* ]] && continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+    if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+
+    export "$key=$value"
+  done < "$SPOTIFY_ENV_FILE"
+fi
+
+printf '%s spotify server starting music=%s port=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SPOTIFY_MUSIC_DIR:-}" "${PORT:-}" >&2
+/opt/homebrew/bin/bun run src/server/local-music-server.ts
+status=$?
+printf '%s spotify server exited status=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" >&2
+exit "$status"
+SCRIPT
+chmod 700 "$bin_dir/spotify-run-server"
+bash -n "$bin_dir/spotify-run-server"
+
+tmp_plist="$(mktemp)"
+cat > "$tmp_plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fightingentropy.spotify-app</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/hermes/.local/bin/spotify-run-server</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/hermes/Developer/spotify</string>
+  <key>UserName</key>
+  <string>hermes</string>
+  <key>GroupName</key>
+  <string>staff</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/hermes/.local/state/spotify/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/hermes/.local/state/spotify/server.err.log</string>
+</dict>
+</plist>
+PLIST
+
+sudo install -m 644 "$tmp_plist" "$app_plist"
+rm -f "$tmp_plist"
+
+sudo launchctl bootout system "$app_plist" 2>/dev/null || true
+sudo launchctl bootstrap system "$app_plist"
+sudo launchctl enable system/com.fightingentropy.spotify-app 2>/dev/null || true
+sudo launchctl kickstart -k system/com.fightingentropy.spotify-app
+
+sleep 2
+status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://127.0.0.1:$PORT/api/music/source" || true)
+printf 'server_http=%s\n' "$status"
+launchctl print system/com.fightingentropy.spotify-app 2>/dev/null | awk '/state =|pid =|runs =|last exit code =|path =/ {print}'
+
+[[ "$status" == "200" ]] || exit 1
+REMOTE

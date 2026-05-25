@@ -643,75 +643,38 @@ function PlayerBar(): React.ReactElement | null {
       </div>
 
       {/* Desktop player */}
-      <div className="hidden lg:block max-w-7xl mx-auto px-4 sm:px-6 py-3">
-        <div className="flex items-center gap-3 sm:gap-4">
-          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-            <div className="hidden sm:block">
-              <CoverImage
-                src={currentSong.imageUrl || "/apple-icon.png"}
-                alt="cover"
-                width={48}
-                height={48}
-                className="w-12 h-12 rounded-[5px] object-cover"
-                sizes="48px"
-              />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[15px] font-medium leading-5 truncate text-white">{currentSong.title}</div>
-              <div className="text-[13px] leading-5 text-white/[0.62] truncate">{currentSong.artist}</div>
-            </div>
-            <button
-              type="button"
-              aria-label={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
-              title={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
-              onClick={() => setNowPlayingOpen((open) => !open)}
-              className={cn(
-                "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-                nowPlayingOpen
-                  ? "text-[#1ed760] bg-white/[0.08]"
-                  : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
-              )}
-            >
-              {nowPlayingOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-            </button>
-            <button
-              type="button"
-              aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-              title={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-              onClick={handleToggleLike}
-              disabled={!likesHydrated || likePending || !currentSongId}
-              className={cn(
-                "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-                likePending ? "opacity-60 cursor-wait" : "hover:bg-white/[0.09] hover:text-white",
-                songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
-              )}
-            >
-              <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
-            </button>
+      <div className="hidden h-[84px] grid-cols-[minmax(15rem,1fr)_minmax(27rem,44rem)_minmax(15rem,1fr)] items-center gap-4 px-4 py-3 sm:px-6 lg:grid">
+        <div className="flex min-w-0 items-center justify-start gap-3 sm:gap-4">
+          <CoverImage
+            src={currentSong.imageUrl || "/apple-icon.png"}
+            alt="cover"
+            width={48}
+            height={48}
+            className="h-12 w-12 shrink-0 rounded-[5px] object-cover"
+            sizes="48px"
+          />
+          <div className="min-w-0 max-w-[20rem]">
+            <div className="truncate text-[15px] font-medium leading-5 text-white">{currentSong.title}</div>
+            <div className="truncate text-[13px] leading-5 text-white/[0.62]">{currentSong.artist}</div>
           </div>
+          <button
+            type="button"
+            aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+            title={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+            onClick={handleToggleLike}
+            disabled={!likesHydrated || likePending || !currentSongId}
+            className={cn(
+              "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+              likePending ? "cursor-wait opacity-60" : "hover:bg-white/[0.09] hover:text-white",
+              songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
+            )}
+          >
+            <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+          </button>
+        </div>
 
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-3">
-              <span className="text-[12px] tabular-nums text-white/[0.62] w-10 text-right">{formatTime(currentTime)}</span>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, duration)}
-                step={0.1}
-                value={currentTime}
-                onChange={(e) => onSeek(Number(e.target.value))}
-                tabIndex={-1}
-                onFocus={(e) => e.currentTarget.blur()}
-                className="w-full h-1.5 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
-                style={{
-                  background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
-                }}
-              />
-              <span className="text-[12px] tabular-nums text-white/[0.62] w-10">{formatTime(duration)}</span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 sm:gap-4">
+        <div className="flex min-w-0 flex-col items-center gap-2">
+          <div className="flex items-center justify-center gap-4">
             <button aria-label="Shuffle" onClick={toggleShuffle} className={cn("p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", shuffle && "text-[#1ed760]")}>
               <Shuffle size={18} />
             </button>
@@ -719,7 +682,7 @@ function PlayerBar(): React.ReactElement | null {
               <SkipBack size={18} />
             </button>
             <button aria-label={isPlaying ? "Pause" : "Play"} onClick={toggle} className="h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
-              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+              {isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-[1px]" />}
             </button>
             <button aria-label="Next" onClick={next} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipForward size={18} />
@@ -727,23 +690,58 @@ function PlayerBar(): React.ReactElement | null {
             <button aria-label="Repeat" onClick={cycleRepeatMode} className={cn("p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", repeatMode !== "off" && "text-[#1ed760]")}>
               <Repeat size={18} />
             </button>
+          </div>
 
-            <div className="hidden sm:flex items-center gap-2 ml-2">
-              <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
-                <VolumeIcon size={18} />
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={isMuted ? 0 : volume}
-                onChange={(e) => setVolume(Number(e.target.value))}
-                tabIndex={-1}
-                onFocus={(e) => e.currentTarget.blur()}
-                className="w-28 h-1.5 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
-              />
-            </div>
+          <div className="flex w-full items-center gap-3">
+            <span className="w-10 text-right text-[12px] tabular-nums text-white/[0.62]">{formatTime(currentTime)}</span>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, duration)}
+              step={0.1}
+              value={currentTime}
+              onChange={(e) => onSeek(Number(e.target.value))}
+              tabIndex={-1}
+              onFocus={(e) => e.currentTarget.blur()}
+              className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
+              style={{
+                background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+              }}
+            />
+            <span className="w-10 text-[12px] tabular-nums text-white/[0.62]">{formatTime(duration)}</span>
+          </div>
+        </div>
+
+        <div className="flex min-w-0 items-center justify-end gap-2">
+          <button
+            type="button"
+            aria-label={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
+            title={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
+            onClick={() => setNowPlayingOpen((open) => !open)}
+            className={cn(
+              "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+              nowPlayingOpen
+                ? "bg-white/[0.08] text-[#1ed760]"
+                : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
+            )}
+          >
+            {nowPlayingOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+          </button>
+          <div className="hidden items-center gap-2 xl:flex">
+            <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="rounded-full p-2 text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
+              <VolumeIcon size={18} />
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={isMuted ? 0 : volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              tabIndex={-1}
+              onFocus={(e) => e.currentTarget.blur()}
+              className="h-1.5 w-28 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
+            />
           </div>
         </div>
       </div>

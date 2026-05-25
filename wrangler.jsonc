@@ -31,6 +31,7 @@
 		"enabled": true
 	},
 	"vars": {
-		"AUTH_TRUST_HOST": "true"
+		"AUTH_TRUST_HOST": "true",
+		"MAC_MINI_ORIGIN": "https://spotify-mini.fightingentropy.org"
 	}
 }
