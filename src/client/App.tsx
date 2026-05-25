@@ -15,6 +15,7 @@ import LikedPage from "@/client/pages/LikedPage";
 import PlaylistPage from "@/client/pages/PlaylistPage";
 import UploadPage from "@/client/pages/UploadPage";
 import SettingsPage from "@/client/pages/SettingsPage";
+import ProfilePage from "@/client/pages/ProfilePage";
 import SignInPage from "@/client/pages/SignInPage";
 import RegisterPage from "@/client/pages/RegisterPage";
 import { useApiData, type LibraryPayload } from "@/client/api";
@@ -66,6 +67,7 @@ function Shell() {
           <Route path="/playlist/:id" element={<PlaylistPage />} />
           <Route path="/upload" element={<UploadPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
           <Route path="/signin" element={<SignInPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route

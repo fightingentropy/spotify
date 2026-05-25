@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v9";
+const CACHE_VERSION = "spotify-v10";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -9,11 +9,13 @@ const SHELL_URLS = [
   "/liked",
   "/search",
   "/library",
+  "/profile",
   "/settings",
   "/upload",
   "/icon.svg",
   "/icon-512.png",
   "/apple-icon.png",
+  "/profile.jpg",
   "/favicon.ico",
   "/manifest.webmanifest",
 ];
