@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronDown, LogIn, LogOut, Settings, UserRound } from "lucide-react";
+import { ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
 import { useAuth } from "@/client/auth";
 
 export const PROFILE_IMAGE_URL = "/profile.jpg";
@@ -10,46 +10,6 @@ export const PROFILE_IMAGE_URL = "/profile.jpg";
 export function AuthButtons({ compact = false }: { compact?: boolean }) {
   const { user, status, signOut } = useAuth();
   const navigate = useNavigate();
-
-  if (status === "loading") {
-    if (compact) {
-      return (
-        <div
-          className="h-9 w-9 shrink-0 animate-pulse rounded-full border border-white/[0.12] bg-white/[0.06]"
-          aria-label="Checking auth"
-        />
-      );
-    }
-
-    return <div className="truncate text-[15px] text-white/[0.62]">Checking...</div>;
-  }
-
-  if (!user) {
-    if (compact) {
-      return (
-        <Link
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/[0.12] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
-          to="/signin"
-          aria-label="Sign in"
-          title="Sign in"
-        >
-          <LogIn size={18} />
-        </Link>
-      );
-    }
-
-    return (
-      <div className="flex min-w-0 shrink-0 items-center justify-end gap-2 text-[15px] whitespace-nowrap">
-        <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/signin">
-          Sign in
-        </Link>
-        <span className="text-white/[0.38]">/</span>
-        <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/register">
-          Register
-        </Link>
-      </div>
-    );
-  }
 
   if (compact) {
     return (
@@ -60,11 +20,29 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
         title="Profile"
       >
         <img
-          src={user.image || PROFILE_IMAGE_URL}
-          alt={user.name || "Profile"}
+          src={user?.image || PROFILE_IMAGE_URL}
+          alt={user?.name || "Profile"}
           className="h-full w-full rounded-full object-cover"
         />
       </Link>
+    );
+  }
+
+  if (status === "loading") {
+    return <div className="truncate text-[15px] text-white/[0.62]">Checking...</div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-w-0 shrink-0 items-center justify-end gap-2 text-[15px] whitespace-nowrap">
+        <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/signin">
+          Sign in
+        </Link>
+        <span className="text-white/[0.38]">/</span>
+        <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/register">
+          Register
+        </Link>
+      </div>
     );
   }
 
