@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Heart, Library, ListMusic, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Heart, Library, ListMusic, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type PlaylistEntry = {
@@ -90,6 +90,24 @@ export default function LibrarySidebarClient({
             {!collapsed && (
               <div className="min-w-0">
                 <div className="text-[16px] font-medium leading-6 text-white">Liked Songs</div>
+              </div>
+            )}
+          </Link>
+
+          <Link
+            to="/downloads"
+            title="Downloads"
+            className={cn(
+              "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+              collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
+            )}
+          >
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-emerald-500/15 text-emerald-300">
+              <Download size={18} />
+            </div>
+            {!collapsed && (
+              <div className="min-w-0">
+                <div className="text-[16px] font-medium leading-6 text-white">Downloads</div>
               </div>
             )}
           </Link>

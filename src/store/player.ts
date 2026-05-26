@@ -36,6 +36,23 @@ type PlayerState = {
 };
 
 const MAX_PLAY_HISTORY = 200;
+const SHUFFLE_STORAGE_KEY = "spotify_shuffle_enabled";
+
+function readStoredShuffle(): boolean {
+  try {
+    return typeof window !== "undefined" && localStorage.getItem(SHUFFLE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredShuffle(enabled: boolean): void {
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(SHUFFLE_STORAGE_KEY, enabled ? "1" : "0");
+    }
+  } catch {}
+}
 
 function pushHistory(history: number[], index: number): number[] {
   if (!Number.isInteger(index) || index < 0) return history;
@@ -60,7 +77,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   isPlaying: false,
   volume: 0.9,
   isMuted: false,
-  shuffle: false,
+  shuffle: readStoredShuffle(),
   repeatMode: "off",
   // Initialize deterministic values to avoid SSR/CSR hydration mismatch; rehydrate from localStorage on client mount
   crossfadeEnabled: true,
@@ -155,7 +172,12 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     }),
   setVolume: (v) => set({ volume: Math.max(0, Math.min(1, v)) }),
   toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
-  toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle, playHistory: [], playFuture: [] })),
+  toggleShuffle: () =>
+    set((s) => {
+      const shuffle = !s.shuffle;
+      writeStoredShuffle(shuffle);
+      return { shuffle, playHistory: [], playFuture: [] };
+    }),
   cycleRepeatMode: () =>
     set((s) => ({ repeatMode: s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off" })),
   setCrossfadeEnabled: (enabled) => {

@@ -20,6 +20,7 @@ const tabs = [
     match: (path: string) =>
       path.startsWith("/library") ||
       path.startsWith("/liked") ||
+      path.startsWith("/downloads") ||
       path.startsWith("/playlist"),
   },
 ] as const;
