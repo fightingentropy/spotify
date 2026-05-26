@@ -27,10 +27,15 @@ export default function LikedPage() {
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold">Liked Songs</h1>
+        <div className="mb-4 flex flex-col items-start gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
+          <h1 className="text-2xl font-semibold leading-tight">Liked Songs</h1>
           {data.songs.length > 0 ? (
-            <OfflineBulkDownloadButton songs={data.songs} scope="liked" label="Download liked" />
+            <OfflineBulkDownloadButton
+              songs={data.songs}
+              scope="liked"
+              label="Download liked"
+              className="w-full justify-center sm:w-auto"
+            />
           ) : null}
         </div>
         {loading ? (
@@ -46,7 +51,7 @@ export default function LikedPage() {
             hideIfUnliked
             canLike
             emptyLabel="You haven't liked any songs yet."
-            viewToggleClassName="-mt-14 mb-8"
+            viewToggleClassName="mb-8 sm:-mt-14"
           />
         )}
         <div className="h-8 lg:h-24" />

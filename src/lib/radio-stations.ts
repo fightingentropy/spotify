@@ -2,7 +2,6 @@ import type { PlayerSong } from "@/types/player";
 
 export type RadioStation = PlayerSong & {
   location: string;
-  homepageUrl: string;
   streamLabel: string;
   accentClassName: string;
 };
@@ -14,7 +13,6 @@ export const RADIO_STATIONS: RadioStation[] = [
     artist: "Athens, Greece",
     album: "Radio Stations",
     location: "Athens, Greece",
-    homepageUrl: "https://www.dromosfm.gr/",
     streamLabel: "AAC+ 160 kbps",
     imageUrl: "https://e-radio.github.io/station-icons/89-8-dromos-89-8-athens.webp",
     audioUrl: "https://netradio.live24.gr/dromos2",
@@ -27,7 +25,6 @@ export const RADIO_STATIONS: RadioStation[] = [
     artist: "London, United Kingdom",
     album: "Radio Stations",
     location: "London, United Kingdom",
-    homepageUrl: "https://www.bbc.co.uk/sounds/play/live:bbc_radio_one",
     streamLabel: "HLS 96 kbps",
     imageUrl: "https://sounds.files.bbci.co.uk/3.9.4/networks/bbc_radio_one/blocks-colour_600x600.png",
     audioUrl:
