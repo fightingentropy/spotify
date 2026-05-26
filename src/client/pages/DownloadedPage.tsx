@@ -51,6 +51,7 @@ export default function DownloadedPage() {
             likedSongIds={data.likedSongIds}
             canLike={!!user}
             emptyLabel="Downloaded songs will show up here."
+            viewToggleClassName="mb-8 sm:-mt-14"
           />
         )}
         <div className="h-8 lg:h-24" />

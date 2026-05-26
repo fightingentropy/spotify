@@ -35,6 +35,15 @@ function requestMediaCache(song: PlayerSong | null): void {
     .catch(() => {});
 }
 
+function finiteMediaDuration(value: number): number | null {
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function errorName(error: unknown): string {
+  if (typeof error !== "object" || error === null || !("name" in error)) return "";
+  return String((error as { name?: unknown }).name || "");
+}
+
 function PlayerBar(): React.ReactElement | null {
   // Individual selectors so we only re-render when each specific value changes
   // (instead of on every store mutation, as a full destructure would cause).
@@ -100,6 +109,11 @@ function PlayerBar(): React.ReactElement | null {
 
   const crossfadingRef = useRef<boolean>(false);
   const suppressAutoLoadRef = useRef<boolean>(false);
+  const resumeAfterSeekRef = useRef<boolean>(false);
+  const pendingSeekTimeoutRef = useRef<number | null>(null);
+  const pendingSeekRef = useRef<{ audio: HTMLAudioElement; time: number; duration: number } | null>(null);
+  const lastSeekTargetRef = useRef<number | null>(null);
+  const isPlayingRef = useRef<boolean>(isPlaying);
   const volumeRef = useRef<number>(volume);
   const mutedRef = useRef<boolean>(isMuted);
 
@@ -110,19 +124,64 @@ function PlayerBar(): React.ReactElement | null {
 
   const src = currentSong?.audioUrl || null;
 
-  const onSeek = useCallback((value: number) => {
-    const active = getActiveAudio();
+  const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
+    if (!isPlayingRef.current || audio !== getActiveAudio()) return;
+    audio.play()
+      .then(() => {
+        if (audio === getActiveAudio()) resumeAfterSeekRef.current = false;
+      })
+      .catch((error: unknown) => {
+        if (errorName(error) === "AbortError") return;
+        if (audio !== getActiveAudio() || !isPlayingRef.current) return;
+        resumeAfterSeekRef.current = false;
+        pause();
+      });
+  }, [getActiveAudio, pause]);
+
+  const performSeek = useCallback((active: HTMLAudioElement, nextTime: number, seekDuration: number) => {
+    if (active !== getActiveAudio()) return;
     const inactive = getInactiveAudio();
-    if (!active || !duration) return;
-    const nextTime = Math.max(0, Math.min(duration, value));
-    active.currentTime = nextTime;
+    resumeAfterSeekRef.current = isPlayingRef.current;
+    try {
+      active.currentTime = nextTime;
+    } catch {
+      resumeAfterSeekRef.current = false;
+      return;
+    }
     if (crossfadingRef.current && inactive) {
       try {
-        inactive.currentTime = Math.max(0, Math.min(inactive.duration || nextTime, nextTime));
+        const inactiveDuration = finiteMediaDuration(inactive.duration) ?? seekDuration;
+        inactive.currentTime = Math.max(0, Math.min(inactiveDuration, nextTime));
       } catch {}
     }
     setCurrentTime(nextTime);
-  }, [duration, getActiveAudio, getInactiveAudio]);
+    if (resumeAfterSeekRef.current) resumeActivePlayback(active);
+  }, [getActiveAudio, getInactiveAudio, resumeActivePlayback]);
+
+  const onSeek = useCallback((value: number) => {
+    const active = getActiveAudio();
+    if (!active || !Number.isFinite(value)) return;
+    const seekDuration = finiteMediaDuration(duration) ?? finiteMediaDuration(active.duration);
+    if (seekDuration == null) return;
+    const nextTime = Math.max(0, Math.min(seekDuration, value));
+    lastSeekTargetRef.current = nextTime;
+    pendingSeekRef.current = { audio: active, time: nextTime, duration: seekDuration };
+    setCurrentTime(nextTime);
+
+    if (pendingSeekTimeoutRef.current != null) {
+      window.clearTimeout(pendingSeekTimeoutRef.current);
+    }
+    pendingSeekTimeoutRef.current = window.setTimeout(() => {
+      pendingSeekTimeoutRef.current = null;
+      const pending = pendingSeekRef.current;
+      pendingSeekRef.current = null;
+      if (!pending) return;
+      performSeek(pending.audio, pending.time, pending.duration);
+      if (lastSeekTargetRef.current === pending.time) {
+        lastSeekTargetRef.current = null;
+      }
+    }, 90);
+  }, [duration, getActiveAudio, performSeek]);
 
   useMediaSession({
     song: currentSong,
@@ -147,6 +206,14 @@ function PlayerBar(): React.ReactElement | null {
     void prefetchUpcoming(queue, currentIndex);
   }, [currentIndex, currentSong?.id, prefetchUpcoming, queue]);
 
+  useEffect(() => {
+    return () => {
+      if (pendingSeekTimeoutRef.current != null) {
+        window.clearTimeout(pendingSeekTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Client hydration of crossfade settings to ensure feature works without visiting /settings
   const hydratedRef = useRef(false);
   useEffect(() => {
@@ -170,6 +237,10 @@ function PlayerBar(): React.ReactElement | null {
   }, [isMuted]);
 
   // Track latest volume/mute for fades without re-running effects
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+    if (!isPlaying) resumeAfterSeekRef.current = false;
+  }, [isPlaying]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
@@ -453,6 +524,19 @@ function PlayerBar(): React.ReactElement | null {
     };
   }, [queue, currentIndex, currentSong, currentTime, isPlaying, activeIdx]);
 
+  const handleActiveAudioResumePoint = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
+    const audio = event.currentTarget;
+    if (audio !== getActiveAudio()) return;
+    setCurrentTime(audio.currentTime || 0);
+    if (resumeAfterSeekRef.current) resumeActivePlayback(audio);
+  }, [getActiveAudio, resumeActivePlayback]);
+
+  const handleActiveAudioPlaying = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
+    if (event.currentTarget === getActiveAudio()) {
+      resumeAfterSeekRef.current = false;
+    }
+  }, [getActiveAudio]);
+
   // Global keyboard shortcuts (always register to keep hook order stable)
   useEffect(() => {
     function isTypingTarget(target: EventTarget | null): boolean {
@@ -464,11 +548,11 @@ function PlayerBar(): React.ReactElement | null {
     function seekBy(seconds: number) {
       const audio = getActiveAudio();
       if (!audio) return;
-      const total = Number.isFinite(audio.duration) ? audio.duration : duration;
-      if (!total || Number.isNaN(total)) return;
-      const nextTime = Math.max(0, Math.min(total, (audio.currentTime || 0) + seconds));
-      audio.currentTime = nextTime;
-      setCurrentTime(nextTime);
+      const total = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration);
+      if (total == null) return;
+      const baseTime = lastSeekTargetRef.current ?? audio.currentTime ?? 0;
+      const nextTime = Math.max(0, Math.min(total, baseTime + seconds));
+      onSeek(nextTime);
     }
 
     function onKeyDown(e: KeyboardEvent) {
@@ -510,7 +594,7 @@ function PlayerBar(): React.ReactElement | null {
     const options = { capture: true };
     window.addEventListener("keydown", onKeyDown, options);
     return () => window.removeEventListener("keydown", onKeyDown, options);
-  }, [next, previous, duration, toggle, getActiveAudio]);
+  }, [next, previous, duration, toggle, getActiveAudio, onSeek]);
 
   if (!currentSong) return null;
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
@@ -550,6 +634,9 @@ function PlayerBar(): React.ReactElement | null {
         onTimeUpdate={(e) => {
           if (e.currentTarget === getActiveAudio()) setCurrentTime(e.currentTarget.currentTime || 0);
         }}
+        onSeeked={handleActiveAudioResumePoint}
+        onCanPlay={handleActiveAudioResumePoint}
+        onPlaying={handleActiveAudioPlaying}
         onEnded={(e) => {
           if (e.currentTarget !== getActiveAudio()) return;
           if (crossfadingRef.current) return;
@@ -583,6 +670,9 @@ function PlayerBar(): React.ReactElement | null {
         onTimeUpdate={(e) => {
           if (e.currentTarget === getActiveAudio()) setCurrentTime(e.currentTarget.currentTime || 0);
         }}
+        onSeeked={handleActiveAudioResumePoint}
+        onCanPlay={handleActiveAudioResumePoint}
+        onPlaying={handleActiveAudioPlaying}
         onEnded={(e) => {
           if (e.currentTarget !== getActiveAudio()) return;
           if (crossfadingRef.current) return;

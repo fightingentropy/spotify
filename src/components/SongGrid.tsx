@@ -481,50 +481,52 @@ export function SongGrid({
 
   return (
     <div className={cn(!preferencesReady && "opacity-0")}>
-      <div className={cn("mb-3 flex items-center justify-end gap-2", viewToggleClassName)}>
+      <div className={cn("mb-3 flex w-full items-center gap-2", viewToggleClassName)}>
         {canReorder ? (
-          <div className="mr-auto text-xs opacity-70">
+          <div className="hidden shrink-0 text-xs opacity-70 sm:block">
             Drag songs to reorder
           </div>
         ) : null}
-        <select
-          value={sortMode}
-          onChange={(event) => setNextSortMode(event.target.value as SongSortMode)}
-          className="h-10 rounded-lg border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 px-3 text-sm"
-          aria-label="Sort songs"
-          title="Sort songs"
-        >
-          <option value="default">Sort: Default</option>
-          <option value="uploaded_desc">Sort: Upload date (newest)</option>
-          <option value="uploaded_asc">Sort: Upload date (oldest)</option>
-        </select>
-        <div className="inline-flex items-center rounded-lg border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 p-1">
-          <button
-            type="button"
-            onClick={() => setNextViewMode("grid")}
-            className={cn(
-              "h-8 px-3 rounded-md inline-flex items-center gap-2 text-sm transition",
-              viewMode === "grid" && "bg-black/10 dark:bg-white/10 font-medium",
-            )}
-            aria-pressed={viewMode === "grid"}
-            title="Grid view"
+        <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
+          <select
+            value={sortMode}
+            onChange={(event) => setNextSortMode(event.target.value as SongSortMode)}
+            className="h-10 min-w-0 flex-1 rounded-lg border border-black/10 bg-black/5 px-3 text-sm dark:border-white/10 dark:bg-white/5 sm:w-64 sm:flex-none"
+            aria-label="Sort songs"
+            title="Sort songs"
           >
-            <LayoutGrid size={16} />
-            <span className="hidden sm:inline">Grid</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setNextViewMode("list")}
-            className={cn(
-              "h-8 px-3 rounded-md inline-flex items-center gap-2 text-sm transition",
-              viewMode === "list" && "bg-black/10 dark:bg-white/10 font-medium",
-            )}
-            aria-pressed={viewMode === "list"}
-            title="List view"
-          >
-            <Rows3 size={16} />
-            <span className="hidden sm:inline">List</span>
-          </button>
+            <option value="default">Sort: Default</option>
+            <option value="uploaded_desc">Sort: Upload date (newest)</option>
+            <option value="uploaded_asc">Sort: Upload date (oldest)</option>
+          </select>
+          <div className="inline-flex h-10 shrink-0 items-center rounded-lg border border-black/10 bg-black/5 p-1 dark:border-white/10 dark:bg-white/5">
+            <button
+              type="button"
+              onClick={() => setNextViewMode("grid")}
+              className={cn(
+                "inline-flex h-8 w-9 items-center justify-center gap-2 rounded-md text-sm transition sm:w-auto sm:px-3",
+                viewMode === "grid" && "bg-black/10 font-medium dark:bg-white/10",
+              )}
+              aria-pressed={viewMode === "grid"}
+              title="Grid view"
+            >
+              <LayoutGrid size={16} />
+              <span className="hidden sm:inline">Grid</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setNextViewMode("list")}
+              className={cn(
+                "inline-flex h-8 w-9 items-center justify-center gap-2 rounded-md text-sm transition sm:w-auto sm:px-3",
+                viewMode === "list" && "bg-black/10 font-medium dark:bg-white/10",
+              )}
+              aria-pressed={viewMode === "list"}
+              title="List view"
+            >
+              <Rows3 size={16} />
+              <span className="hidden sm:inline">List</span>
+            </button>
+          </div>
         </div>
       </div>
 
