@@ -17,6 +17,7 @@ import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
+import { isRadioSong } from "@/lib/player-song";
 import { cn, formatTime } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
@@ -82,6 +83,7 @@ export default function NowPlayingSheet({
   const pendingLookup = useLikesStore((state) => state.pending);
   const likesHydrated = useLikesStore((state) => state.hydrated);
 
+  const liveStream = isRadioSong(song);
   const songIsLiked = !!likedLookup[song.id];
   const likePending = !!pendingLookup[song.id];
 
@@ -160,7 +162,7 @@ export default function NowPlayingSheet({
   }, [open]);
 
   async function handleToggleLike() {
-    if (!likesHydrated || likePending) return;
+    if (liveStream || !likesHydrated || likePending) return;
     const result = await toggleLike(song.id, !songIsLiked, song);
     if (!result.ok && result.status === 401) {
       navigate("/signin");
@@ -224,20 +226,24 @@ export default function NowPlayingSheet({
               </button>
               <div className="text-xs uppercase tracking-wide opacity-70">Now Playing</div>
               <div className="-mr-1 flex items-center gap-1">
-                <OfflineSongDownloadButton song={song} className="h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
-                <button
-                  type="button"
-                  aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-                  onClick={handleToggleLike}
-                  disabled={!likesHydrated || likePending}
-                  className={cn(
-                    "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
-                    likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
-                    songIsLiked ? "text-emerald-500" : "text-foreground/70",
-                  )}
-                >
-                  <Heart size={22} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
-                </button>
+                {!liveStream ? (
+                  <>
+                    <OfflineSongDownloadButton song={song} className="h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
+                    <button
+                      type="button"
+                      aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+                      onClick={handleToggleLike}
+                      disabled={!likesHydrated || likePending}
+                      className={cn(
+                        "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                        likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
+                        songIsLiked ? "text-emerald-500" : "text-foreground/70",
+                      )}
+                    >
+                      <Heart size={22} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+                    </button>
+                  </>
+                ) : null}
               </div>
             </div>
 
@@ -259,24 +265,36 @@ export default function NowPlayingSheet({
                 <div className="text-lg opacity-80 mt-1">{song.artist}</div>
               </div>
 
-              <div className="space-y-2">
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(0, duration)}
-                  step={0.1}
-                  value={currentTime}
-                  onChange={(event) => onSeek(Number(event.target.value))}
-                  className="w-full h-1 appearance-none rounded-full bg-black/10 dark:bg-white/10 accent-emerald-500 touch-manipulation"
-                  style={{
-                    background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
-                  }}
-                />
-                <div className="flex justify-between text-xs tabular-nums opacity-70">
-                  <span>{formatTime(currentTime)}</span>
-                  <span>{formatTime(duration)}</span>
+              {liveStream ? (
+                <div className="space-y-2">
+                  <div className="h-1 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                    <div className={cn("h-full w-full bg-emerald-500", isPlaying && "animate-pulse")} />
+                  </div>
+                  <div className="flex justify-between text-xs font-semibold text-emerald-400">
+                    <span>LIVE</span>
+                    <span>Radio</span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, duration)}
+                    step={0.1}
+                    value={currentTime}
+                    onChange={(event) => onSeek(Number(event.target.value))}
+                    className="w-full h-1 appearance-none rounded-full bg-black/10 dark:bg-white/10 accent-emerald-500 touch-manipulation"
+                    style={{
+                      background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+                    }}
+                  />
+                  <div className="flex justify-between text-xs tabular-nums opacity-70">
+                    <span>{formatTime(currentTime)}</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between px-2">
                 <button
@@ -328,6 +346,7 @@ export default function NowPlayingSheet({
               </div>
             </div>
 
+            {!liveStream ? (
             <div className="mt-6 space-y-4 lg:mt-5">
               <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 space-y-4">
                 <div className="flex items-center justify-between">
@@ -368,6 +387,7 @@ export default function NowPlayingSheet({
                 </div>
               </div>
             </div>
+            ) : null}
           </div>
         </div>
       </section>

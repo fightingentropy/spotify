@@ -21,6 +21,7 @@ const tabs = [
       path.startsWith("/library") ||
       path.startsWith("/liked") ||
       path.startsWith("/downloads") ||
+      path.startsWith("/radio") ||
       path.startsWith("/playlist"),
   },
 ] as const;

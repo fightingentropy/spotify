@@ -17,6 +17,7 @@ const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
 const loadLikedPage = () => import("@/client/pages/LikedPage");
 const loadDownloadedPage = () => import("@/client/pages/DownloadedPage");
+const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
@@ -28,6 +29,7 @@ const SearchPage = lazy(loadSearchPage);
 const LibraryPage = lazy(loadLibraryPage);
 const LikedPage = lazy(loadLikedPage);
 const DownloadedPage = lazy(loadDownloadedPage);
+const RadioPage = lazy(loadRadioPage);
 const PlaylistPage = lazy(loadPlaylistPage);
 const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -54,6 +56,7 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
       void loadLibraryPage();
       void loadLikedPage();
       void loadDownloadedPage();
+      void loadRadioPage();
       void loadProfilePage();
       void loadSettingsPage();
       if (status === "unauthenticated") {
@@ -123,6 +126,7 @@ function Shell() {
           <Route path="/library" element={lazyRoute(<LibraryPage />, "Loading library...")} />
           <Route path="/liked" element={lazyRoute(<LikedPage />, "Loading liked songs...")} />
           <Route path="/downloads" element={lazyRoute(<DownloadedPage />, "Loading downloads...")} />
+          <Route path="/radio" element={lazyRoute(<RadioPage />, "Loading radio stations...")} />
           <Route path="/playlist/:id" element={lazyRoute(<PlaylistPage />, "Loading playlist...")} />
           <Route path="/upload" element={lazyRoute(<UploadPage />, "Loading upload...")} />
           <Route path="/settings" element={lazyRoute(<SettingsPage />, "Loading settings...")} />

@@ -10,7 +10,7 @@ export type PlayerSong = {
   duration?: number;
   audioBitDepth?: number;
   audioSampleRate?: number;
-  source?: "server" | "browser-local" | "picked-file";
+  source?: "server" | "browser-local" | "picked-file" | "radio";
   localPath?: string;
   writable?: boolean;
 };

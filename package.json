@@ -23,6 +23,7 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
+    "hls.js": "^1.6.16",
     "hono": "^4.12.22",
     "lucide-react": "^0.575.0",
     "music-metadata": "11.12.1",

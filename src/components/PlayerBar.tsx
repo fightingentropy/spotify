@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
@@ -10,6 +11,7 @@ import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuf
 import NowPlayingSheet from "@/components/NowPlayingSheet";
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/store/browser-local-library";
+import { isRadioSong } from "@/lib/player-song";
 import { useMediaSession } from "@/lib/use-media-session";
 import { useOfflineStore } from "@/client/offline";
 
@@ -38,6 +40,22 @@ function requestMediaCache(song: PlayerSong | null): void {
 function finiteMediaDuration(value: number): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
+
+function isHlsPlaylistSrc(src: string): boolean {
+  return /\.m3u8(?:[?#]|$)/i.test(src);
+}
+
+function canPlayHlsNatively(audio: HTMLAudioElement): boolean {
+  return (
+    audio.canPlayType("application/vnd.apple.mpegurl") !== "" ||
+    audio.canPlayType("application/x-mpegURL") !== ""
+  );
+}
+
+type AudioSourceState = {
+  src: string;
+  hls: Hls | null;
+};
 
 function errorName(error: unknown): string {
   if (typeof error !== "object" || error === null || !("name" in error)) return "";
@@ -82,20 +100,22 @@ function PlayerBar(): React.ReactElement | null {
 
   const currentSongId = currentSong?.id ?? null;
   const currentSongIsBrowserLocal = isBrowserLocalSong(currentSong);
+  const currentSongIsRadio = isRadioSong(currentSong);
   const songIsLiked = currentSongId ? !!likedLookup[currentSongId] : false;
   const likePending = currentSongId ? !!pendingLookup[currentSongId] : false;
 
   const handleToggleLike = useCallback(async () => {
-    if (!currentSongId || !likesHydrated || likePending) return;
+    if (!currentSongId || !likesHydrated || likePending || currentSongIsRadio) return;
     const result = await toggleLike(currentSongId, !songIsLiked, currentSong ?? undefined);
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
-  }, [currentSongId, likesHydrated, likePending, toggleLike, songIsLiked, navigate]);
+  }, [currentSong, currentSongId, currentSongIsRadio, likesHydrated, likePending, toggleLike, songIsLiked, navigate]);
 
   // Dual audio elements for real crossfade
   const audioARef = useRef<HTMLAudioElement | null>(null);
   const audioBRef = useRef<HTMLAudioElement | null>(null);
+  const audioSourceStateRef = useRef<WeakMap<HTMLAudioElement, AudioSourceState>>(new WeakMap());
   const [activeIdx, setActiveIdx] = useState<0 | 1>(0);
   const getActiveAudio = useCallback(
     () => (activeIdx === 0 ? audioARef.current : audioBRef.current),
@@ -123,6 +143,40 @@ function PlayerBar(): React.ReactElement | null {
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
   const src = currentSong?.audioUrl || null;
+
+  const unloadAudioSource = useCallback((audio: HTMLAudioElement) => {
+    const current = audioSourceStateRef.current.get(audio);
+    current?.hls?.destroy();
+    audioSourceStateRef.current.delete(audio);
+    try { audio.pause(); } catch {}
+    audio.removeAttribute("src");
+    audio.load();
+  }, []);
+
+  const loadAudioSource = useCallback((audio: HTMLAudioElement, nextSrc: string) => {
+    const absolute = resolvePlayableSrc(nextSrc);
+    const current = audioSourceStateRef.current.get(audio);
+    if (current?.src === absolute) return;
+
+    current?.hls?.destroy();
+    audioSourceStateRef.current.delete(audio);
+
+    if (isHlsPlaylistSrc(absolute) && !canPlayHlsNatively(audio) && Hls.isSupported()) {
+      audio.removeAttribute("src");
+      audio.load();
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+      });
+      hls.loadSource(absolute);
+      hls.attachMedia(audio);
+      audioSourceStateRef.current.set(audio, { src: absolute, hls });
+      return;
+    }
+
+    if (audio.src !== absolute) audio.src = absolute;
+    audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
+  }, []);
 
   const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
     if (!isPlayingRef.current || audio !== getActiveAudio()) return;
@@ -198,8 +252,17 @@ function PlayerBar(): React.ReactElement | null {
   });
 
   useEffect(() => {
-    requestMediaCache(currentSong);
-  }, [currentSong?.id, currentSong?.audioUrl, currentSong?.imageUrl]);
+    if (!currentSongIsRadio) requestMediaCache(currentSong);
+  }, [currentSong?.id, currentSong?.audioUrl, currentSong?.imageUrl, currentSongIsRadio]);
+
+  useEffect(() => {
+    return () => {
+      const a = audioARef.current;
+      const b = audioBRef.current;
+      if (a) unloadAudioSource(a);
+      if (b) unloadAudioSource(b);
+    };
+  }, [unloadAudioSource]);
 
   useEffect(() => {
     if (!currentSong) return;
@@ -316,7 +379,7 @@ function PlayerBar(): React.ReactElement | null {
   }, [setSong, setQueue, pause]);
 
   useEffect(() => {
-    if (!currentSongId || currentSongIsBrowserLocal) return;
+    if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio) return;
 
     let cancelled = false;
     const songId = currentSongId;
@@ -338,7 +401,7 @@ function PlayerBar(): React.ReactElement | null {
     return () => {
       cancelled = true;
     };
-  }, [currentSongId, currentSongIsBrowserLocal, replaceSong]);
+  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsRadio, replaceSong]);
 
   // Load current song into the ACTIVE element when not crossfading
   useEffect(() => {
@@ -347,22 +410,22 @@ function PlayerBar(): React.ReactElement | null {
     const other = getInactiveAudio();
     if (!audio) return;
     if (!src) {
-      audio.pause();
-      if (other) other.pause();
+      unloadAudioSource(audio);
+      if (other) unloadAudioSource(other);
       setCurrentTime(0);
       setDuration(0);
       return;
     }
-    const absolute = src ? resolvePlayableSrc(src) : null;
-    if (absolute && audio.src !== absolute) audio.src = absolute;
+    loadAudioSource(audio, src);
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
       try { other.pause(); } catch {}
       other.volume = 0;
+      unloadAudioSource(other);
     }
     if (isPlaying) audio.play().catch(() => { pause(); });
     else audio.pause();
-  }, [src, isPlaying, pause, getActiveAudio, getInactiveAudio]);
+  }, [src, isPlaying, pause, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource]);
 
   // Crossfade: if enabled, monitor active element time and overlap next track
   useEffect(() => {
@@ -429,8 +492,7 @@ function PlayerBar(): React.ReactElement | null {
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
-        const absoluteNext = nextSong.audioUrl ? resolvePlayableSrc(nextSong.audioUrl) : null;
-        if (absoluteNext && incoming.src !== absoluteNext) incoming.src = absoluteNext;
+        if (nextSong.audioUrl) loadAudioSource(incoming, nextSong.audioUrl);
         incoming.currentTime = 0;
         incoming.volume = 0;
 
@@ -487,7 +549,7 @@ function PlayerBar(): React.ReactElement | null {
       isMounted = false;
       if (raf) cancelAnimationFrame(raf); 
     };
-  }, [crossfadeEnabled, crossfadeSeconds, duration, isPlaying, repeatMode]);
+  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, shuffle]);
 
   // Save queue/song and playback position right before page unload
   useEffect(() => {
@@ -597,7 +659,9 @@ function PlayerBar(): React.ReactElement | null {
   }, [next, previous, duration, toggle, getActiveAudio, onSeek]);
 
   if (!currentSong) return null;
-  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !currentSongIsRadio;
+  const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
+  const progress = hasSeekableDuration ? Math.min(100, Math.max(0, (safeCurrentTime / duration) * 100)) : 0;
 
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
 
@@ -608,8 +672,8 @@ function PlayerBar(): React.ReactElement | null {
         onClose={() => setNowPlayingOpen(false)}
         song={currentSong}
         isPlaying={isPlaying}
-        currentTime={currentTime}
-        duration={duration}
+        currentTime={safeCurrentTime}
+        duration={hasSeekableDuration ? duration : 0}
         onSeek={onSeek}
       />
       <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
@@ -621,10 +685,11 @@ function PlayerBar(): React.ReactElement | null {
         onLoadedMetadata={(e) => {
           const audio = e.currentTarget;
           if (audio !== getActiveAudio()) return;
-          setDuration(audio.duration || 0);
+          setDuration(finiteMediaDuration(audio.duration) ?? 0);
           const pending = savedSeekRef.current;
-          if (typeof pending === "number") {
-            const clamped = Math.max(0, Math.min(audio.duration || 0, pending));
+          const seekDuration = finiteMediaDuration(audio.duration);
+          if (typeof pending === "number" && seekDuration != null) {
+            const clamped = Math.max(0, Math.min(seekDuration, pending));
             audio.currentTime = clamped;
             setCurrentTime(clamped);
             savedSeekRef.current = null;
@@ -632,7 +697,9 @@ function PlayerBar(): React.ReactElement | null {
           audio.volume = isMuted ? 0 : volume;
         }}
         onTimeUpdate={(e) => {
-          if (e.currentTarget === getActiveAudio()) setCurrentTime(e.currentTarget.currentTime || 0);
+          if (e.currentTarget === getActiveAudio()) {
+            setCurrentTime(currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0);
+          }
         }}
         onSeeked={handleActiveAudioResumePoint}
         onCanPlay={handleActiveAudioResumePoint}
@@ -657,10 +724,11 @@ function PlayerBar(): React.ReactElement | null {
         onLoadedMetadata={(e) => {
           const audio = e.currentTarget;
           if (audio !== getActiveAudio()) return;
-          setDuration(audio.duration || 0);
+          setDuration(finiteMediaDuration(audio.duration) ?? 0);
           const pending = savedSeekRef.current;
-          if (typeof pending === "number") {
-            const clamped = Math.max(0, Math.min(audio.duration || 0, pending));
+          const seekDuration = finiteMediaDuration(audio.duration);
+          if (typeof pending === "number" && seekDuration != null) {
+            const clamped = Math.max(0, Math.min(seekDuration, pending));
             audio.currentTime = clamped;
             setCurrentTime(clamped);
             savedSeekRef.current = null;
@@ -668,7 +736,9 @@ function PlayerBar(): React.ReactElement | null {
           audio.volume = isMuted ? 0 : volume;
         }}
         onTimeUpdate={(e) => {
-          if (e.currentTarget === getActiveAudio()) setCurrentTime(e.currentTarget.currentTime || 0);
+          if (e.currentTarget === getActiveAudio()) {
+            setCurrentTime(currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0);
+          }
         }}
         onSeeked={handleActiveAudioResumePoint}
         onCanPlay={handleActiveAudioResumePoint}
@@ -693,7 +763,7 @@ function PlayerBar(): React.ReactElement | null {
         >
           <div
             className="h-full bg-emerald-500 transition-[width] duration-150"
-            style={{ width: `${progress}%` }}
+            style={{ width: currentSongIsRadio ? "100%" : `${progress}%` }}
           />
         </div>
         <div className="h-[var(--wf-mobile-player-height)] px-3 flex items-center gap-3">
@@ -716,19 +786,21 @@ function PlayerBar(): React.ReactElement | null {
               <div className="text-[13px] leading-5 text-white/[0.62] truncate">{currentSong.artist}</div>
             </div>
           </button>
-          <button
-            type="button"
-            aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-            onClick={handleToggleLike}
-            disabled={!likesHydrated || likePending || !currentSongId}
-            className={cn(
-              "h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
-              likePending ? "opacity-60" : "",
-              songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
-            )}
-          >
-            <Heart size={20} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
-          </button>
+          {!currentSongIsRadio ? (
+            <button
+              type="button"
+              aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+              onClick={handleToggleLike}
+              disabled={!likesHydrated || likePending || !currentSongId}
+              className={cn(
+                "h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
+                likePending ? "opacity-60" : "",
+                songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
+              )}
+            >
+              <Heart size={20} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label={isPlaying ? "Pause" : "Play"}
@@ -755,20 +827,22 @@ function PlayerBar(): React.ReactElement | null {
             <div className="truncate text-[15px] font-medium leading-5 text-white">{currentSong.title}</div>
             <div className="truncate text-[13px] leading-5 text-white/[0.62]">{currentSong.artist}</div>
           </div>
-          <button
-            type="button"
-            aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-            title={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-            onClick={handleToggleLike}
-            disabled={!likesHydrated || likePending || !currentSongId}
-            className={cn(
-              "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-              likePending ? "cursor-wait opacity-60" : "hover:bg-white/[0.09] hover:text-white",
-              songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
-            )}
-          >
-            <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
-          </button>
+          {!currentSongIsRadio ? (
+            <button
+              type="button"
+              aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+              title={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+              onClick={handleToggleLike}
+              disabled={!likesHydrated || likePending || !currentSongId}
+              className={cn(
+                "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+                likePending ? "cursor-wait opacity-60" : "hover:bg-white/[0.09] hover:text-white",
+                songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
+              )}
+            >
+              <Heart size={18} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+            </button>
+          ) : null}
         </div>
 
         <div className="flex min-w-0 flex-col items-center gap-2">
@@ -790,24 +864,34 @@ function PlayerBar(): React.ReactElement | null {
             </button>
           </div>
 
-          <div className="flex w-full items-center gap-3">
-            <span className="w-10 text-right text-[12px] tabular-nums text-white/[0.62]">{formatTime(currentTime)}</span>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(0, duration)}
-              step={0.1}
-              value={currentTime}
-              onChange={(e) => onSeek(Number(e.target.value))}
-              tabIndex={-1}
-              onFocus={(e) => e.currentTarget.blur()}
-              className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
-              style={{
-                background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
-              }}
-            />
-            <span className="w-10 text-[12px] tabular-nums text-white/[0.62]">{formatTime(duration)}</span>
-          </div>
+          {currentSongIsRadio ? (
+            <div className="flex w-full items-center gap-3">
+              <span className="w-10 text-right text-[12px] font-semibold text-emerald-300">LIVE</span>
+              <div className="h-1.5 w-full overflow-hidden rounded bg-white/[0.12]">
+                <div className={cn("h-full w-full bg-emerald-500/75", isPlaying && "animate-pulse")} />
+              </div>
+              <span className="w-10 text-[12px] text-white/[0.62]">Radio</span>
+            </div>
+          ) : (
+            <div className="flex w-full items-center gap-3">
+              <span className="w-10 text-right text-[12px] tabular-nums text-white/[0.62]">{formatTime(safeCurrentTime)}</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, duration)}
+                step={0.1}
+                value={safeCurrentTime}
+                onChange={(e) => onSeek(Number(e.target.value))}
+                tabIndex={-1}
+                onFocus={(e) => e.currentTarget.blur()}
+                className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
+                style={{
+                  background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+                }}
+              />
+              <span className="w-10 text-[12px] tabular-nums text-white/[0.62]">{formatTime(duration)}</span>
+            </div>
+          )}
         </div>
 
         <div className="flex min-w-0 items-center justify-end gap-2">

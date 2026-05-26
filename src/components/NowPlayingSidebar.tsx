@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4 } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4, RadioTower } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { isRadioSong } from "@/lib/player-song";
 
 type LyricsState = {
   status: "idle" | "loading" | "ready" | "error";
@@ -37,6 +38,7 @@ function parseCredits(artist: string): Array<{ name: string; role: string }> {
 export default function NowPlayingSidebar() {
   const currentSong = usePlayerStore((state) => state.currentSong);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
+  const liveStream = isRadioSong(currentSong);
 
   const [collapsed, setCollapsed] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
@@ -148,48 +150,66 @@ export default function NowPlayingSidebar() {
               </div>
             </div>
 
-            <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-medium text-[16px] text-white">Lyrics</div>
-                <button
-                  type="button"
-                  onClick={() => setShowLyrics((value) => !value)}
-                  onMouseUp={(event) => event.currentTarget.blur()}
-                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-full border border-white/[0.16] text-[13px] text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white"
-                >
-                  <FileText size={13} />
-                  {showLyrics ? "Hide" : "Show"}
-                </button>
-              </div>
-
-              {showLyrics && (
-                <div className="rounded-md bg-white/[0.06] p-3 whitespace-pre-wrap text-[13px] leading-5 text-white/[0.72] max-h-48 overflow-auto">
-                  {lyricsState.status === "idle" && "No lyrics available for this song."}
-                  {lyricsState.status === "loading" && "Loading lyrics..."}
-                  {lyricsState.status === "error" && "Unable to load lyrics."}
-                  {lyricsState.status === "ready" &&
-                    (lyricsState.text || "No lyrics available for this song.")}
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
-              <div className="font-medium text-[16px] text-white mb-3">Credits</div>
-              <div className="space-y-2.5">
-                {credits.map((credit) => (
-                  <div
-                    key={`${credit.name}-${credit.role}`}
-                    className="flex items-start justify-between gap-2"
-                  >
-                    <div>
-                      <div className="text-[15px] font-medium leading-5 text-white">{credit.name}</div>
-                      <div className="text-[13px] leading-5 text-white/[0.58]">{credit.role}</div>
-                    </div>
-                    <CheckCircle2 size={15} className="text-white/[0.45] mt-1" />
+            {liveStream ? (
+              <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-cyan-500/15 text-cyan-200">
+                    <RadioTower size={18} />
                   </div>
-                ))}
+                  <div>
+                    <div className="font-medium text-[16px] text-white">Live Radio</div>
+                    <div className="text-[13px] leading-5 text-white/[0.58]">
+                      {isPlaying ? "Streaming now" : "Paused"}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <>
+                <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium text-[16px] text-white">Lyrics</div>
+                    <button
+                      type="button"
+                      onClick={() => setShowLyrics((value) => !value)}
+                      onMouseUp={(event) => event.currentTarget.blur()}
+                      className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-full border border-white/[0.16] text-[13px] text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white"
+                    >
+                      <FileText size={13} />
+                      {showLyrics ? "Hide" : "Show"}
+                    </button>
+                  </div>
+
+                  {showLyrics && (
+                    <div className="rounded-md bg-white/[0.06] p-3 whitespace-pre-wrap text-[13px] leading-5 text-white/[0.72] max-h-48 overflow-auto">
+                      {lyricsState.status === "idle" && "No lyrics available for this song."}
+                      {lyricsState.status === "loading" && "Loading lyrics..."}
+                      {lyricsState.status === "error" && "Unable to load lyrics."}
+                      {lyricsState.status === "ready" &&
+                        (lyricsState.text || "No lyrics available for this song.")}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+                  <div className="font-medium text-[16px] text-white mb-3">Credits</div>
+                  <div className="space-y-2.5">
+                    {credits.map((credit) => (
+                      <div
+                        key={`${credit.name}-${credit.role}`}
+                        className="flex items-start justify-between gap-2"
+                      >
+                        <div>
+                          <div className="text-[15px] font-medium leading-5 text-white">{credit.name}</div>
+                          <div className="text-[13px] leading-5 text-white/[0.58]">{credit.role}</div>
+                        </div>
+                        <CheckCircle2 size={15} className="text-white/[0.45] mt-1" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
