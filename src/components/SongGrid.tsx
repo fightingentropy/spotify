@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { SongCard } from "@/components/SongCard";
 import { SongListItem } from "@/components/SongListItem";
 import { EDIT_MODE_EVENT, EDIT_MODE_KEY } from "@/lib/edit-mode";
+import { queueOfflineMutation } from "@/client/offline";
 import {
   isBrowserLocalSong,
   saveBrowserLocalSongEdits,
@@ -311,6 +312,10 @@ export function SongGrid({
           throw new Error(data?.error ?? "Failed to save playlist order");
         }
       } catch (error) {
+        await queueOfflineMutation({
+          type: "playlist-reorder",
+          payload: { playlistId, songIds: nextVisible.map((song) => song.id) },
+        }).catch(() => undefined);
         setReorderError(error instanceof Error ? error.message : "Failed to save playlist order");
       }
     }
@@ -342,7 +347,11 @@ export function SongGrid({
       navigate("/signin");
       return;
     }
-    const result = await toggleLike(songId, nextLiked);
+    const result = await toggleLike(
+      songId,
+      nextLiked,
+      visibleSongsRef.current.find((song) => song.id === songId),
+    );
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
@@ -387,35 +396,54 @@ export function SongGrid({
         });
         replaceBrowserLocalSong(updatedSong);
       } else {
-        const metaRes = await fetch(`/api/songs/${encodeURIComponent(editingSong.id)}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title: nextTitle, artist: nextArtist }),
-        });
-        const metaData = await metaRes.json().catch(() => ({}));
-        if (!metaRes.ok) {
-          throw new Error(metaData?.error ?? "Failed to update song");
-        }
-
-        updatedSong = metaData as PlayerSong;
-
-        if (editCoverFile || editLyricsFile || editLyricsText.trim()) {
-          const form = new FormData();
-          if (editCoverFile) form.append("image", editCoverFile);
-          if (editLyricsFile) form.append("lyricsFile", editLyricsFile);
-          if (editLyricsText.trim()) form.append("lyricsText", editLyricsText.trim());
-          const assetsRes = await fetch(
-            `/api/songs/${encodeURIComponent(editingSong.id)}/assets`,
-            {
-              method: "POST",
-              body: form,
-            },
-          );
-          const assetsData = await assetsRes.json().catch(() => ({}));
-          if (!assetsRes.ok) {
-            throw new Error(assetsData?.error ?? "Failed to update cover/lyrics");
+        try {
+          const metaRes = await fetch(`/api/songs/${encodeURIComponent(editingSong.id)}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title: nextTitle, artist: nextArtist }),
+          });
+          const metaData = await metaRes.json().catch(() => ({}));
+          if (!metaRes.ok) {
+            throw new Error(metaData?.error ?? "Failed to update song");
           }
-          updatedSong = assetsData as PlayerSong;
+
+          updatedSong = metaData as PlayerSong;
+
+          if (editCoverFile || editLyricsFile || editLyricsText.trim()) {
+            const form = new FormData();
+            if (editCoverFile) form.append("image", editCoverFile);
+            if (editLyricsFile) form.append("lyricsFile", editLyricsFile);
+            if (editLyricsText.trim()) form.append("lyricsText", editLyricsText.trim());
+            const assetsRes = await fetch(
+              `/api/songs/${encodeURIComponent(editingSong.id)}/assets`,
+              {
+                method: "POST",
+                body: form,
+              },
+            );
+            const assetsData = await assetsRes.json().catch(() => ({}));
+            if (!assetsRes.ok) {
+              throw new Error(assetsData?.error ?? "Failed to update cover/lyrics");
+            }
+            updatedSong = assetsData as PlayerSong;
+          }
+        } catch {
+          await queueOfflineMutation({
+            type: "song-edit",
+            payload: {
+              songId: editingSong.id,
+              title: nextTitle,
+              artist: nextArtist,
+              coverFile: editCoverFile ?? undefined,
+              lyricsFile: editLyricsFile ?? undefined,
+              lyricsText: editLyricsText.trim() || undefined,
+            },
+          });
+          updatedSong = {
+            ...editingSong,
+            title: nextTitle,
+            artist: nextArtist,
+          };
         }
       }
 

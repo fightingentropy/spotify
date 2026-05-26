@@ -19,6 +19,7 @@ import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
+import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 
 type NowPlayingSheetProps = {
   open: boolean;
@@ -160,7 +161,7 @@ export default function NowPlayingSheet({
 
   async function handleToggleLike() {
     if (!likesHydrated || likePending) return;
-    const result = await toggleLike(song.id, !songIsLiked);
+    const result = await toggleLike(song.id, !songIsLiked, song);
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
@@ -222,19 +223,22 @@ export default function NowPlayingSheet({
                 <ChevronDown size={24} />
               </button>
               <div className="text-xs uppercase tracking-wide opacity-70">Now Playing</div>
-              <button
-                type="button"
-                aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-                onClick={handleToggleLike}
-                disabled={!likesHydrated || likePending}
-                className={cn(
-                  "h-11 w-11 -mr-1 rounded-full grid place-items-center touch-manipulation",
-                  likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
-                  songIsLiked ? "text-emerald-500" : "text-foreground/70",
-                )}
-              >
-                <Heart size={22} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
-              </button>
+              <div className="-mr-1 flex items-center gap-1">
+                <OfflineSongDownloadButton song={song} className="h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
+                <button
+                  type="button"
+                  aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+                  onClick={handleToggleLike}
+                  disabled={!likesHydrated || likePending}
+                  className={cn(
+                    "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                    likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
+                    songIsLiked ? "text-emerald-500" : "text-foreground/70",
+                  )}
+                >
+                  <Heart size={22} className={cn(songIsLiked && "fill-emerald-500 text-emerald-500")} />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">

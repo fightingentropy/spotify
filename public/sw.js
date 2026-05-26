@@ -2,7 +2,9 @@ const CACHE_VERSION = "spotify-v17";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
-const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE]);
+const MEDIA_CACHE = "spotify-media-v1";
+const PLAYBACK_CACHE = "spotify-playback-v1";
+const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
 
 const SHELL_URLS = [
   "/",
@@ -139,9 +141,9 @@ async function cachedRangeResponse(request) {
   });
 }
 
-async function cacheMediaUrls(urls) {
+async function cacheMediaUrls(urls, cacheName = PLAYBACK_CACHE) {
   if (!Array.isArray(urls) || urls.length === 0) return;
-  const cache = await caches.open(RUNTIME_CACHE);
+  const cache = await caches.open(cacheName);
   await Promise.all(
     urls.map(async (value) => {
       if (typeof value !== "string" || !value) return;
@@ -156,10 +158,32 @@ async function cacheMediaUrls(urls) {
         const cached = await cache.match(url.toString());
         if (cached) return;
         const response = await fetch(request);
-        await putCache(RUNTIME_CACHE, url.toString(), response);
+        await putCache(cacheName, url.toString(), response);
       } catch {}
     }),
   );
+}
+
+async function deleteMediaUrls(urls) {
+  if (!Array.isArray(urls) || urls.length === 0) return;
+  const mediaCaches = await Promise.all([caches.open(MEDIA_CACHE), caches.open(PLAYBACK_CACHE)]);
+  await Promise.all(
+    urls.flatMap((value) =>
+      mediaCaches.map(async (cache) => {
+        if (typeof value !== "string" || !value) return;
+        try {
+          const url = new URL(value, self.location.origin);
+          await cache.delete(url.toString());
+        } catch {}
+      }),
+    ),
+  );
+}
+
+async function mediaResponse(request) {
+  const cached = await caches.match(request.url);
+  if (cached) return cached;
+  return fetch(request);
 }
 
 async function navigationResponse(event, request) {
@@ -241,6 +265,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  if (url.pathname.startsWith("/api/files/")) {
+    event.respondWith(mediaResponse(request));
+    return;
+  }
+
   if (
     url.pathname.startsWith("/assets/") ||
     url.pathname === "/icon.svg" ||
@@ -264,6 +293,15 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data?.type !== "CACHE_MEDIA") return;
-  event.waitUntil(cacheMediaUrls(event.data.urls));
+  if (event.data?.type === "CACHE_MEDIA") {
+    event.waitUntil(cacheMediaUrls(event.data.urls, event.data.cacheName));
+    return;
+  }
+  if (event.data?.type === "DELETE_MEDIA") {
+    event.waitUntil(deleteMediaUrls(event.data.urls));
+    return;
+  }
+  if (event.data?.type === "CLEAR_PLAYBACK_CACHE") {
+    event.waitUntil(caches.delete(PLAYBACK_CACHE));
+  }
 });

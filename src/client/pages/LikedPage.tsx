@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useApiData, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { SongGrid } from "@/components/SongGrid";
+import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
 
 export default function LikedPage() {
   const { user, status } = useAuth();
@@ -23,7 +24,12 @@ export default function LikedPage() {
 
   return (
     <div className="px-4 sm:px-6 py-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-6">Liked Songs</h1>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Liked Songs</h1>
+        {data.songs.length > 0 ? (
+          <OfflineBulkDownloadButton songs={data.songs} scope="liked" label="Download liked" />
+        ) : null}
+      </div>
       {loading ? (
         <div className="opacity-70">Loading liked songs...</div>
       ) : error ? (

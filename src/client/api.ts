@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import type { PlayerSong } from "@/types/player";
+import {
+  readOfflineApiSnapshot,
+  removeOfflineApiSnapshots,
+  writeOfflineApiSnapshot,
+} from "@/client/offline";
 
 export type PlaylistEntry = {
   id: string;
@@ -17,16 +22,8 @@ type ApiCacheEntry<T = unknown> = {
   promise?: Promise<T>;
 };
 
-type PersistedApiCacheEntry = {
-  version: 1;
-  data: unknown;
-  etag?: string | null;
-  fetchedAt: number;
-};
-
 const DEFAULT_API_CACHE_TTL_MS = 120_000;
-const API_CACHE_MAX_STALE_MS = 24 * 60 * 60 * 1000;
-const API_CACHE_STORAGE_PREFIX = "spotify_api_cache:";
+const API_CACHE_MAX_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 const apiCache = new Map<string, ApiCacheEntry>();
 
 function getApiPath(url: string): string {
@@ -59,76 +56,32 @@ function isPersistableApiUrl(url: string): boolean {
   );
 }
 
-function storageKeyForApiUrl(url: string): string {
-  return `${API_CACHE_STORAGE_PREFIX}${url}`;
-}
-
-function readStoredApiCache<T>(url: string): ApiCacheEntry<T> | undefined {
-  if (typeof window === "undefined" || !isPersistableApiUrl(url)) return undefined;
-
-  try {
-    const raw = window.localStorage.getItem(storageKeyForApiUrl(url));
-    if (!raw) return undefined;
-    const parsed = JSON.parse(raw) as PersistedApiCacheEntry;
-    if (parsed?.version !== 1 || parsed.data === undefined || typeof parsed.fetchedAt !== "number") {
-      window.localStorage.removeItem(storageKeyForApiUrl(url));
-      return undefined;
-    }
-    if (Date.now() - parsed.fetchedAt > API_CACHE_MAX_STALE_MS) {
-      window.localStorage.removeItem(storageKeyForApiUrl(url));
-      return undefined;
-    }
-    return {
-      data: parsed.data as T,
-      etag: parsed.etag ?? null,
-      fetchedAt: parsed.fetchedAt,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function writeStoredApiCache<T>(url: string, entry: ApiCacheEntry<T>): void {
-  if (typeof window === "undefined" || !isPersistableApiUrl(url) || entry.data === undefined) return;
-
-  try {
-    const payload: PersistedApiCacheEntry = {
-      version: 1,
-      data: entry.data,
-      etag: entry.etag ?? null,
-      fetchedAt: entry.fetchedAt,
-    };
-    window.localStorage.setItem(storageKeyForApiUrl(url), JSON.stringify(payload));
-  } catch {
-    // Browser storage is best-effort; the memory cache still covers this session.
-  }
-}
-
-function removeStoredApiCache(match?: string | RegExp | ((url: string) => boolean)): void {
-  if (typeof window === "undefined") return;
-
-  try {
-    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
-      const key = window.localStorage.key(index);
-      if (!key?.startsWith(API_CACHE_STORAGE_PREFIX)) continue;
-      const url = key.slice(API_CACHE_STORAGE_PREFIX.length);
-      const shouldDelete =
-        !match ||
-        (typeof match === "string"
-          ? url === match || url.startsWith(match)
-          : match instanceof RegExp
-            ? match.test(url)
-            : match(url));
-      if (shouldDelete) window.localStorage.removeItem(key);
-    }
-  } catch {}
-}
-
 function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   const memory = apiCache.get(url) as ApiCacheEntry<T> | undefined;
   if (memory?.data !== undefined || memory?.promise) return memory;
+  return undefined;
+}
 
-  const stored = readStoredApiCache<T>(url);
+async function readStoredApiCache<T>(url: string): Promise<ApiCacheEntry<T> | undefined> {
+  if (typeof window === "undefined" || !isPersistableApiUrl(url)) return undefined;
+
+  const snapshot = await readOfflineApiSnapshot<T>(url);
+  if (!snapshot || snapshot.data === undefined || typeof snapshot.fetchedAt !== "number") return undefined;
+  if (Date.now() - snapshot.fetchedAt > API_CACHE_MAX_STALE_MS) {
+    await removeOfflineApiSnapshots(url);
+    return undefined;
+  }
+  return {
+    data: snapshot.data,
+    etag: snapshot.etag ?? null,
+    fetchedAt: snapshot.fetchedAt,
+  };
+}
+
+async function getCacheEntryAsync<T>(url: string): Promise<ApiCacheEntry<T> | undefined> {
+  const memory = getCacheEntry<T>(url);
+  if (memory?.data !== undefined || memory?.promise) return memory;
+  const stored = await readStoredApiCache<T>(url);
   if (stored) apiCache.set(url, stored);
   return stored;
 }
@@ -140,12 +93,14 @@ function getCachedData<T>(url: string): T | undefined {
 function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
   const entry: ApiCacheEntry<T> = { data, etag: etag ?? null, fetchedAt: Date.now() };
   apiCache.set(url, entry);
-  writeStoredApiCache(url, entry);
+  if (isPersistableApiUrl(url)) {
+    void writeOfflineApiSnapshot(url, data, entry.etag, entry.fetchedAt);
+  }
   return data;
 }
 
 async function fetchApiData<T>(url: string): Promise<T> {
-  const cached = getCacheEntry<T>(url);
+  const cached = await getCacheEntryAsync<T>(url);
   if (cached?.promise) return cached.promise;
 
   const promise = (async () => {
@@ -184,7 +139,9 @@ async function fetchApiData<T>(url: string): Promise<T> {
         etag: next.etag,
         fetchedAt: next.fetchedAt,
       });
-      if (next.data !== undefined) writeStoredApiCache(url, next);
+      if (next.data !== undefined && isPersistableApiUrl(url)) {
+        void writeOfflineApiSnapshot(url, next.data, next.etag, next.fetchedAt);
+      }
     }
   }
 }
@@ -192,7 +149,7 @@ async function fetchApiData<T>(url: string): Promise<T> {
 export function invalidateApiCache(match?: string | RegExp | ((url: string) => boolean)): void {
   if (!match) {
     apiCache.clear();
-    removeStoredApiCache();
+    void removeOfflineApiSnapshots();
     return;
   }
 
@@ -205,7 +162,7 @@ export function invalidateApiCache(match?: string | RegExp | ((url: string) => b
           : match(key);
     if (shouldDelete) apiCache.delete(key);
   }
-  removeStoredApiCache(match);
+  void removeOfflineApiSnapshots(match);
 }
 
 export function invalidateLibraryApiCache(): void {
@@ -239,31 +196,32 @@ export function useApiData<T>(url: string, initialValue: T) {
 
   useEffect(() => {
     let cancelled = false;
-    const cached = getCacheEntry<T>(url);
-    const cachedData = cached?.data;
-    const fresh =
-      cachedData !== undefined &&
-      cached?.fetchedAt !== undefined &&
-      Date.now() - cached.fetchedAt < getApiCacheTtl(url);
-
-    if (cachedData !== undefined) {
-      setDataState(cachedData);
-      setLoading(false);
-      setError(null);
-    }
-    if (fresh) return () => {
-      cancelled = true;
-    };
 
     async function load() {
-      if (cachedData === undefined) setLoading(true);
+      const cached = await getCacheEntryAsync<T>(url);
+      const cachedData = cached?.data;
+      const fresh =
+        cachedData !== undefined &&
+        cached?.fetchedAt !== undefined &&
+        Date.now() - cached.fetchedAt < getApiCacheTtl(url);
+
+      if (cancelled) return;
+      if (cachedData !== undefined) {
+        setDataState(cachedData);
+        setLoading(false);
+        setError(null);
+      } else {
+        setLoading(true);
+      }
+      if (fresh) return;
+
       setError(null);
       try {
         const payload = await fetchApiData<T>(url);
         if (!cancelled) setDataState(payload);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Request failed");
+          setError(cachedData === undefined ? (err instanceof Error ? err.message : "Request failed") : null);
         }
       } finally {
         if (!cancelled) setLoading(false);

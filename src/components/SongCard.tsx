@@ -6,6 +6,7 @@ import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { Heart, Pause, Pencil, Play } from "lucide-react";
+import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 
 type SongCardProps = {
   song: PlayerSong;
@@ -104,6 +105,11 @@ const SongCardComponent = function SongCard({
       />
       <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
 
+      <OfflineSongDownloadButton
+        song={song}
+        className="absolute left-2 top-2 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
+      />
+
       {showLike ? (
         <button
           type="button"
@@ -137,7 +143,7 @@ const SongCardComponent = function SongCard({
             event.stopPropagation();
             onEdit(song);
           }}
-          className="absolute top-2 left-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+          className="absolute left-2 top-12 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
         >
           <Pencil size={16} />
         </button>

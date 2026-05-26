@@ -2,6 +2,8 @@
 
 import { create } from "zustand";
 import { invalidateLibraryApiCache } from "@/client/api";
+import { queueOfflineMutation } from "@/client/offline";
+import type { PlayerSong } from "@/types/player";
 
 type LikeToggleResult = {
   ok: boolean;
@@ -14,7 +16,7 @@ type LikesState = {
   pending: Record<string, true>;
   hydrated: boolean;
   mergeInitial: (ids: string[]) => void;
-  toggleLike: (songId: string, nextLiked: boolean) => Promise<LikeToggleResult>;
+  toggleLike: (songId: string, nextLiked: boolean, song?: PlayerSong) => Promise<LikeToggleResult>;
 };
 
 const LOCAL_LIKED_SONG_IDS_KEY = "spotify_local_liked_song_ids";
@@ -84,7 +86,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     if (changed) set({ likedSongIds: next, hydrated: true });
     else if (!get().hydrated) set({ hydrated: true });
   },
-  toggleLike: async (songId, nextLiked) => {
+  toggleLike: async (songId, nextLiked, song) => {
     if (typeof songId !== "string" || songId.length === 0) {
       return { ok: false, status: 400, error: "Invalid song id" };
     }
@@ -156,6 +158,18 @@ export const useLikesStore = create<LikesState>((set, get) => ({
 
       return { ok: true, status: response.status };
     } catch (error) {
+      try {
+        await queueOfflineMutation({
+          type: "like",
+          payload: { songId, nextLiked, song },
+        });
+        set((state) => ({
+          pending: removeKey(state.pending, songId),
+          hydrated: true,
+        }));
+        return { ok: true, status: 202 };
+      } catch {}
+
       set((state) => ({
         likedSongIds: prevLiked
           ? { ...state.likedSongIds, [songId]: true }

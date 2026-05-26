@@ -3,11 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Check,
   CheckCircle2,
-  CircleArrowDown,
   Clock3,
   LayoutGrid,
   List,
-  MoreHorizontal,
   Pause,
   Play,
   Shuffle,
@@ -20,6 +18,10 @@ import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { cn, formatTime } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
+import {
+  OfflineBulkDownloadButton,
+  OfflineSongDownloadButton,
+} from "@/components/OfflineDownloadButton";
 
 type HomeSong = PlayerSong & {
   album?: string | null;
@@ -289,7 +291,7 @@ export default function HomePage() {
     }
 
     const isLiked = !!likedLookup[songId];
-    const result = await toggleLike(songId, !isLiked);
+    const result = await toggleLike(songId, !isLiked, sortedSongs.find((song) => song.id === songId));
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
@@ -343,14 +345,7 @@ export default function HomePage() {
             <Shuffle size={30} className="sm:h-[34px] sm:w-[34px]" />
           </button>
 
-          <button
-            type="button"
-            aria-label="Download"
-            title="Download"
-            className="grid h-11 w-11 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:h-12 sm:w-12"
-          >
-            <CircleArrowDown size={31} className="sm:h-9 sm:w-9" />
-          </button>
+          <OfflineBulkDownloadButton songs={sortedSongs} scope="home" iconOnly className="text-white/70 hover:text-white sm:h-12 sm:w-12" />
 
           <div className="ml-auto flex items-center gap-1 rounded-full border border-white/[0.12] bg-white/[0.04] p-1 text-white/[0.68]">
             <button
@@ -439,15 +434,19 @@ export default function HomePage() {
                       )}
                     >
                       <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
-                        <CoverImage
+	                        <CoverImage
                           src={song.imageUrl}
                           alt={song.title}
                           fill
                           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 180px"
                           className="object-cover"
-                          loading={index < 8 ? "eager" : "lazy"}
-                        />
-                        <button
+	                          loading={index < 8 ? "eager" : "lazy"}
+	                        />
+	                        <OfflineSongDownloadButton
+	                          song={song}
+	                          className="absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 sm:opacity-0 sm:group-hover:opacity-100"
+	                        />
+	                        <button
                           type="button"
                           aria-label={active && isPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
                           onClick={(event) => {
@@ -566,17 +565,9 @@ export default function HomePage() {
                     {getSongDuration(song, durationLookup[song.id])}
                   </div>
 
-                  <div className="hidden justify-end md:flex">
-                    <button
-                      type="button"
-                      aria-label={`More options for ${song.title}`}
-                      title="More options"
-                      onClick={(event) => event.stopPropagation()}
-                      className="grid h-9 w-9 place-items-center rounded-full text-white/0 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:text-white focus-visible:ring-2 focus-visible:ring-white/50 group-hover:text-white/[0.68]"
-                    >
-                      <MoreHorizontal size={26} />
-                    </button>
-                  </div>
+	                  <div className="hidden justify-end md:flex">
+	                    <OfflineSongDownloadButton song={song} className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" />
+	                  </div>
                 </div>
               );
               })

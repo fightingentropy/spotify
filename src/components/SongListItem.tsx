@@ -6,6 +6,7 @@ import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
+import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 
 type SongListItemProps = {
   song: PlayerSong;
@@ -122,6 +123,8 @@ const SongListItemComponent = function SongListItem({
           </div>
         ) : null}
       </div>
+
+      <OfflineSongDownloadButton song={song} className="text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />
 
       {editMode && onEdit ? (
         <button

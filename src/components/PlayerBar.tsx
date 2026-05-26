@@ -11,6 +11,7 @@ import NowPlayingSheet from "@/components/NowPlayingSheet";
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/store/browser-local-library";
 import { useMediaSession } from "@/lib/use-media-session";
+import { useOfflineStore } from "@/client/offline";
 
 function resolvePlayableSrc(src: string): string {
   if (/^(blob:|data:|https?:)/i.test(src)) return src;
@@ -62,6 +63,7 @@ function PlayerBar(): React.ReactElement | null {
   const pause = usePlayerStore((s) => s.pause);
   const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
   const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
+  const prefetchUpcoming = useOfflineStore((state) => state.prefetchUpcoming);
 
   const navigate = useNavigate();
   const toggleLike = useLikesStore((state) => state.toggleLike);
@@ -76,7 +78,7 @@ function PlayerBar(): React.ReactElement | null {
 
   const handleToggleLike = useCallback(async () => {
     if (!currentSongId || !likesHydrated || likePending) return;
-    const result = await toggleLike(currentSongId, !songIsLiked);
+    const result = await toggleLike(currentSongId, !songIsLiked, currentSong ?? undefined);
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
@@ -139,6 +141,11 @@ function PlayerBar(): React.ReactElement | null {
   useEffect(() => {
     requestMediaCache(currentSong);
   }, [currentSong?.id, currentSong?.audioUrl, currentSong?.imageUrl]);
+
+  useEffect(() => {
+    if (!currentSong) return;
+    void prefetchUpcoming(queue, currentIndex);
+  }, [currentIndex, currentSong?.id, prefetchUpcoming, queue]);
 
   // Client hydration of crossfade settings to ensure feature works without visiting /settings
   const hydratedRef = useRef(false);

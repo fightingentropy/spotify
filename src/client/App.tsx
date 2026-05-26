@@ -6,6 +6,7 @@ import InstallPrompt from "@/components/InstallPrompt";
 import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
 import NowPlayingSidebar from "@/components/NowPlayingSidebar";
+import OfflineStatusIndicator from "@/components/OfflineStatusIndicator";
 import { PlayerBar } from "@/components/PlayerBar";
 import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
@@ -87,6 +88,7 @@ function Shell() {
     <>
       <PwaRegister />
       <InstallPrompt />
+      <OfflineStatusIndicator />
       <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:max-w-7xl">
           <Link to="/" className="font-semibold inline-flex shrink-0 items-center gap-2 touch-manipulation">

@@ -2,6 +2,7 @@ import { useParams } from "react-router-dom";
 import { useApiData, type PlaylistPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { SongGrid } from "@/components/SongGrid";
+import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
 
 export default function PlaylistPage() {
   const { id = "" } = useParams();
@@ -18,8 +19,19 @@ export default function PlaylistPage() {
 
   return (
     <div className="px-6 py-8 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-1">{data.playlist.name}</h1>
-      <div className="text-sm opacity-70 mb-6">{data.songs.length} tracks</div>
+      <div className="mb-6 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-semibold">{data.playlist.name}</h1>
+          <div className="mt-1 text-sm opacity-70">{data.songs.length} tracks</div>
+        </div>
+        {data.songs.length > 0 ? (
+          <OfflineBulkDownloadButton
+            songs={data.songs}
+            scope={`playlist:${data.playlist.id}`}
+            label="Download playlist"
+          />
+        ) : null}
+      </div>
       {data.songs.length === 0 ? (
         <div className="opacity-70">This playlist is empty.</div>
       ) : (
