@@ -34,6 +34,7 @@ export default function LikedPage() {
               songs={data.songs}
               scope="liked"
               label="Download liked"
+              hideWhenDownloaded
               className="w-full justify-center sm:w-auto"
             />
           ) : null}

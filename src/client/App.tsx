@@ -98,7 +98,7 @@ function Shell() {
       <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:max-w-7xl">
           <Link to="/" className="font-semibold inline-flex shrink-0 items-center gap-2 touch-manipulation">
-            <SpotifyIcon size={24} className="h-6 w-6 rounded-md" />
+            <SpotifyIcon size={40} className="h-10 w-10 rounded-full lg:h-6 lg:w-6" />
             <span className="hidden sm:inline">Spotify</span>
           </Link>
           <nav className="hidden lg:flex items-center gap-6">

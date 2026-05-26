@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useState, type CSSProperties, type MouseEvent } from "react";
 import { CheckCircle2, CircleArrowDown, RefreshCw, X } from "lucide-react";
 import {
   getScopeDownloadState,
@@ -22,6 +22,7 @@ type OfflineBulkDownloadButtonProps = {
   label?: string;
   className?: string;
   iconOnly?: boolean;
+  hideWhenDownloaded?: boolean;
 };
 
 function canCacheSong(song: PlayerSong): boolean {
@@ -76,6 +77,7 @@ function scopeProgress(
 }
 
 export function OfflineSongDownloadButton({ song, className }: OfflineSongDownloadButtonProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const hydrate = useOfflineStore((state) => state.hydrate);
   const record = useOfflineStore((state) => state.records[song.id]);
   const queueDownloads = useOfflineStore((state) => state.queueDownloads);
@@ -89,16 +91,41 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
     void hydrate();
   }, [hydrate]);
 
+  useEffect(() => {
+    if (status !== "downloaded" && confirmOpen) {
+      setConfirmOpen(false);
+    }
+  }, [confirmOpen, status]);
+
+  useEffect(() => {
+    if (!confirmOpen) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setConfirmOpen(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [confirmOpen]);
+
   if (!canCacheSong(song)) return null;
 
   async function handleClick(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     if (busy) return;
     if (status === "downloaded") {
-      await removeDownload(song.id);
+      setConfirmOpen(true);
       return;
     }
     await queueDownloads([song], `song:${song.id}`);
+  }
+
+  async function handleRemoveDownload(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    await removeDownload(song.id);
+    setConfirmOpen(false);
   }
 
   const title =
@@ -118,25 +145,70 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
         : CircleArrowDown;
 
   return (
-    <button
-      type="button"
-      aria-label={title}
-      title={title}
-      onClick={handleClick}
-      disabled={busy}
-      className={cn(
-        "grid h-9 w-9 shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-        status === "downloaded"
-          ? "text-emerald-500"
-          : status === "failed"
-            ? "text-red-300"
-            : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
-        busy && "cursor-wait text-emerald-400",
-        className,
-      )}
-    >
-      {busy ? <DownloadProgressPie progress={progress} /> : <Icon size={18} />}
-    </button>
+    <>
+      <button
+        type="button"
+        aria-label={title}
+        title={title}
+        onClick={handleClick}
+        disabled={busy}
+        className={cn(
+          "grid h-9 w-9 shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+          status === "downloaded"
+            ? "text-emerald-500"
+            : status === "failed"
+              ? "text-red-300"
+              : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
+          busy && "cursor-wait text-emerald-400",
+          className,
+        )}
+      >
+        {busy ? <DownloadProgressPie progress={progress} /> : <Icon size={18} />}
+      </button>
+
+      {confirmOpen ? (
+        <div
+          className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+          role="presentation"
+          onClick={(event) => {
+            event.stopPropagation();
+            setConfirmOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Remove download confirmation"
+            className="w-full max-w-sm rounded-2xl border border-white/15 bg-zinc-950 p-5 text-white shadow-[0_20px_80px_rgba(0,0,0,0.65)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">Remove download?</h2>
+            <p className="mt-2 text-sm leading-6 text-white/70">
+              This will delete the offline copy of "{song.title}" from this device.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="h-10 rounded-full border border-white/20 px-4 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setConfirmOpen(false);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="h-10 rounded-full bg-emerald-500 px-4 text-sm font-semibold text-black transition hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+                onClick={handleRemoveDownload}
+              >
+                Remove download
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -146,6 +218,7 @@ export function OfflineBulkDownloadButton({
   label = "Download",
   className,
   iconOnly = false,
+  hideWhenDownloaded = false,
 }: OfflineBulkDownloadButtonProps) {
   const hydrate = useOfflineStore((state) => state.hydrate);
   const records = useOfflineStore((state) => state.records);
@@ -161,6 +234,8 @@ export function OfflineBulkDownloadButton({
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  if (downloaded && hideWhenDownloaded) return null;
 
   async function handleClick() {
     if (busy || cacheableSongs.length === 0) return;
