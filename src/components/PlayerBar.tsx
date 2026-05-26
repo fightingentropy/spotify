@@ -57,6 +57,7 @@ function PlayerBar(): React.ReactElement | null {
   const cycleRepeatMode = usePlayerStore((s) => s.cycleRepeatMode);
   const setSong = usePlayerStore((s) => s.setSong);
   const setQueue = usePlayerStore((s) => s.setQueue);
+  const advanceToIndex = usePlayerStore((s) => s.advanceToIndex);
   const replaceSong = usePlayerStore((s) => s.replaceSong);
   const pause = usePlayerStore((s) => s.pause);
   const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
@@ -387,7 +388,7 @@ function PlayerBar(): React.ReactElement | null {
             // Keep previous track silent to avoid bleed-through
             fromAudio.volume = 0;
             // Switch UI/active element now that audio is already running
-            setQueue(queue, nextIdx);
+            advanceToIndex(nextIdx);
             setActiveIdx(activeIdx === 0 ? 1 : 0);
             // Update duration from incoming element if known
             if (Number.isFinite(incoming.duration)) {

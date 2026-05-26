@@ -9,6 +9,8 @@ type PlayerState = {
   queue: PlayerSong[];
   currentIndex: number; // index in queue
   currentSong: PlayerSong | null;
+  playHistory: number[];
+  playFuture: number[];
   isPlaying: boolean;
   volume: number; // 0..1
   isMuted: boolean;
@@ -18,6 +20,7 @@ type PlayerState = {
   crossfadeSeconds: number; // 0..12
   setQueue: (songs: PlayerSong[], startIndex: number) => void;
   setSong: (song: PlayerSong | null) => void;
+  advanceToIndex: (index: number) => void;
   replaceSong: (song: PlayerSong) => void;
   play: () => void;
   pause: () => void;
@@ -32,10 +35,28 @@ type PlayerState = {
   setCrossfadeSeconds: (seconds: number) => void;
 };
 
+const MAX_PLAY_HISTORY = 200;
+
+function pushHistory(history: number[], index: number): number[] {
+  if (!Number.isInteger(index) || index < 0) return history;
+  return [...history, index].slice(-MAX_PLAY_HISTORY);
+}
+
+function randomQueueIndex(queueLength: number, currentIndex: number): number {
+  if (queueLength <= 1) return currentIndex;
+  let index = currentIndex;
+  while (index === currentIndex) {
+    index = Math.floor(Math.random() * queueLength);
+  }
+  return index;
+}
+
 export const usePlayerStore = create<PlayerState>((set) => ({
   queue: [],
   currentIndex: -1,
   currentSong: null,
+  playHistory: [],
+  playFuture: [],
   isPlaying: false,
   volume: 0.9,
   isMuted: false,
@@ -49,9 +70,23 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       queue: songs,
       currentIndex: startIndex,
       currentSong: songs[startIndex] ?? null,
+      playHistory: [],
+      playFuture: [],
       isPlaying: true,
     })),
-  setSong: (song) => set({ currentSong: song }),
+  setSong: (song) => set({ currentSong: song, playHistory: [], playFuture: [] }),
+  advanceToIndex: (index) =>
+    set((s) => {
+      if (index < 0 || index >= s.queue.length || index === s.currentIndex) return s;
+      return {
+        ...s,
+        currentIndex: index,
+        currentSong: s.queue[index],
+        playHistory: s.shuffle ? pushHistory(s.playHistory, s.currentIndex) : s.playHistory,
+        playFuture: s.shuffle ? [] : s.playFuture,
+        isPlaying: true,
+      };
+    }),
   replaceSong: (song) =>
     set((s) => {
       const queue = s.queue.map((item) => (item.id === song.id ? song : item));
@@ -68,14 +103,15 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       if (s.queue.length === 0) return s;
       if (s.shuffle) {
         if (s.queue.length === 1) return s;
-        let idx = s.currentIndex;
-        while (idx === s.currentIndex) {
-          idx = Math.floor(Math.random() * s.queue.length);
-        }
+        const future = s.playFuture.slice();
+        const idx = future.length > 0 ? future.pop() ?? s.currentIndex : randomQueueIndex(s.queue.length, s.currentIndex);
+        if (idx === s.currentIndex) return s;
         return {
           ...s,
           currentIndex: idx,
           currentSong: s.queue[idx],
+          playHistory: pushHistory(s.playHistory, s.currentIndex),
+          playFuture: future,
           isPlaying: true,
         };
       }
@@ -94,15 +130,15 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     set((s) => {
       if (s.queue.length === 0) return s;
       if (s.shuffle) {
-        if (s.queue.length === 1) return s;
-        let idx = s.currentIndex;
-        while (idx === s.currentIndex) {
-          idx = Math.floor(Math.random() * s.queue.length);
-        }
+        const history = s.playHistory.slice();
+        const idx = history.pop();
+        if (idx === undefined || idx < 0 || idx >= s.queue.length) return s;
         return {
           ...s,
           currentIndex: idx,
           currentSong: s.queue[idx],
+          playHistory: history,
+          playFuture: pushHistory(s.playFuture, s.currentIndex),
           isPlaying: true,
         };
       }
@@ -119,7 +155,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     }),
   setVolume: (v) => set({ volume: Math.max(0, Math.min(1, v)) }),
   toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
-  toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
+  toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle, playHistory: [], playFuture: [] })),
   cycleRepeatMode: () =>
     set((s) => ({ repeatMode: s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off" })),
   setCrossfadeEnabled: (enabled) => {
