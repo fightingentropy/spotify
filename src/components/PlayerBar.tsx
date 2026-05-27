@@ -136,6 +136,7 @@ function PlayerBar(): React.ReactElement | null {
   const pendingSeekRef = useRef<{ audio: HTMLAudioElement; time: number; duration: number } | null>(null);
   const lastSeekTargetRef = useRef<number | null>(null);
   const isPlayingRef = useRef<boolean>(isPlaying);
+  const playRequestIdRef = useRef<number>(0);
   const volumeRef = useRef<number>(volume);
   const mutedRef = useRef<boolean>(isMuted);
 
@@ -188,19 +189,25 @@ function PlayerBar(): React.ReactElement | null {
     cancel?.();
   }, []);
 
-  const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
-    if (!isPlayingRef.current || audio !== getActiveAudio()) return;
-    audio.play()
-      .then(() => {
-        if (audio === getActiveAudio()) resumeAfterSeekRef.current = false;
-      })
+  const playAudio = useCallback((audio: HTMLAudioElement): Promise<boolean> => {
+    const requestId = ++playRequestIdRef.current;
+    return audio.play()
+      .then(() => requestId === playRequestIdRef.current)
       .catch((error: unknown) => {
-        if (errorName(error) === "AbortError") return;
-        if (audio !== getActiveAudio() || !isPlayingRef.current) return;
-        resumeAfterSeekRef.current = false;
+        if (errorName(error) === "AbortError") return false;
+        if (requestId !== playRequestIdRef.current) return false;
+        if (audio !== getActiveAudio() || !isPlayingRef.current) return false;
         pause();
+        return false;
       });
   }, [getActiveAudio, pause]);
+
+  const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
+    if (!isPlayingRef.current || audio !== getActiveAudio()) return;
+    playAudio(audio).then((started) => {
+      if (started && audio === getActiveAudio()) resumeAfterSeekRef.current = false;
+    });
+  }, [getActiveAudio, playAudio]);
 
   const performSeek = useCallback((active: HTMLAudioElement, nextTime: number, seekDuration: number) => {
     if (active !== getActiveAudio()) return;
@@ -341,15 +348,19 @@ function PlayerBar(): React.ReactElement | null {
     } else {
       const active = getActiveAudio();
       const inactive = getInactiveAudio();
-      if (isPlaying) active?.play().catch(() => {});
-      else try { active?.pause(); } catch {}
+      if (isPlaying) {
+        if (active) void playAudio(active);
+      } else {
+        playRequestIdRef.current += 1;
+        try { active?.pause(); } catch {}
+      }
       // Keep inactive paused when not crossfading
       if (inactive && inactive !== active) {
         try { inactive.pause(); } catch {}
         inactive.currentTime = inactive.currentTime; // noop to avoid iOS suspending issues
       }
     }
-  }, [isPlaying, activeIdx, getActiveAudio, getInactiveAudio]);
+  }, [isPlaying, activeIdx, getActiveAudio, getInactiveAudio, playAudio]);
 
   // Restore last played queue/song and time on client mount to avoid SSR mismatches
   useEffect(() => {
@@ -448,9 +459,13 @@ function PlayerBar(): React.ReactElement | null {
       other.volume = 0;
       unloadAudioSource(other);
     }
-    if (isPlaying) audio.play().catch(() => { pause(); });
-    else audio.pause();
-  }, [src, isPlaying, pause, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade]);
+    if (isPlaying) {
+      void playAudio(audio);
+    } else {
+      playRequestIdRef.current += 1;
+      audio.pause();
+    }
+  }, [src, isPlaying, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio]);
 
   // Crossfade: if enabled, monitor active element time and overlap next track
   useEffect(() => {
@@ -752,7 +767,7 @@ function PlayerBar(): React.ReactElement | null {
           const audio = e.currentTarget;
           if (repeatMode === "one") {
             audio.currentTime = 0;
-            audio.play().catch(() => {});
+            void playAudio(audio);
             return;
           }
           next();
@@ -791,7 +806,7 @@ function PlayerBar(): React.ReactElement | null {
           const audio = e.currentTarget;
           if (repeatMode === "one") {
             audio.currentTime = 0;
-            audio.play().catch(() => {});
+            void playAudio(audio);
             return;
           }
           next();

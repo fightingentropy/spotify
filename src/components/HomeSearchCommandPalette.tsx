@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
@@ -121,10 +121,8 @@ export function HomeSearchCommandPalette({ songs, className }: HomeSearchCommand
           What do you want to play?
         </span>
         <kbd className="hidden h-6 shrink-0 items-center rounded-md border border-white/[0.16] px-2 text-[11px] font-semibold leading-none text-white/[0.56] xl:inline-flex">
-          Cmd K
+          ⌘ K
         </kbd>
-        <span aria-hidden="true" className="h-6 w-px shrink-0 bg-white/[0.18]" />
-        <Archive size={23} strokeWidth={2.55} className="shrink-0 text-white transition" />
       </button>
 
       {open ? (
