@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Link, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -11,6 +11,7 @@ import { PlayerBar } from "@/components/PlayerBar";
 import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
+import ProfilePage from "@/client/pages/ProfilePage";
 import { useApiData, type LibraryPayload } from "@/client/api";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
@@ -21,7 +22,6 @@ const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
-const loadProfilePage = () => import("@/client/pages/ProfilePage");
 const loadSignInPage = () => import("@/client/pages/SignInPage");
 const loadRegisterPage = () => import("@/client/pages/RegisterPage");
 
@@ -33,7 +33,6 @@ const RadioPage = lazy(loadRadioPage);
 const PlaylistPage = lazy(loadPlaylistPage);
 const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
-const ProfilePage = lazy(loadProfilePage);
 const SignInPage = lazy(loadSignInPage);
 const RegisterPage = lazy(loadRegisterPage);
 
@@ -45,37 +44,78 @@ function RouteLoading({ label = "Loading..." }: { label?: string }) {
   );
 }
 
+function RouteUnavailable() {
+  return (
+    <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white sm:px-6">
+      <h1 className="text-xl font-semibold">Page unavailable offline</h1>
+      <p className="mt-2 max-w-md text-sm text-white/[0.62]">
+        Reconnect once to finish caching this page, then it will open offline.
+      </p>
+    </div>
+  );
+}
+
+class RouteErrorBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
+
 function lazyRoute(element: ReactNode, label?: string) {
-  return <Suspense fallback={<RouteLoading label={label} />}>{element}</Suspense>;
+  return (
+    <RouteErrorBoundary fallback={<RouteUnavailable />}>
+      <Suspense fallback={<RouteLoading label={label} />}>{element}</Suspense>
+    </RouteErrorBoundary>
+  );
 }
 
 function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthenticated") {
   useEffect(() => {
+    const prefetchRoute = (load: () => Promise<unknown>) => {
+      void load().catch(() => undefined);
+    };
     const prefetch = () => {
-      void loadSearchPage();
-      void loadLibraryPage();
-      void loadLikedPage();
-      void loadDownloadedPage();
-      void loadRadioPage();
-      void loadProfilePage();
-      void loadSettingsPage();
-      if (status === "unauthenticated") {
-        void loadSignInPage();
-        void loadRegisterPage();
-      }
+      prefetchRoute(loadSearchPage);
+      prefetchRoute(loadLibraryPage);
+      prefetchRoute(loadLikedPage);
+      prefetchRoute(loadDownloadedPage);
+      prefetchRoute(loadRadioPage);
+      prefetchRoute(loadSettingsPage);
+      prefetchRoute(loadSignInPage);
+      prefetchRoute(loadRegisterPage);
     };
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
+    const eagerId = window.setTimeout(prefetch, 250);
+    window.addEventListener("online", prefetch);
 
     if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
       const id = idleWindow.requestIdleCallback(prefetch, { timeout: 5_000 });
-      return () => idleWindow.cancelIdleCallback?.(id);
+      return () => {
+        window.clearTimeout(eagerId);
+        window.removeEventListener("online", prefetch);
+        idleWindow.cancelIdleCallback?.(id);
+      };
     }
 
     const id = window.setTimeout(prefetch, 2_000);
-    return () => window.clearTimeout(id);
+    return () => {
+      window.clearTimeout(eagerId);
+      window.clearTimeout(id);
+      window.removeEventListener("online", prefetch);
+    };
   }, [status]);
 }
 

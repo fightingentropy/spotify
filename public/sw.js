@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v17";
+const CACHE_VERSION = "spotify-v18";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -86,6 +86,32 @@ async function staleWhileRevalidate(event, request, cacheName) {
   return response || fetch(request);
 }
 
+async function matchCachedMedia(urlValue) {
+  const url = new URL(urlValue, self.location.origin);
+  const exact = await caches.match(url.toString());
+  if (exact) return exact;
+
+  if (!url.pathname.startsWith("/api/files/") && !url.pathname.startsWith("/api/artwork/")) {
+    return null;
+  }
+
+  for (const cacheName of [MEDIA_CACHE, PLAYBACK_CACHE, RUNTIME_CACHE]) {
+    const cache = await caches.open(cacheName);
+    const requests = await cache.keys();
+    for (const request of requests) {
+      try {
+        const cachedUrl = new URL(request.url);
+        if (cachedUrl.origin === url.origin && cachedUrl.pathname === url.pathname) {
+          const matched = await cache.match(request);
+          if (matched) return matched;
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
 function isCacheableApiRequest(url) {
   if (!url.pathname.startsWith("/api/")) return false;
   if (url.pathname.startsWith("/api/auth/")) return false;
@@ -120,7 +146,7 @@ async function cachedRangeResponse(request) {
   const rangeHeader = request.headers.get("range");
   if (!rangeHeader) return null;
 
-  const cached = await caches.match(request.url);
+  const cached = await matchCachedMedia(request.url);
   if (!cached || !cached.ok) return null;
 
   const blob = await cached.blob();
@@ -181,25 +207,32 @@ async function deleteMediaUrls(urls) {
 }
 
 async function mediaResponse(request) {
-  const cached = await caches.match(request.url);
+  const cached = await matchCachedMedia(request.url);
   if (cached) return cached;
-  return fetch(request);
+  const response = await fetch(request);
+  await putCache(PLAYBACK_CACHE, request, response.clone());
+  return response;
 }
 
 async function navigationResponse(event, request) {
-  try {
-    const response = await fetch(request);
-    event.waitUntil(putCache(SHELL_CACHE, request, response.clone()));
-    return response;
-  } catch {
-    const cache = await caches.open(SHELL_CACHE);
-    const cached =
-      (await cache.match(request, { ignoreSearch: true })) ||
-      (await cache.match("/", { ignoreSearch: true }));
-    if (cached) {
-      return cached;
-    }
+  const cache = await caches.open(SHELL_CACHE);
+  const cached =
+    (await cache.match(request, { ignoreSearch: true })) ||
+    (await cache.match("/", { ignoreSearch: true }));
 
+  const refreshed = fetch(request).then(async (response) => {
+    await putCache(SHELL_CACHE, request, response.clone());
+    return response;
+  });
+
+  if (cached) {
+    event.waitUntil(refreshed.then(() => undefined).catch(() => undefined));
+    return cached;
+  }
+
+  try {
+    return await refreshed;
+  } catch {
     return new Response("<!doctype html><title>Spotify</title><body>Spotify is offline.</body>", {
       headers: { "Content-Type": "text/html; charset=utf-8" },
       status: 503,

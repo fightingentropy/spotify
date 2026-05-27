@@ -128,6 +128,8 @@ function PlayerBar(): React.ReactElement | null {
   const mediaSessionAudioRefs = useMemo(() => [audioARef, audioBRef], []);
 
   const crossfadingRef = useRef<boolean>(false);
+  const crossfadeCancelRef = useRef<(() => void) | null>(null);
+  const crossfadeCommitSongIdRef = useRef<string | null>(null);
   const suppressAutoLoadRef = useRef<boolean>(false);
   const resumeAfterSeekRef = useRef<boolean>(false);
   const pendingSeekTimeoutRef = useRef<number | null>(null);
@@ -178,6 +180,14 @@ function PlayerBar(): React.ReactElement | null {
     audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
   }, []);
 
+  const cancelActiveCrossfade = useCallback(() => {
+    const cancel = crossfadeCancelRef.current;
+    crossfadeCancelRef.current = null;
+    suppressAutoLoadRef.current = false;
+    crossfadingRef.current = false;
+    cancel?.();
+  }, []);
+
   const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
     if (!isPlayingRef.current || audio !== getActiveAudio()) return;
     audio.play()
@@ -194,6 +204,7 @@ function PlayerBar(): React.ReactElement | null {
 
   const performSeek = useCallback((active: HTMLAudioElement, nextTime: number, seekDuration: number) => {
     if (active !== getActiveAudio()) return;
+    if (crossfadingRef.current) cancelActiveCrossfade();
     const inactive = getInactiveAudio();
     resumeAfterSeekRef.current = isPlayingRef.current;
     try {
@@ -210,7 +221,7 @@ function PlayerBar(): React.ReactElement | null {
     }
     setCurrentTime(nextTime);
     if (resumeAfterSeekRef.current) resumeActivePlayback(active);
-  }, [getActiveAudio, getInactiveAudio, resumeActivePlayback]);
+  }, [cancelActiveCrossfade, getActiveAudio, getInactiveAudio, resumeActivePlayback]);
 
   const onSeek = useCallback((value: number) => {
     const active = getActiveAudio();
@@ -403,9 +414,23 @@ function PlayerBar(): React.ReactElement | null {
     };
   }, [currentSongId, currentSongIsBrowserLocal, currentSongIsRadio, replaceSong]);
 
+  useEffect(() => {
+    if (!currentSongId) {
+      cancelActiveCrossfade();
+      return;
+    }
+    if (crossfadeCommitSongIdRef.current === currentSongId) {
+      crossfadeCommitSongIdRef.current = null;
+      return;
+    }
+    cancelActiveCrossfade();
+  }, [cancelActiveCrossfade, currentSongId]);
+
   // Load current song into the ACTIVE element when not crossfading
   useEffect(() => {
-    if (suppressAutoLoadRef.current) return;
+    if (suppressAutoLoadRef.current) {
+      cancelActiveCrossfade();
+    }
     const audio = getActiveAudio();
     const other = getInactiveAudio();
     if (!audio) return;
@@ -425,7 +450,7 @@ function PlayerBar(): React.ReactElement | null {
     }
     if (isPlaying) audio.play().catch(() => { pause(); });
     else audio.pause();
-  }, [src, isPlaying, pause, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource]);
+  }, [src, isPlaying, pause, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade]);
 
   // Crossfade: if enabled, monitor active element time and overlap next track
   useEffect(() => {
@@ -439,6 +464,7 @@ function PlayerBar(): React.ReactElement | null {
     let raf: number | null = null;
     let started = false;
     let isMounted = true;
+    let cancelFade: (() => void) | null = null;
 
     function step() {
       if (!isMounted) return;
@@ -505,6 +531,16 @@ function PlayerBar(): React.ReactElement | null {
         // Lock the total duration snapshot used for remaining calculations during fade
         // Start incoming playback, ensure it's running while we fade
         incoming.play().catch(() => {});
+        cancelFade = () => {
+          isMounted = false;
+          if (raf) cancelAnimationFrame(raf);
+          try { incoming.pause(); } catch {}
+          incoming.volume = 0;
+          fromAudio.volume = mutedRef.current ? 0 : volumeRef.current;
+          suppressAutoLoadRef.current = false;
+          crossfadingRef.current = false;
+        };
+        crossfadeCancelRef.current = cancelFade;
 
         function fade() {
           const now = performance.now();
@@ -527,6 +563,8 @@ function PlayerBar(): React.ReactElement | null {
             if (!isPlaying) { try { incoming.pause(); } catch {} }
             // Keep previous track silent to avoid bleed-through
             fromAudio.volume = 0;
+            crossfadeCancelRef.current = null;
+            crossfadeCommitSongIdRef.current = nextSong.id;
             // Switch UI/active element now that audio is already running
             advanceToIndex(nextIdx);
             setActiveIdx(activeIdx === 0 ? 1 : 0);
@@ -548,6 +586,10 @@ function PlayerBar(): React.ReactElement | null {
     return () => { 
       isMounted = false;
       if (raf) cancelAnimationFrame(raf); 
+      if (cancelFade && crossfadeCancelRef.current === cancelFade) {
+        crossfadeCancelRef.current = null;
+        cancelFade();
+      }
     };
   }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, shuffle]);
 

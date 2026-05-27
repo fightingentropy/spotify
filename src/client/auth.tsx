@@ -11,31 +11,67 @@ export type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null;
   status: "loading" | "authenticated" | "unauthenticated";
-  refresh: () => Promise<void>;
+  refresh: (options?: { showLoading?: boolean }) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const CACHED_AUTH_USER_KEY = "spotify_cached_auth_user";
+
+function coerceAuthUser(value: unknown): AuthUser | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<Record<keyof AuthUser, unknown>>;
+  if (typeof candidate.id !== "string" || typeof candidate.email !== "string") return null;
+  return {
+    id: candidate.id,
+    email: candidate.email,
+    name: typeof candidate.name === "string" ? candidate.name : null,
+    image: typeof candidate.image === "string" ? candidate.image : null,
+  };
+}
+
+function readCachedAuthUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return coerceAuthUser(JSON.parse(localStorage.getItem(CACHED_AUTH_USER_KEY) || "null"));
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedAuthUser(user: AuthUser | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (user) localStorage.setItem(CACHED_AUTH_USER_KEY, JSON.stringify(user));
+    else localStorage.removeItem(CACHED_AUTH_USER_KEY);
+  } catch {}
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [status, setStatus] = useState<AuthContextValue["status"]>("loading");
+  const [initialUser] = useState<AuthUser | null>(() => readCachedAuthUser());
+  const [user, setUser] = useState<AuthUser | null>(initialUser);
+  const [status, setStatus] = useState<AuthContextValue["status"]>(
+    initialUser ? "authenticated" : "unauthenticated",
+  );
 
-  const refresh = useCallback(async () => {
-    setStatus("loading");
+  const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    if (options?.showLoading) setStatus("loading");
     try {
       const response = await fetch("/api/auth/session", {
         credentials: "include",
         cache: "no-store",
       });
+      if (!response.ok) throw new Error(`Session check failed with ${response.status}`);
       const data = (await response.json().catch(() => ({}))) as { user?: AuthUser | null };
-      const nextUser = data.user ?? null;
+      const nextUser = coerceAuthUser(data.user ?? null);
+      writeCachedAuthUser(nextUser);
       setUser(nextUser);
       setStatus(nextUser ? "authenticated" : "unauthenticated");
     } catch {
-      setUser(null);
-      setStatus("unauthenticated");
+      const cachedUser = readCachedAuthUser();
+      setUser(cachedUser);
+      setStatus(cachedUser ? "authenticated" : "unauthenticated");
     }
   }, []);
 
@@ -55,6 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(data.error || "Invalid email or password");
     }
     invalidateApiCache();
+    writeCachedAuthUser(data.user);
     setUser(data.user);
     setStatus("authenticated");
   }, []);
@@ -65,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       credentials: "include",
     }).catch(() => null);
     invalidateApiCache();
+    writeCachedAuthUser(null);
     setUser(null);
     setStatus("unauthenticated");
   }, []);
