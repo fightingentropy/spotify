@@ -612,6 +612,14 @@ async function writePersistentCache(cache: PersistentSongCache): Promise<void> {
   await rename(tempPath, libraryCachePath);
 }
 
+function cachedStatMatches(
+  cached: PersistentSongCache["entries"][string] | undefined,
+  fileStat: Stats,
+): cached is PersistentSongCache["entries"][string] {
+  if (!cached || cached.size !== fileStat.size) return false;
+  return Math.trunc(cached.mtimeMs) === Math.trunc(fileStat.mtimeMs);
+}
+
 async function scanLibrary(usePersistentCache = true): Promise<LibrarySnapshot> {
   await mkdir(musicRoot, { recursive: true });
   await mkdir(cacheDir, { recursive: true });
@@ -631,7 +639,7 @@ async function scanLibrary(usePersistentCache = true): Promise<LibrarySnapshot> 
     const fileStat = await stat(file.absolutePath);
     const cached = previous.entries[file.relativePath];
     const song =
-      cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs
+      cachedStatMatches(cached, fileStat)
         ? cached.song
         : await songFromFile(file.relativePath, file.absolutePath, fileStat, directoryCache);
 

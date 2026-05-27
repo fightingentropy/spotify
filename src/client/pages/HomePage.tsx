@@ -10,7 +10,6 @@ import {
   Play,
   Shuffle,
 } from "lucide-react";
-import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData, type HomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
@@ -315,8 +314,6 @@ export default function HomePage() {
 
   return (
     <div className="relative min-h-[calc(100vh-3.5rem)] overflow-x-hidden bg-background text-white">
-      <HomeSearchCommandPalette songs={sortedSongs} />
-
       <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-6 xl:px-8 2xl:px-10">
         <section className="mb-9 flex items-center gap-5 md:mb-10 md:gap-8">
           <button

@@ -1,20 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search } from "lucide-react";
+import { Archive, Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { cn } from "@/lib/utils";
 
 type HomeSearchCommandPaletteProps = {
   songs: PlayerSong[];
+  className?: string;
 };
 
 function normalizeSongPart(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export function HomeSearchCommandPalette({ songs }: HomeSearchCommandPaletteProps) {
+export function HomeSearchCommandPalette({ songs, className }: HomeSearchCommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -104,69 +106,91 @@ export function HomeSearchCommandPalette({ songs }: HomeSearchCommandPaletteProp
     return () => cancelAnimationFrame(raf);
   }, [open]);
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm p-4 sm:p-8" onClick={() => setOpen(false)}>
-      <div
-        className="max-w-2xl mx-auto mt-10 sm:mt-16 rounded-3xl border border-white/15 bg-zinc-950/95 shadow-2xl overflow-hidden"
-        onClick={(event) => event.stopPropagation()}
+    <div className={className}>
+      <button
+        type="button"
+        aria-label="Search songs, Command K"
+        aria-keyshortcuts="Meta+K Control+K"
+        title="Search (Command K)"
+        onClick={() => setOpen(true)}
+        className="group flex h-12 w-full min-w-0 items-center gap-3 rounded-full bg-[#1f1f1f] pl-4 pr-3 text-left text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] transition hover:bg-[#2a2a2a] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/45"
       >
-        <div className="h-14 px-4 border-b border-white/10 flex items-center gap-3">
-          <Search size={18} className="text-foreground/60" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="What do you want to play?"
-            className="w-full bg-transparent outline-none text-base placeholder:text-foreground/50"
-          />
-          <kbd className="text-[10px] px-2 py-1 rounded-md border border-white/20 text-foreground/60">
-            ESC
-          </kbd>
-        </div>
+        <Search size={25} strokeWidth={2.15} className="shrink-0 text-white/70 transition group-hover:text-white" />
+        <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-white/[0.64]">
+          What do you want to play?
+        </span>
+        <kbd className="hidden h-6 shrink-0 items-center rounded-md border border-white/[0.16] px-2 text-[11px] font-semibold leading-none text-white/[0.56] xl:inline-flex">
+          Cmd K
+        </kbd>
+        <span aria-hidden="true" className="h-6 w-px shrink-0 bg-white/[0.18]" />
+        <Archive size={23} strokeWidth={2.55} className="shrink-0 text-white transition" />
+      </button>
 
-        <div className="max-h-[60vh] overflow-y-auto p-2">
-          {query.trim().length === 0 ? (
-            <div className="px-3 py-10 text-center text-sm text-foreground/65">
-              Start typing to search songs
+      {open ? (
+        <div className="fixed inset-0 z-[70] bg-black/70 p-4 backdrop-blur-sm sm:p-8" onClick={() => setOpen(false)}>
+          <div
+            className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-3xl border border-white/15 bg-zinc-950/95 shadow-2xl sm:mt-16"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex h-14 items-center gap-3 border-b border-white/10 px-4">
+              <Search size={18} className="text-foreground/60" />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="What do you want to play?"
+                className="w-full bg-transparent text-base outline-none placeholder:text-foreground/50"
+              />
+              <kbd className="rounded-md border border-white/20 px-2 py-1 text-[10px] text-foreground/60">
+                ESC
+              </kbd>
             </div>
-          ) : results.length === 0 ? (
-            <div className="px-3 py-10 text-center text-sm text-foreground/65">
-              No songs found
+
+            <div className="max-h-[60vh] overflow-y-auto p-2">
+              {query.trim().length === 0 ? (
+                <div className="px-3 py-10 text-center text-sm text-foreground/65">
+                  Start typing to search songs
+                </div>
+              ) : results.length === 0 ? (
+                <div className="px-3 py-10 text-center text-sm text-foreground/65">
+                  No songs found
+                </div>
+              ) : (
+                results.map((song, index) => (
+                  <button
+                    key={song.id}
+                    type="button"
+                    onClick={() => {
+                      const queueIndex = songs.findIndex((item) => item.id === song.id);
+                      if (queueIndex >= 0) {
+                        setQueue(songs, queueIndex);
+                        setOpen(false);
+                      }
+                    }}
+                    className={cn(
+                      "flex h-14 w-full items-center gap-3 rounded-xl px-3 text-left transition",
+                      index === activeIndex ? "bg-white/10" : "hover:bg-white/5",
+                    )}
+                  >
+                    <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md">
+                      <img
+                        src={normalizeCoverImageUrl(song.imageUrl)}
+                        alt={song.title}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{song.title}</div>
+                      <div className="truncate text-xs text-foreground/65">{song.artist}</div>
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
-          ) : (
-            results.map((song, index) => (
-              <button
-                key={song.id}
-                type="button"
-                onClick={() => {
-                  const queueIndex = songs.findIndex((item) => item.id === song.id);
-                  if (queueIndex >= 0) {
-                    setQueue(songs, queueIndex);
-                    setOpen(false);
-                  }
-                }}
-                className={`w-full h-14 px-3 rounded-xl flex items-center gap-3 text-left transition ${
-                  index === activeIndex ? "bg-white/10" : "hover:bg-white/5"
-                }`}
-              >
-                <div className="relative h-10 w-10 rounded-md overflow-hidden shrink-0">
-                <img
-                  src={normalizeCoverImageUrl(song.imageUrl)}
-                  alt={song.title}
-                  className="h-full w-full object-cover"
-                />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">{song.title}</div>
-                  <div className="text-xs text-foreground/65 truncate">{song.artist}</div>
-                </div>
-              </button>
-            ))
-          )}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

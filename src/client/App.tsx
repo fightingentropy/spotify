@@ -1,7 +1,8 @@
-import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
 import { Link, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
+import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
 import InstallPrompt from "@/components/InstallPrompt";
 import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
@@ -12,7 +13,7 @@ import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
 import ProfilePage from "@/client/pages/ProfilePage";
-import { useApiData, type LibraryPayload } from "@/client/api";
+import { useApiData, type HomePayload, type LibraryPayload } from "@/client/api";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
@@ -128,6 +129,19 @@ function Shell() {
       userId: null,
     },
   );
+  const { data: searchLibrary } = useApiData<HomePayload>("/api/home", {
+    songs: [],
+    likedSongIds: [],
+  });
+  const searchSongs = useMemo(() => {
+    return [...searchLibrary.songs].sort((left, right) => {
+      const leftTime = Date.parse(left.createdAt || "");
+      const rightTime = Date.parse(right.createdAt || "");
+      const a = Number.isFinite(leftTime) ? leftTime : 0;
+      const b = Number.isFinite(rightTime) ? rightTime : 0;
+      return b - a;
+    });
+  }, [searchLibrary.songs]);
   useIdleRoutePrefetch(status);
 
   return (
@@ -136,14 +150,17 @@ function Shell() {
       <InstallPrompt />
       <OfflineStatusIndicator />
       <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
-        <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:max-w-7xl">
+        <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <Link to="/" className="font-semibold inline-flex shrink-0 items-center gap-2 touch-manipulation">
             <SpotifyIcon size={40} className="h-10 w-10 rounded-full lg:h-6 lg:w-6" />
             <span className="hidden sm:inline">Spotify</span>
           </Link>
-          <nav className="hidden lg:flex items-center gap-6">
+          <HomeSearchCommandPalette
+            songs={searchSongs}
+            className="hidden w-[22rem] justify-self-center lg:block xl:w-[30rem]"
+          />
+          <nav className="hidden justify-self-end lg:flex items-center gap-4 xl:gap-6">
             <Link to="/" className="text-white/[0.68] transition hover:text-white">Home</Link>
-            <Link to="/search" className="text-white/[0.68] transition hover:text-white">Search</Link>
             <Link to="/library" className="text-white/[0.68] transition hover:text-white">Library</Link>
             <Link to="/upload" className="text-white/[0.68] transition hover:text-white">Upload</Link>
             <AuthButtons />
