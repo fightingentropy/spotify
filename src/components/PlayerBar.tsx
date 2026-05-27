@@ -22,7 +22,7 @@ function resolvePlayableSrc(src: string): string {
 
 function requestMediaCache(song: PlayerSong | null): void {
   if (!song || !("serviceWorker" in navigator)) return;
-  const urls = [song.audioUrl, song.imageUrl].filter((url) => {
+  const urls = [song.imageUrl, song.lyricsUrl].filter((url) => {
     return typeof url === "string" && url.length > 0 && !/^(blob:|data:)/i.test(url);
   });
   if (urls.length === 0) return;

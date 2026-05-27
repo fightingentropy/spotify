@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
+import { warmPlaybackSong } from "@/client/offline";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
@@ -159,6 +160,8 @@ export function HomeSearchCommandPalette({ songs, className }: HomeSearchCommand
                   <button
                     key={song.id}
                     type="button"
+                    onPointerEnter={() => warmPlaybackSong(song, true)}
+                    onFocus={() => warmPlaybackSong(song, true)}
                     onClick={() => {
                       const queueIndex = songs.findIndex((item) => item.id === song.id);
                       if (queueIndex >= 0) {

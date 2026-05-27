@@ -110,6 +110,10 @@ const MUTATION_STORE = "mutations";
 export const OFFLINE_MEDIA_CACHE = "spotify-media-v1";
 export const OFFLINE_PLAYBACK_CACHE = "spotify-playback-v1";
 const OFFLINE_SYNC_EVENT = "spotify-offline-sync";
+const PLAYBACK_WARM_BYTES = 2 * 1024 * 1024;
+const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
+const PLAYBACK_WARM_DEDUPE_MS = 2 * 60 * 1_000;
+const PLAYBACK_WARM_QUEUE_LIMIT = 12;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let hydrateStarted = false;
@@ -117,6 +121,9 @@ let listenersAttached = false;
 let downloadPumpRunning = false;
 let syncRunning = false;
 let prefetchRunning = false;
+let warmPlaybackPumpRunning = false;
+const warmPlaybackQueue: string[] = [];
+const warmPlaybackSeen = new Map<string, number>();
 
 function now(): number {
   return Date.now();
@@ -332,6 +339,70 @@ async function cacheUrl(
   );
   onProgress?.(blob.size, total);
   return blob.size;
+}
+
+async function warmPlaybackUrl(url: string): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (!sameOriginCacheableUrl(url)) return;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), PLAYBACK_WARM_TIMEOUT_MS);
+  try {
+    const response = await fetch(resolveUrl(url), {
+      credentials: "include",
+      cache: "force-cache",
+      headers: {
+        Range: `bytes=0-${PLAYBACK_WARM_BYTES - 1}`,
+      },
+      signal: controller.signal,
+    });
+    await response.body?.cancel().catch(() => undefined);
+  } catch {
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function pumpWarmPlaybackQueue(): Promise<void> {
+  if (warmPlaybackPumpRunning) return;
+  warmPlaybackPumpRunning = true;
+  try {
+    for (;;) {
+      const url = warmPlaybackQueue.shift();
+      if (!url) break;
+      await warmPlaybackUrl(url);
+    }
+  } finally {
+    warmPlaybackPumpRunning = false;
+  }
+}
+
+export function warmPlaybackSong(song: PlayerSong, priority = false): void {
+  if (typeof window === "undefined" || isBrowserLocalSong(song) || !sameOriginCacheableUrl(song.audioUrl)) return;
+  const url = resolveUrl(song.audioUrl);
+  const seenAt = warmPlaybackSeen.get(url);
+  const timestamp = now();
+  if (seenAt && timestamp - seenAt < PLAYBACK_WARM_DEDUPE_MS) {
+    const queuedIndex = warmPlaybackQueue.indexOf(url);
+    if (priority && queuedIndex > 0) {
+      warmPlaybackQueue.splice(queuedIndex, 1);
+      warmPlaybackQueue.unshift(url);
+    }
+    return;
+  }
+
+  warmPlaybackSeen.set(url, timestamp);
+  if (priority) {
+    warmPlaybackQueue.unshift(url);
+  } else {
+    if (warmPlaybackQueue.length >= PLAYBACK_WARM_QUEUE_LIMIT) {
+      warmPlaybackQueue.shift();
+    }
+    warmPlaybackQueue.push(url);
+  }
+  if (priority && warmPlaybackQueue.length > PLAYBACK_WARM_QUEUE_LIMIT) {
+    warmPlaybackQueue.length = PLAYBACK_WARM_QUEUE_LIMIT;
+  }
+  void pumpWarmPlaybackQueue();
 }
 
 async function deleteCachedUrls(urls: string[]): Promise<void> {
@@ -949,15 +1020,23 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     await get().refreshStorage();
   },
   prefetchUpcoming: async (queue, currentIndex) => {
-    if (prefetchRunning || !hasCacheStorage()) return;
+    if (prefetchRunning) return;
     prefetchRunning = true;
     try {
-      const upcoming = queue.slice(Math.max(0, currentIndex), currentIndex + 4).filter((song) => !isBrowserLocalSong(song));
-      const urls = uniqueStrings(upcoming.flatMap(songAssetUrls));
-      for (const url of urls) {
-        await cacheUrl(url, OFFLINE_PLAYBACK_CACHE).catch(() => 0);
+      const upcoming = queue.slice(currentIndex + 1, currentIndex + 4).filter((song) => !isBrowserLocalSong(song));
+      const audioUrls = uniqueStrings(upcoming.map((song) => song.audioUrl)).filter(sameOriginCacheableUrl);
+      const sidecarUrls = uniqueStrings(
+        upcoming.flatMap((song) => [song.imageUrl, song.lyricsUrl]),
+      ).filter(sameOriginCacheableUrl);
+      for (const url of audioUrls) {
+        await warmPlaybackUrl(url);
       }
-      await get().refreshStorage();
+      if (hasCacheStorage()) {
+        for (const url of sidecarUrls) {
+          await cacheUrl(url, OFFLINE_PLAYBACK_CACHE).catch(() => 0);
+        }
+        await get().refreshStorage();
+      }
     } finally {
       prefetchRunning = false;
     }

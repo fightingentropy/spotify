@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Check,
@@ -13,6 +13,7 @@ import {
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData, type HomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
+import { warmPlaybackSong } from "@/client/offline";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { cn, formatTime } from "@/lib/utils";
@@ -149,6 +150,8 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState<HomeViewMode>("list");
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
+  const warmVisibleSongsRef = useRef<Map<Element, HomeSong>>(new Map());
+  const warmObserverRef = useRef<IntersectionObserver | null>(null);
   const { data, loading, error } = useApiData<HomePayload>("/api/home", {
     songs: [],
     likedSongIds: [],
@@ -180,6 +183,34 @@ export default function HomePage() {
   useEffect(() => {
     mergeInitialLikes(data.likedSongIds);
   }, [data.likedSongIds, mergeInitialLikes]);
+
+  const registerWarmNode = useCallback((node: HTMLDivElement | null, song: HomeSong) => {
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    if (!warmObserverRef.current) {
+      warmObserverRef.current = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const visibleSong = warmVisibleSongsRef.current.get(entry.target);
+            if (visibleSong) warmPlaybackSong(visibleSong);
+            warmVisibleSongsRef.current.delete(entry.target);
+            warmObserverRef.current?.unobserve(entry.target);
+          }
+        },
+        { rootMargin: "160px 0px" },
+      );
+    }
+    warmVisibleSongsRef.current.set(node, song);
+    warmObserverRef.current.observe(node);
+  }, []);
+
+  useEffect(() => {
+    return () => warmObserverRef.current?.disconnect();
+  }, []);
+
+  const warmSongSoon = useCallback((song: HomeSong) => {
+    warmPlaybackSong(song, true);
+  }, []);
 
   const initialLikedLookup = useMemo(() => {
     const lookup: Record<string, true> = {};
@@ -415,9 +446,12 @@ export default function HomePage() {
                   return (
                     <div
                       key={song.id}
+                      ref={(node) => registerWarmNode(node, song)}
                       role="button"
                       tabIndex={0}
                       onClick={() => handlePlaySong(index)}
+                      onPointerEnter={() => warmSongSoon(song)}
+                      onFocus={() => warmSongSoon(song)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
@@ -493,7 +527,10 @@ export default function HomePage() {
               return (
                 <div
                   key={song.id}
+                  ref={(node) => registerWarmNode(node, song)}
                   onClick={() => handlePlaySong(index)}
+                  onPointerEnter={() => warmSongSoon(song)}
+                  onFocus={() => warmSongSoon(song)}
                   className={cn(
                     "group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
                     HOME_LIST_GRID,

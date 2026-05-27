@@ -2,6 +2,7 @@
 
 import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
+import { warmPlaybackSong } from "@/client/offline";
 import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
@@ -84,6 +85,8 @@ const SongListItemComponent = function SongListItem({
       role="button"
       tabIndex={0}
       onClick={handlePlay}
+      onPointerEnter={() => warmPlaybackSong(song, true)}
+      onFocus={() => warmPlaybackSong(song, true)}
       onKeyDown={handleKeyDown}
       aria-pressed={isActiveAndPlaying}
       className={cn(
