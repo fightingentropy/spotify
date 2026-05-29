@@ -57,6 +57,8 @@ type LocalSidecar = {
   updatedAt?: string;
 };
 
+type OutputFormat = "flac" | "mp3" | "aac" | "ogg" | "opus" | "wav";
+
 const AUDIO_EXTENSIONS = new Set([
   ".aac",
   ".aif",
@@ -105,6 +107,8 @@ const proxyHostnames = new Set(
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean),
 );
+const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
+const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
 
 let librarySnapshot: LibrarySnapshot | null = null;
 let scanPromise: Promise<LibrarySnapshot> | null = null;
@@ -394,6 +398,22 @@ function extensionFromRemoteUrl(value: string, allowed: Set<string>, fallback: s
   } catch {
     return fallback;
   }
+}
+
+function parseHttpUrl(value: string): URL | null {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function outputFormatFromPayload(value: unknown): OutputFormat {
+  const format = typeof value === "string"
+    ? value.trim().toLowerCase() as OutputFormat
+    : SERVER_IMPORT_OUTPUT_FORMAT;
+  return OUTPUT_FORMATS.has(format) ? format : SERVER_IMPORT_OUTPUT_FORMAT;
 }
 
 function sidecarPathForAudio(audioPath: string): string {
@@ -789,8 +809,8 @@ function trackKey(title: string, artist: string): string {
 }
 
 async function saveRemoteImage(imageUrl: string, stem: string, audioPath: string): Promise<string | undefined> {
-  const parsed = new URL(imageUrl);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+  const parsed = parseHttpUrl(imageUrl);
+  if (!parsed) return undefined;
 
   const response = await fetchWithTimeout(
     parsed.toString(),
@@ -820,6 +840,7 @@ async function handleRemoteSongUpload(payload: {
   imageUrl?: unknown;
   lyricsText?: unknown;
   replaceExisting?: unknown;
+  outputFormat?: unknown;
 }): Promise<Response> {
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const artist = typeof payload.artist === "string" ? payload.artist.trim() : "";
@@ -830,15 +851,22 @@ async function handleRemoteSongUpload(payload: {
   const replaceExisting =
     payload.replaceExisting === true ||
     (typeof payload.replaceExisting === "string" && payload.replaceExisting.toLowerCase() === "true");
+  const outputFormat = outputFormatFromPayload(payload.outputFormat);
 
   if (!title || !artist || !audioUrl) {
     return json({ error: "Title, artist, and audio URL are required" }, { status: 400 });
   }
-
-  const parsedAudioUrl = new URL(audioUrl);
-  if (parsedAudioUrl.protocol !== "http:" && parsedAudioUrl.protocol !== "https:") {
-    return json({ error: "Only http(s) audio URLs are supported" }, { status: 400 });
+  if (outputFormat !== SERVER_IMPORT_OUTPUT_FORMAT) {
+    return json(
+      {
+        error: `${outputFormat.toUpperCase()} output is only available for browser/local saves. Server imports currently support FLAC/original audio.`,
+      },
+      { status: 400 },
+    );
   }
+
+  const parsedAudioUrl = parseHttpUrl(audioUrl);
+  if (!parsedAudioUrl) return json({ error: "Only valid http(s) audio URLs are supported" }, { status: 400 });
 
   const snapshot = await getLibrary();
   const existingEntry = snapshot.songs
@@ -871,10 +899,6 @@ async function handleRemoteSongUpload(payload: {
     return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
   }
 
-  if (existingEntry && replaceExisting) {
-    await deleteSongEntryFiles(existingEntry);
-  }
-
   const contentType = response.headers.get("content-type") || "";
   const audioExt = extensionFromRemoteUrl(
     audioUrl,
@@ -882,8 +906,28 @@ async function handleRemoteSongUpload(payload: {
     audioExtensionFromContentType(contentType),
   );
   const stem = sanitizeFileName(`${artist} - ${title}`);
-  const audioPath = await uniquePath(resolve(musicRoot, `${stem}${audioExt}`));
-  await saveResponseBody(response, audioPath);
+  const preferredAudioPath = existingEntry && replaceExisting
+    ? resolve(dirname(existingEntry.absolutePath), `${stem}${audioExt}`)
+    : resolve(musicRoot, `${stem}${audioExt}`);
+  const audioPath =
+    existingEntry &&
+    replaceExisting &&
+    (!existsSync(preferredAudioPath) || preferredAudioPath === existingEntry.absolutePath)
+      ? preferredAudioPath
+      : await uniquePath(preferredAudioPath);
+  const tempAudioPath = existingEntry && replaceExisting
+    ? await uniquePath(resolve(
+        dirname(audioPath),
+        `.${basename(audioPath, extname(audioPath))}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp${audioExt}`,
+      ))
+    : audioPath;
+
+  await saveResponseBody(response, tempAudioPath);
+  if (existingEntry && replaceExisting) {
+    await deleteSongEntryFiles(existingEntry);
+    await mkdir(dirname(audioPath), { recursive: true });
+    await rename(tempAudioPath, audioPath);
+  }
 
   const sidecar: LocalSidecar = {
     version: 1,
@@ -924,6 +968,7 @@ async function handleSongUpload(request: Request): Promise<Response> {
       imageUrl?: unknown;
       lyricsText?: unknown;
       replaceExisting?: unknown;
+      outputFormat?: unknown;
     }>(request);
     if (!payload) return json({ error: "Invalid JSON body" }, { status: 400 });
     return handleRemoteSongUpload(payload);

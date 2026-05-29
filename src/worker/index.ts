@@ -82,6 +82,7 @@ type SongPayload = {
   service?: unknown;
   quality?: unknown;
   qualityProfile?: unknown;
+  outputFormat?: unknown;
   region?: unknown;
   lyricsText?: unknown;
   replaceExisting?: unknown;
@@ -123,6 +124,8 @@ const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
 const SPOTIFY_REQUEST_TIMEOUT_MS = 20_000;
 const DOWNLOAD_REQUEST_TIMEOUT_MS = 120_000;
+const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
+const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
 
 const IMAGE_EXT_TYPES = new Map<string, string>([
   [".jpg", "image/jpeg"],
@@ -273,6 +276,30 @@ function toObject(value: unknown): Record<string, unknown> | null {
 
 function jsonError(message: string, status = 400): Response {
   return Response.json({ error: message }, { status });
+}
+
+function parseHttpUrl(value: string): URL | null {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function outputFormatFromPayload(value: unknown): OutputFormat {
+  const format = toStringValue(value).toLowerCase() as OutputFormat;
+  return OUTPUT_FORMATS.has(format) ? format : SERVER_IMPORT_OUTPUT_FORMAT;
+}
+
+function assertServerImportOutputFormat(payload: Pick<SongPayload, "outputFormat">): void {
+  const outputFormat = outputFormatFromPayload(payload.outputFormat);
+  if (outputFormat !== SERVER_IMPORT_OUTPUT_FORMAT) {
+    throw new ApiError(
+      `${outputFormat.toUpperCase()} output is only available for browser/local saves. Server imports currently support FLAC/original audio.`,
+      400,
+    );
+  }
 }
 
 function randomToken(): string {
@@ -912,8 +939,8 @@ function extensionFromResponse(response: Response, streamUrl: string): string {
 
 async function uploadRemoteCover(env: CloudflareEnv, title: string, artist: string, imageUrl: string): Promise<string> {
   if (!imageUrl) return "/apple-icon.png";
-  const parsed = new URL(imageUrl);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "/apple-icon.png";
+  const parsed = parseHttpUrl(imageUrl);
+  if (!parsed) return "/apple-icon.png";
   const response = await fetchWithTimeout(parsed.toString(), SPOTIFY_REQUEST_TIMEOUT_MS);
   if (!response.ok) return "/apple-icon.png";
   const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
@@ -1204,6 +1231,7 @@ app.get("/api/liked", async (c) => {
 app.get("/api/playlist/:id", async (c) => {
   const db = c.get("db");
   const user = c.get("user");
+  if (!user) return jsonError("Unauthorized", 401);
   const id = c.req.param("id");
   await ensureSongColumns(db);
   const playlists = await db<PlaylistRow>`
@@ -1214,11 +1242,12 @@ app.get("/api/playlist/:id", async (c) => {
   `;
   const playlist = playlists[0];
   if (!playlist) return jsonError("Playlist not found", 404);
+  if (playlist.userId !== user.id) return jsonError("Forbidden", 403);
   const songRows = await db<SongRow & { order: number; likedSongId: string | null }>`
     SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", ps."order", l."songId" AS "likedSongId"
     FROM "PlaylistSong" ps
     INNER JOIN "Song" s ON s."id" = ps."songId"
-    LEFT JOIN "Like" l ON l."songId" = s."id" AND l."userId" = ${user?.id ?? ""}
+    LEFT JOIN "Like" l ON l."songId" = s."id" AND l."userId" = ${user.id}
     WHERE ps."playlistId" = ${id}
     ORDER BY ps."order" ASC
   `;
@@ -1233,8 +1262,8 @@ app.get("/api/songs/spotify/cover", async (c) => {
   requireUser(c.get("user"));
   const remoteUrlRaw = c.req.query("url") || "";
   const fileName = sanitizeFileName(c.req.query("filename") || "cover");
-  const remoteUrl = new URL(remoteUrlRaw);
-  if (remoteUrl.protocol !== "http:" && remoteUrl.protocol !== "https:") return jsonError("Only http(s) URLs are allowed", 400);
+  const remoteUrl = parseHttpUrl(remoteUrlRaw);
+  if (!remoteUrl) return jsonError("Only valid http(s) URLs are allowed", 400);
   const upstream = await fetchWithTimeout(remoteUrl.toString(), SPOTIFY_REQUEST_TIMEOUT_MS);
   if (!upstream.ok) throw new ApiError(`Upstream cover request returned ${upstream.status}`, 502);
   return new Response(upstream.body, {
@@ -1467,6 +1496,7 @@ app.post("/api/songs", async (c) => {
     const payload = await readJson<SongPayload>(c.req.raw);
     if (!payload) return jsonError("Invalid JSON body", 400);
     replaceExisting = payload.replaceExisting === true || toStringValue(payload.replaceExisting).toLowerCase() === "true";
+    assertServerImportOutputFormat(payload);
     title = toStringValue(payload.title);
     artist = toStringValue(payload.artist);
     album = toStringValue(payload.album);
@@ -1518,11 +1548,12 @@ app.post("/api/songs", async (c) => {
       lyricsText = toStringValue(payload.lyricsText);
     } else {
       const remoteAudioUrl = toStringValue(payload.audioUrl);
-      if (!remoteAudioUrl) return jsonError("Audio URL is required", 400);
-      const response = await fetchWithTimeout(remoteAudioUrl, DOWNLOAD_REQUEST_TIMEOUT_MS);
+      const remoteAudio = parseHttpUrl(remoteAudioUrl);
+      if (!remoteAudio) return jsonError("Only valid http(s) audio URLs are allowed", 400);
+      const response = await fetchWithTimeout(remoteAudio.toString(), DOWNLOAD_REQUEST_TIMEOUT_MS);
       if (!response.ok || !response.body) throw new ApiError(`Audio server returned ${response.status}`, 502);
       const responseType = response.headers.get("content-type") || "audio/flac";
-      const ext = extensionFromResponse(response, remoteAudioUrl);
+      const ext = extensionFromResponse(response, remoteAudio.toString());
       const audioKey = `${buildOrganizedMusicBasePath(title, artist)}/audio/${crypto.randomUUID()}${ext}`;
       await putStream(c.env, audioKey, response.body, responseType);
       audioUrl = toApiFileUrl(audioKey);

@@ -215,6 +215,13 @@ export default function UploadPage() {
   const autoDownloadStartedRef = useRef(false);
   const batchDownloadRunnerRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const canSaveToWritableLocalFolder =
+    localFolderPickerKind === "handle" &&
+    (localFolderWritable || Boolean(localDirectoryName) || localSongsCount > 0);
+  const canSaveThroughBrowserFiles =
+    localFolderPickerKind !== "handle" && (Boolean(localDirectoryName) || localSongsCount > 0);
+  const canUseBrowserOutputConversion = canSaveToWritableLocalFolder || canSaveThroughBrowserFiles;
+  const requestedOutputFormat = canUseBrowserOutputConversion ? outputFormat : "flac";
 
   useEffect(() => {
     return () => {
@@ -222,6 +229,12 @@ export default function UploadPage() {
       if (previewAudioRef.current) previewAudioRef.current.currentTime = 0;
     };
   }, []);
+
+  useEffect(() => {
+    if (!canUseBrowserOutputConversion && outputFormat !== "flac") {
+      setOutputFormat("flac");
+    }
+  }, [canUseBrowserOutputConversion, outputFormat]);
 
   useEffect(() => {
     try {
@@ -265,7 +278,7 @@ export default function UploadPage() {
       const url = spotifyUrl.trim();
       try {
         const cookie = readSpotifyCookie();
-        const clientBatch = await resolveSpotifyBatchOnClient(url, cookie, outputFormat);
+        const clientBatch = await resolveSpotifyBatchOnClient(url, cookie, requestedOutputFormat);
         setBatchInfo(clientBatch);
         setFetchStatus("success");
         setNotice(`Found ${clientBatch.trackCount} tracks from Spotify.`);
@@ -274,7 +287,7 @@ export default function UploadPage() {
         setError(err instanceof Error ? err.message : "Failed to fetch batch info");
       }
     })();
-  }, [user, status, spotifyUrl, outputFormat]);
+  }, [user, status, spotifyUrl, requestedOutputFormat]);
 
   useEffect(() => {
     if (!batchInfo || !autoDownloadPending || autoDownloadStartedRef.current) return;
@@ -353,7 +366,7 @@ export default function UploadPage() {
       try {
         const cookie = readSpotifyCookie();
         try {
-          const clientBatch = await resolveSpotifyBatchOnClient(url, cookie, outputFormat);
+          const clientBatch = await resolveSpotifyBatchOnClient(url, cookie, requestedOutputFormat);
           setBatchInfo(clientBatch);
           setFetchStatus("success");
           setNotice(`Found ${clientBatch.trackCount} tracks from Spotify.`);
@@ -366,7 +379,7 @@ export default function UploadPage() {
             body: JSON.stringify({
               spotifyUrl: url,
               region,
-              outputFormat,
+              outputFormat: requestedOutputFormat,
               qualityProfile,
               spotifyCookie: cookie,
             }),
@@ -458,6 +471,7 @@ export default function UploadPage() {
       durationMs: String(track.durationMs || ""),
       imageUrl: track.imageUrl,
       qualityProfile,
+      outputFormat: "flac",
     };
     if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
@@ -503,38 +517,10 @@ export default function UploadPage() {
     };
   }
 
-  async function saveTrackToLocalFolder(
-    track: SpotifyTrack,
-    trackUrl: string,
-    lyricsToInclude: string,
-  ) {
-    const payload = buildDownloadPayloadForTrack(track, trackUrl, lyricsToInclude);
-    const [audio, cover] = await Promise.all([
-      fetchSpotifyAudioBlobForTrack(track, payload),
-      fetchSpotifyCoverBlobForTrack(track).catch(() => null),
-    ]);
-    await saveDownloadedTrack({
-      title: track.title,
-      artist: track.artist,
-      audioBlob: audio.blob,
-      audioFileName: audio.fileName,
-      coverBlob: cover?.blob ?? null,
-      coverFileName: cover?.fileName,
-      lyricsText: lyricsToInclude,
-    });
-  }
-
-  async function buildBrowserSaveForTrack(
-    track: SpotifyTrack,
-    trackUrl: string,
-    lyricsToInclude: string,
-  ): Promise<PreparedBrowserSave> {
-    const payload = buildDownloadPayloadForTrack(track, trackUrl, lyricsToInclude);
-    const [audio, cover] = await Promise.all([
-      fetchSpotifyAudioBlobForTrack(track, payload),
-      fetchSpotifyCoverBlobForTrack(track).catch(() => null),
-    ]);
-
+  async function applyRequestedAudioFormat(
+    audio: { blob: Blob; fileName: string },
+    audioStem: string,
+  ): Promise<{ blob: Blob; fileName: string }> {
     let processedAudioBlob = audio.blob;
     let audioExt = extensionFromFileName(
       audio.fileName,
@@ -555,9 +541,50 @@ export default function UploadPage() {
       }
     }
 
+    return {
+      blob: processedAudioBlob,
+      fileName: `${audioStem}${audioExt}`,
+    };
+  }
+
+  async function saveTrackToLocalFolder(
+    track: SpotifyTrack,
+    trackUrl: string,
+    lyricsToInclude: string,
+  ) {
+    const payload = buildDownloadPayloadForTrack(track, trackUrl, lyricsToInclude);
+    const [audio, cover] = await Promise.all([
+      fetchSpotifyAudioBlobForTrack(track, payload),
+      fetchSpotifyCoverBlobForTrack(track).catch(() => null),
+    ]);
     const audioStem = sanitizeDownloadSegment(`${track.artist} - ${track.title}`);
-    const audioFileName = `${audioStem}${audioExt}`;
-    const files = [createDownloadFile(processedAudioBlob, audioFileName)];
+    const processedAudio = await applyRequestedAudioFormat(audio, audioStem);
+    await saveDownloadedTrack({
+      title: track.title,
+      artist: track.artist,
+      audioBlob: processedAudio.blob,
+      audioFileName: processedAudio.fileName,
+      coverBlob: cover?.blob ?? null,
+      coverFileName: cover?.fileName,
+      lyricsText: lyricsToInclude,
+    });
+  }
+
+  async function buildBrowserSaveForTrack(
+    track: SpotifyTrack,
+    trackUrl: string,
+    lyricsToInclude: string,
+  ): Promise<PreparedBrowserSave> {
+    const payload = buildDownloadPayloadForTrack(track, trackUrl, lyricsToInclude);
+    const [audio, cover] = await Promise.all([
+      fetchSpotifyAudioBlobForTrack(track, payload),
+      fetchSpotifyCoverBlobForTrack(track).catch(() => null),
+    ]);
+
+    const audioStem = sanitizeDownloadSegment(`${track.artist} - ${track.title}`);
+    const processedAudio = await applyRequestedAudioFormat(audio, audioStem);
+    const audioFileName = processedAudio.fileName;
+    const files = [createDownloadFile(processedAudio.blob, audioFileName)];
     let coverFileName: string | undefined;
     let lyricsFileName: string | undefined;
 
@@ -620,6 +647,7 @@ export default function UploadPage() {
       durationMs: String(track.durationMs || ""),
       imageUrl: track.imageUrl,
       qualityProfile,
+      outputFormat: "flac",
     };
     if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
@@ -850,6 +878,7 @@ export default function UploadPage() {
       durationMs: String(spotifyTrack.durationMs || ""),
       imageUrl: spotifyTrack.imageUrl,
       qualityProfile,
+      outputFormat: "flac",
     };
     if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
@@ -875,11 +904,11 @@ export default function UploadPage() {
   }
 
   function shouldSaveToLocalFolder() {
-    return localFolderPickerKind === "handle" && (localFolderWritable || Boolean(localDirectoryName) || localSongsCount > 0);
+    return canSaveToWritableLocalFolder;
   }
 
   function hasReadOnlyPickedFolder() {
-    return localFolderPickerKind !== "handle" && (Boolean(localDirectoryName) || localSongsCount > 0);
+    return canSaveThroughBrowserFiles;
   }
 
   function spotifyDownloadPayload(lyricsToInclude = ""): Record<string, string> {
@@ -943,11 +972,13 @@ export default function UploadPage() {
       fetchSpotifyAudioBlob(payload),
       fetchSpotifyCoverBlob().catch(() => null),
     ]);
+    const audioStem = sanitizeDownloadSegment(`${spotifyTrack.artist} - ${spotifyTrack.title}`);
+    const processedAudio = await applyRequestedAudioFormat(audio, audioStem);
     await saveDownloadedTrack({
       title: spotifyTrack.title,
       artist: spotifyTrack.artist,
-      audioBlob: audio.blob,
-      audioFileName: audio.fileName,
+      audioBlob: processedAudio.blob,
+      audioFileName: processedAudio.fileName,
       coverBlob: cover?.blob ?? null,
       coverFileName: cover?.fileName,
       lyricsText: lyricsToInclude,
@@ -962,30 +993,10 @@ export default function UploadPage() {
       fetchSpotifyCoverBlob().catch(() => null),
     ]);
 
-    let processedAudioBlob = audio.blob;
-    let audioExt = extensionFromFileName(
-      audio.fileName,
-      extensionFromContentType(audio.blob.type, ".flac"),
-    );
-
-    // Convert audio format if needed
-    if (outputFormat !== "flac" && getSupportedFormats().includes(outputFormat)) {
-      try {
-        const audioBuffer = await audio.blob.arrayBuffer();
-        processedAudioBlob = await convertAudioFile(audioBuffer, {
-          format: outputFormat,
-          quality: 0.9,
-          bitRate: outputFormat === "mp3" ? 320 : undefined
-        });
-        audioExt = getExtensionForFormat(outputFormat);
-      } catch (error) {
-        console.warn("Audio conversion failed, using original format:", error);
-      }
-    }
-
     const audioStem = sanitizeDownloadSegment(`${spotifyTrack.artist} - ${spotifyTrack.title}`);
-    const audioFileName = `${audioStem}${audioExt}`;
-    const audioFile = createDownloadFile(processedAudioBlob, audioFileName);
+    const processedAudio = await applyRequestedAudioFormat(audio, audioStem);
+    const audioFileName = processedAudio.fileName;
+    const audioFile = createDownloadFile(processedAudio.blob, audioFileName);
     const files = [audioFile];
     let coverFileName: string | undefined;
     let lyricsFileName: string | undefined;
@@ -1234,16 +1245,16 @@ export default function UploadPage() {
                 <div>
                   <label className="block text-sm mb-2 text-foreground/80">Output Format</label>
                   <select
-                    value={outputFormat}
+                    value={requestedOutputFormat}
                     onChange={(e) => setOutputFormat(e.target.value as OutputFormat)}
                     className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
                   >
                     <option value="flac">FLAC (Lossless)</option>
-                    {getSupportedFormats().includes("mp3") && <option value="mp3">MP3 320kbps</option>}
-                    {getSupportedFormats().includes("aac") && <option value="aac">AAC (M4A)</option>}
-                    {getSupportedFormats().includes("ogg") && <option value="ogg">OGG Vorbis</option>}
-                    {getSupportedFormats().includes("opus") && <option value="opus">Opus</option>}
-                    {getSupportedFormats().includes("wav") && <option value="wav">WAV (Uncompressed)</option>}
+                    {canUseBrowserOutputConversion && getSupportedFormats().includes("mp3") && <option value="mp3">MP3 320kbps</option>}
+                    {canUseBrowserOutputConversion && getSupportedFormats().includes("aac") && <option value="aac">AAC (M4A)</option>}
+                    {canUseBrowserOutputConversion && getSupportedFormats().includes("ogg") && <option value="ogg">OGG Vorbis</option>}
+                    {canUseBrowserOutputConversion && getSupportedFormats().includes("opus") && <option value="opus">Opus</option>}
+                    {canUseBrowserOutputConversion && getSupportedFormats().includes("wav") && <option value="wav">WAV (Uncompressed)</option>}
                   </select>
                 </div>
                 <div>

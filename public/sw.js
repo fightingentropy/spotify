@@ -210,6 +210,9 @@ async function mediaResponse(request) {
   const cached = await matchCachedMedia(request.url);
   if (cached) return cached;
   const response = await fetch(request);
+  if (request.headers.get("x-spotify-offline-download") === "1") {
+    return response;
+  }
   await putCache(PLAYBACK_CACHE, request, response.clone());
   return response;
 }

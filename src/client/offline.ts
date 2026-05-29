@@ -114,6 +114,11 @@ const PLAYBACK_WARM_BYTES = 2 * 1024 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
 const PLAYBACK_WARM_DEDUPE_MS = 2 * 60 * 1_000;
 const PLAYBACK_WARM_QUEUE_LIMIT = 12;
+const DOWNLOAD_STALL_TIMEOUT_MS = 30_000;
+const DOWNLOAD_CACHE_WRITE_TIMEOUT_MS = 60_000;
+const DOWNLOAD_RETRY_ATTEMPTS = 3;
+const DOWNLOAD_RETRY_DELAY_MS = 1_000;
+const STALE_DOWNLOADING_MS = 2 * 60 * 1_000;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let hydrateStarted = false;
@@ -132,6 +137,24 @@ function now(): number {
 function randomId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 function hasIndexedDb(): boolean {
@@ -283,15 +306,49 @@ async function cacheUrl(
   const cache = await caches.open(cacheName);
   const cached = await cache.match(absoluteUrl);
   if (cached) {
-    const blob = await cached.clone().blob().catch(() => null);
+    const contentLength = Number(cached.headers.get("content-length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > 0) return contentLength;
+    const blob = await withTimeout(
+      cached.clone().blob().catch(() => null),
+      DOWNLOAD_CACHE_WRITE_TIMEOUT_MS,
+      "Reading cached download timed out",
+    );
     return blob?.size ?? 0;
   }
 
-  const response = await fetch(absoluteUrl, {
-    credentials: "include",
-    cache: "reload",
-  });
-  if (!response.ok) throw new Error(`Download failed with ${response.status}`);
+  const controller = new AbortController();
+  let stalled = false;
+  let stallTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const resetStallTimer = () => {
+    if (stallTimeoutId) clearTimeout(stallTimeoutId);
+    stallTimeoutId = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, DOWNLOAD_STALL_TIMEOUT_MS);
+  };
+
+  resetStallTimer();
+
+  let response: Response;
+  try {
+    response = await fetch(absoluteUrl, {
+      credentials: "include",
+      cache: "reload",
+      headers: {
+        "x-spotify-offline-download": "1",
+      },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (stallTimeoutId) clearTimeout(stallTimeoutId);
+    if (stalled) throw new Error("Download stalled while connecting");
+    throw error;
+  }
+
+  if (!response.ok) {
+    if (stallTimeoutId) clearTimeout(stallTimeoutId);
+    throw new Error(`Download failed with ${response.status}`);
+  }
 
   const totalRaw = Number(response.headers.get("content-length") || 0);
   const total = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : null;
@@ -299,46 +356,69 @@ async function cacheUrl(
   headers.set("x-spotify-offline-cached-at", String(now()));
 
   if (!response.body) {
-    const blob = await response.blob();
-    onProgress?.(blob.size, total);
-    await cache.put(
+    try {
+      const blob = await withTimeout(
+        response.blob(),
+        DOWNLOAD_CACHE_WRITE_TIMEOUT_MS,
+        "Download response timed out",
+      );
+      onProgress?.(blob.size, total);
+      await withTimeout(
+        cache.put(
+          absoluteUrl,
+          new Response(blob, {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+          }),
+        ),
+        DOWNLOAD_CACHE_WRITE_TIMEOUT_MS,
+        "Saving download timed out",
+      );
+      return blob.size;
+    } finally {
+      if (stallTimeoutId) clearTimeout(stallTimeoutId);
+    }
+  }
+
+  try {
+    const cachePromise = cache.put(
       absoluteUrl,
-      new Response(blob, {
+      new Response(response.clone().body, {
         status: response.status,
         statusText: response.statusText,
         headers,
       }),
     );
-    return blob.size;
-  }
+    cachePromise.catch(() => undefined);
+    const reader = response.body.getReader();
+    let loaded = 0;
+    for (;;) {
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await reader.read();
+      } catch (error) {
+        if (stalled) throw new Error("Download stalled before receiving more data");
+        throw error;
+      }
+      const { done, value } = result;
+      if (done) break;
+      if (!value) continue;
+      resetStallTimer();
+      loaded += value.byteLength;
+      onProgress?.(loaded, total);
+    }
 
-  const reader = response.body.getReader();
-  const chunks: ArrayBuffer[] = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    const copy = new Uint8Array(value.byteLength);
-    copy.set(value);
-    chunks.push(copy.buffer);
-    loaded += value.byteLength;
+    await withTimeout(
+      cachePromise,
+      DOWNLOAD_CACHE_WRITE_TIMEOUT_MS,
+      "Saving download timed out",
+    );
     onProgress?.(loaded, total);
+    return loaded;
+  } finally {
+    if (stallTimeoutId) clearTimeout(stallTimeoutId);
   }
-
-  const blob = new Blob(chunks, {
-    type: response.headers.get("content-type") || "application/octet-stream",
-  });
-  await cache.put(
-    absoluteUrl,
-    new Response(blob, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    }),
-  );
-  onProgress?.(blob.size, total);
-  return blob.size;
 }
 
 async function warmPlaybackUrl(url: string): Promise<void> {
@@ -437,7 +517,7 @@ async function prunePlaybackCache(): Promise<void> {
   await Promise.all(entries.slice(0, deleteCount).map((entry) => cache.delete(entry.request)));
 }
 
-async function cacheDurableUrl(
+async function cacheDurableUrlOnce(
   url: string,
   onProgress?: (loaded: number, total: number | null) => void,
 ): Promise<number> {
@@ -449,6 +529,23 @@ async function cacheDurableUrl(
       throw error;
     });
   }
+}
+
+async function cacheDurableUrl(
+  url: string,
+  onProgress?: (loaded: number, total: number | null) => void,
+): Promise<number> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= DOWNLOAD_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await cacheDurableUrlOnce(url, onProgress);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= DOWNLOAD_RETRY_ATTEMPTS) break;
+      await sleep(DOWNLOAD_RETRY_DELAY_MS * attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Download failed");
 }
 
 function setRecordState(record: OfflineDownloadRecord): void {
@@ -465,10 +562,42 @@ async function persistRecord(record: OfflineDownloadRecord): Promise<void> {
   setRecordState(record);
 }
 
+async function requeueInterruptedDownloadRecords(
+  records: OfflineDownloadRecord[],
+  force = false,
+): Promise<OfflineDownloadRecord[]> {
+  const timestamp = now();
+  const nextRecords = await Promise.all(
+    records.map(async (record) => {
+      if (record.status !== "downloading") return record;
+      if (!force && timestamp - record.updatedAt < STALE_DOWNLOADING_MS) return record;
+      const queued: OfflineDownloadRecord = {
+        ...record,
+        status: "queued",
+        progress: 0,
+        error: undefined,
+        updatedAt: timestamp,
+      };
+      await idbPut(DOWNLOAD_STORE, queued).catch(() => undefined);
+      return queued;
+    }),
+  );
+  return nextRecords;
+}
+
+async function recoverInterruptedDownloads(force = false): Promise<void> {
+  if (downloadPumpRunning) return;
+  const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
+  const nextRecords = await requeueInterruptedDownloadRecords(records, force);
+  useOfflineStore.setState({ records: recordsById(nextRecords) });
+}
+
 async function processDownloadQueue(): Promise<void> {
   if (downloadPumpRunning) return;
   downloadPumpRunning = true;
   try {
+    const initialRecords = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
+    await requeueInterruptedDownloadRecords(initialRecords);
     for (;;) {
       const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE);
       const record = records.find((item) => item.status === "queued");
@@ -543,6 +672,7 @@ function attachBrowserListeners(): void {
   window.addEventListener("online", () => {
     useOfflineStore.setState({ online: true });
     void useOfflineStore.getState().syncMutations();
+    void recoverInterruptedDownloads();
     void processDownloadQueue();
   });
   window.addEventListener("offline", () => {
@@ -552,6 +682,8 @@ function attachBrowserListeners(): void {
     if (document.visibilityState !== "visible") return;
     void useOfflineStore.getState().syncMutations();
     void useOfflineStore.getState().refreshStorage();
+    void recoverInterruptedDownloads();
+    void processDownloadQueue();
   });
 }
 
@@ -890,8 +1022,8 @@ export function getScopeDownloadState(
     .map((song) => records[song.id])
     .filter((record): record is OfflineDownloadRecord => !!record && record.pinnedBy.includes(scope));
   if (scopedRecords.length === 0) return "none";
-  if (scopedRecords.some((record) => record.status === "failed")) return "failed";
   if (scopedRecords.some((record) => record.status === "queued" || record.status === "downloading")) return "downloading";
+  if (scopedRecords.some((record) => record.status === "failed")) return "failed";
   if (scopedRecords.length === cacheableSongs.length && scopedRecords.every((record) => record.status === "downloaded")) {
     return "downloaded";
   }
@@ -924,12 +1056,13 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     if (hydrateStarted) return;
     hydrateStarted = true;
     attachBrowserListeners();
-    const [records, pendingMutations, storage, persistentStorage] = await Promise.all([
+    const [storedRecords, pendingMutations, storage, persistentStorage] = await Promise.all([
       idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []),
       mutationCount(),
       estimateStorage(),
       requestPersistentStorage(),
     ]);
+    const records = await requeueInterruptedDownloadRecords(storedRecords, true);
     set({
       hydrated: true,
       online: typeof navigator === "undefined" ? true : navigator.onLine,

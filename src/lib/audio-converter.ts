@@ -79,9 +79,7 @@ export async function convertAudioBuffer(
     case "wav":
       return convertToWav(audioBuffer);
     case "mp3":
-      // For MP3, we'd need a library like lamejs
-      console.warn("MP3 encoding requires additional library (lamejs)");
-      return convertToWav(audioBuffer); // Fallback to WAV
+      return convertWithMediaRecorder(audioBuffer, options);
     case "ogg":
     case "opus":
       return convertWithMediaRecorder(audioBuffer, options);
@@ -191,6 +189,8 @@ async function convertWithMediaRecorder(
       mimeType = "audio/ogg;codecs=vorbis";
     } else if (options.format === "aac") {
       mimeType = "audio/mp4;codecs=mp4a.40.2";
+    } else if (options.format === "mp3") {
+      mimeType = "audio/mpeg";
     }
 
     // Check if the MIME type is supported

@@ -117,9 +117,13 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   toggle: () => set((s) => ({ isPlaying: !s.isPlaying })),
   next: () =>
     set((s) => {
-      if (s.queue.length === 0) return s;
+      if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
       if (s.shuffle) {
-        if (s.queue.length === 1) return s;
+        if (s.queue.length === 1) {
+          return s.repeatMode === "all"
+            ? { ...s, currentIndex: 0, currentSong: s.queue[0], isPlaying: true }
+            : { ...s, isPlaying: false };
+        }
         const future = s.playFuture.slice();
         const idx = future.length > 0 ? future.pop() ?? s.currentIndex : randomQueueIndex(s.queue.length, s.currentIndex);
         if (idx === s.currentIndex) return s;
@@ -138,7 +142,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
           return { ...s, currentIndex: 0, currentSong: s.queue[0], isPlaying: true };
         }
         // repeat one handled in PlayerBar; here stop at end for off
-        return s;
+        return { ...s, isPlaying: false };
       }
       const idx = s.currentIndex + 1;
       return { ...s, currentIndex: idx, currentSong: s.queue[idx], isPlaying: true };

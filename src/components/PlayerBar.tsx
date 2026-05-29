@@ -530,6 +530,8 @@ function PlayerBar(): React.ReactElement | null {
           return;
         }
         if (!nextSong) { crossfadingRef.current = false; return; }
+        const nextSongId = nextSong.id;
+        const nextIndexToCommit = nextIdx;
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
@@ -579,9 +581,9 @@ function PlayerBar(): React.ReactElement | null {
             // Keep previous track silent to avoid bleed-through
             fromAudio.volume = 0;
             crossfadeCancelRef.current = null;
-            crossfadeCommitSongIdRef.current = nextSong.id;
+            crossfadeCommitSongIdRef.current = nextSongId;
             // Switch UI/active element now that audio is already running
-            advanceToIndex(nextIdx);
+            advanceToIndex(nextIndexToCommit);
             setActiveIdx(activeIdx === 0 ? 1 : 0);
             // Update duration from incoming element if known
             if (Number.isFinite(incoming.duration)) {
@@ -765,7 +767,7 @@ function PlayerBar(): React.ReactElement | null {
           if (e.currentTarget !== getActiveAudio()) return;
           if (crossfadingRef.current) return;
           const audio = e.currentTarget;
-          if (repeatMode === "one") {
+          if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1)) {
             audio.currentTime = 0;
             void playAudio(audio);
             return;
@@ -804,7 +806,7 @@ function PlayerBar(): React.ReactElement | null {
           if (e.currentTarget !== getActiveAudio()) return;
           if (crossfadingRef.current) return;
           const audio = e.currentTarget;
-          if (repeatMode === "one") {
+          if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1)) {
             audio.currentTime = 0;
             void playAudio(audio);
             return;
