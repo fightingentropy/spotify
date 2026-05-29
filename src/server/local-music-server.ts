@@ -98,6 +98,10 @@ const artworkCacheDir = resolve(process.env.SPOTIFY_ARTWORK_CACHE_DIR || resolve
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || "5174");
 const scanTtlMs = Math.max(1_000, Number(process.env.SPOTIFY_SCAN_TTL_MS || "30000"));
+const configuredIdleTimeoutSeconds = Number(process.env.SPOTIFY_IDLE_TIMEOUT_SECONDS || "120");
+const idleTimeoutSeconds = Number.isFinite(configuredIdleTimeoutSeconds)
+  ? Math.max(30, configuredIdleTimeoutSeconds)
+  : 120;
 const remoteArtworkLookupEnabled = process.env.SPOTIFY_ARTWORK_LOOKUP !== "0";
 const artworkLookupCountry = process.env.SPOTIFY_ARTWORK_COUNTRY || "GB";
 const proxyToken = process.env.SPOTIFY_PROXY_TOKEN || "";
@@ -1369,6 +1373,7 @@ async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
 Bun.serve({
   hostname: host,
   port,
+  idleTimeout: idleTimeoutSeconds,
   async fetch(request) {
     const url = new URL(request.url);
     try {

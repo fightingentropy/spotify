@@ -173,12 +173,35 @@ sudo install -m 644 "$tmp_plist" "$app_plist"
 rm -f "$tmp_plist"
 
 sudo launchctl bootout system "$app_plist" 2>/dev/null || true
+listener_pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+parent_pids=""
+for pid in $listener_pids; do
+  parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ -n "$parent" && "$parent" != "1" ]]; then
+    parent_pids="$parent_pids $parent"
+  fi
+done
+targets=$(printf '%s\n' $listener_pids $parent_pids | awk 'NF && !seen[$1]++')
+if [[ -n "$targets" ]]; then
+  kill $targets 2>/dev/null || true
+  sleep 2
+fi
+remaining_pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+if [[ -n "$remaining_pids" ]]; then
+  kill -9 $remaining_pids 2>/dev/null || true
+  sleep 1
+fi
+
 sudo launchctl bootstrap system "$app_plist"
 sudo launchctl enable system/com.fightingentropy.spotify-app 2>/dev/null || true
 sudo launchctl kickstart -k system/com.fightingentropy.spotify-app
 
-sleep 2
-status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://127.0.0.1:$PORT/api/music/source" || true)
+status="000"
+for attempt in $(seq 1 8); do
+  status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 "http://127.0.0.1:$PORT/api/music/source" || true)
+  [[ "$status" == "200" ]] && break
+  sleep 3
+done
 printf 'server_http=%s\n' "$status"
 launchctl print system/com.fightingentropy.spotify-app 2>/dev/null | awk '/state =|pid =|runs =|last exit code =|path =/ {print}'
 
