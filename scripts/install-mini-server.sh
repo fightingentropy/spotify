@@ -129,10 +129,7 @@ if [[ -f "$SPOTIFY_ENV_FILE" ]]; then
 fi
 
 printf '%s spotify server starting music=%s port=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SPOTIFY_MUSIC_DIR:-}" "${PORT:-}" >&2
-/opt/homebrew/bin/bun run src/server/local-music-server.ts
-status=$?
-printf '%s spotify server exited status=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" >&2
-exit "$status"
+exec /opt/homebrew/bin/bun run src/server/local-music-server.ts
 SCRIPT
 chmod 700 "$bin_dir/spotify-run-server"
 bash -n "$bin_dir/spotify-run-server"
