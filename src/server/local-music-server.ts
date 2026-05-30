@@ -636,6 +636,45 @@ async function writePersistentCache(cache: PersistentSongCache): Promise<void> {
   await rename(tempPath, libraryCachePath);
 }
 
+function buildLibrarySnapshot(entries: LocalSongEntry[], scannedAt = Date.now()): LibrarySnapshot {
+  const songs = entries
+    .map((entry) => entry.song)
+    .sort((left, right) => {
+      const leftKey = `${left.artist} ${left.title}`.toLowerCase();
+      const rightKey = `${right.artist} ${right.title}`.toLowerCase();
+      return leftKey.localeCompare(rightKey);
+    });
+  const entriesById = new Map(entries.map((entry) => [entry.song.id, entry] as const));
+  const entriesByPath = new Map(entries.map((entry) => [entry.relativePath, entry] as const));
+
+  return {
+    songs,
+    entriesById,
+    entriesByPath,
+    scannedAt,
+  };
+}
+
+async function readCachedLibrarySnapshot(): Promise<LibrarySnapshot | null> {
+  const cache = await readPersistentCache();
+  const entries: LocalSongEntry[] = [];
+
+  for (const [relativePath, cached] of Object.entries(cache.entries)) {
+    if (!cached?.song || typeof cached.size !== "number" || typeof cached.mtimeMs !== "number") continue;
+    const absolutePath = resolveInside(musicRoot, relativePath);
+    if (!absolutePath) continue;
+    entries.push({
+      song: cached.song,
+      absolutePath,
+      relativePath,
+      size: cached.size,
+      mtimeMs: cached.mtimeMs,
+    });
+  }
+
+  return entries.length ? buildLibrarySnapshot(entries) : null;
+}
+
 function cachedStatMatches(
   cached: PersistentSongCache["entries"][string] | undefined,
   fileStat: Stats,
@@ -684,30 +723,11 @@ async function scanLibrary(usePersistentCache = true): Promise<LibrarySnapshot> 
 
   await writePersistentCache(nextCache).catch(() => {});
 
-  const songs = entries
-    .map((entry) => entry.song)
-    .sort((left, right) => {
-      const leftKey = `${left.artist} ${left.title}`.toLowerCase();
-      const rightKey = `${right.artist} ${right.title}`.toLowerCase();
-      return leftKey.localeCompare(rightKey);
-    });
-  const entriesById = new Map(entries.map((entry) => [entry.song.id, entry] as const));
-  const entriesByPath = new Map(entries.map((entry) => [entry.relativePath, entry] as const));
-
-  return {
-    songs,
-    entriesById,
-    entriesByPath,
-    scannedAt: Date.now(),
-  };
+  return buildLibrarySnapshot(entries);
 }
 
-async function getLibrary(force = false): Promise<LibrarySnapshot> {
-  const now = Date.now();
-  if (!force && librarySnapshot && now - librarySnapshot.scannedAt < scanTtlMs) {
-    return librarySnapshot;
-  }
-  scanPromise ??= scanLibrary(!force)
+function refreshLibrary(usePersistentCache = true): Promise<LibrarySnapshot> {
+  scanPromise ??= scanLibrary(usePersistentCache)
     .then((snapshot) => {
       librarySnapshot = snapshot;
       return snapshot;
@@ -716,6 +736,19 @@ async function getLibrary(force = false): Promise<LibrarySnapshot> {
       scanPromise = null;
     });
   return scanPromise;
+}
+
+async function getLibrary(force = false): Promise<LibrarySnapshot> {
+  const now = Date.now();
+  if (!force && librarySnapshot) {
+    if (now - librarySnapshot.scannedAt >= scanTtlMs && !scanPromise) {
+      void refreshLibrary(true).catch((error) => {
+        console.error(`Spotify local music library refresh failed: ${error}`);
+      });
+    }
+    return librarySnapshot;
+  }
+  return refreshLibrary(!force);
 }
 
 async function readLikes(): Promise<string[]> {
@@ -1391,12 +1424,29 @@ Bun.serve({
   },
 });
 
-void getLibrary()
-  .then((snapshot) => {
+async function initializeLibrary(): Promise<void> {
+  const cachedSnapshot = await readCachedLibrarySnapshot();
+  if (cachedSnapshot) {
+    librarySnapshot = cachedSnapshot;
     console.log(
-      `Spotify local music server listening on http://${host}:${port} with ${snapshot.songs.length} tracks from ${musicRoot}`,
+      `Spotify local music server listening on http://${host}:${port} with ${cachedSnapshot.songs.length} cached tracks from ${musicRoot}`,
     );
-  })
-  .catch((error) => {
-    console.error(`Spotify local music server started, but initial scan failed: ${error}`);
-  });
+    void refreshLibrary(true)
+      .then((snapshot) => {
+        console.log(`Spotify local music server refreshed ${snapshot.songs.length} tracks from ${musicRoot}`);
+      })
+      .catch((error) => {
+        console.error(`Spotify local music server started, but background refresh failed: ${error}`);
+      });
+    return;
+  }
+
+  const snapshot = await refreshLibrary(true);
+  console.log(
+    `Spotify local music server listening on http://${host}:${port} with ${snapshot.songs.length} tracks from ${musicRoot}`,
+  );
+}
+
+void initializeLibrary().catch((error) => {
+  console.error(`Spotify local music server started, but initial scan failed: ${error}`);
+});
