@@ -168,9 +168,17 @@ function notFound(message = "Not found"): Response {
 
 function requestNeedsProxyToken(request: Request): boolean {
   if (!proxyToken) return false;
-  if (proxyHostnames.size === 0) return true;
   const host = (request.headers.get("host") || "").split(":")[0]?.toLowerCase() || "";
-  return proxyHostnames.has(host);
+  if (proxyHostnames.has(host)) return true;
+  if (host === "localhost" || host === "m4mini.local" || host.endsWith(".local")) return false;
+  if (host === "127.0.0.1" || host === "::1" || host === "[::1]") return false;
+  if (/^10\./.test(host) || /^192\.168\./.test(host)) return false;
+  const private172Match = host.match(/^172\.(\d+)\./);
+  if (private172Match) {
+    const secondOctet = Number(private172Match[1]);
+    if (secondOctet >= 16 && secondOctet <= 31) return false;
+  }
+  return true;
 }
 
 function methodNotAllowed(): Response {

@@ -6,6 +6,7 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 PORT="${PORT:-5174}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
+SERVICE_LABEL="${SERVICE_LABEL:-com.streamthatshit.spotify-app}"
 
 SSH_OPTS=(
   -i "$SSH_KEY"
@@ -25,7 +26,7 @@ bad() {
 }
 
 remote_output="$(ssh "${SSH_OPTS[@]}" "$MINI_HOST" \
-  "REMOTE_APP='$REMOTE_APP' PORT='$PORT' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' bash -s" <<'REMOTE'
+  "REMOTE_APP='$REMOTE_APP' PORT='$PORT' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 
 app="$REMOTE_APP"
@@ -34,8 +35,9 @@ home_status=$(curl -sS -o /tmp/spotify-home.json -w "%{http_code}" --max-time 15
 app_status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://127.0.0.1:$PORT/" || true)
 listener=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR == 2 {print $9}')
 pid=$(pgrep -f "spotify-run-server|local-music-server.ts" | head -1 || true)
-launch_pid=$(launchctl print "system/com.fightingentropy.spotify-app" 2>/dev/null | awk -F= '/pid =/ {gsub(/[ ";]/, "", $2); print $2; exit}')
-launch_state=$(launchctl print "system/com.fightingentropy.spotify-app" 2>/dev/null | awk -F= '/state =/ {gsub(/[ ";]/, "", $2); print $2; exit}')
+launch_output="$(launchctl print "system/$SERVICE_LABEL" 2>/dev/null || true)"
+launch_pid=$(printf '%s\n' "$launch_output" | awk -F= '/pid =/ {gsub(/[ ";]/, "", $2); print $2; exit}')
+launch_state=$(printf '%s\n' "$launch_output" | awk -F= '/state =/ {gsub(/[ ";]/, "", $2); print $2; exit}')
 audio_files=$(find "$REMOTE_MUSIC_DIR" -type f \( -iname '*.aac' -o -iname '*.aif' -o -iname '*.aiff' -o -iname '*.flac' -o -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.oga' -o -iname '*.ogg' -o -iname '*.opus' -o -iname '*.wav' \) | wc -l | tr -d ' ')
 songs_count=$(python3 - <<'PY'
 import json

@@ -8,6 +8,8 @@ REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
 PORT="${PORT:-5174}"
 HOST="${HOST:-0.0.0.0}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
+PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify.streamthatshit.com}"
+SERVICE_LABEL="${SERVICE_LABEL:-com.streamthatshit.spotify-app}"
 
 usage() {
   cat <<'USAGE'
@@ -15,7 +17,7 @@ Usage: scripts/install-mini-server.sh [options]
 
 Installs/updates the Mac mini Spotify music server:
   - /Users/hermes/.local/bin/spotify-run-server
-  - /Library/LaunchDaemons/com.fightingentropy.spotify-app.plist
+  - /Library/LaunchDaemons/com.streamthatshit.spotify-app.plist
   - /Users/hermes/.config/spotify/env
 
 Options:
@@ -30,6 +32,8 @@ Environment:
   REMOTE_APP             Default: /Users/hermes/Developer/spotify
   REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
   BUN_BIN                Default: /opt/homebrew/bin/bun
+  PROXY_HOSTNAMES        Default: spotify.streamthatshit.com
+  SERVICE_LABEL          Default: com.streamthatshit.spotify-app
 USAGE
 }
 
@@ -63,14 +67,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
-  "REMOTE_APP='$REMOTE_APP' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' PORT='$PORT' HOST='$HOST' BUN_BIN='$BUN_BIN' bash -s" <<'REMOTE'
+  "REMOTE_APP='$REMOTE_APP' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' PORT='$PORT' HOST='$HOST' BUN_BIN='$BUN_BIN' PROXY_HOSTNAMES='$PROXY_HOSTNAMES' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 
 state_dir="$HOME/.local/state/spotify"
 bin_dir="$HOME/.local/bin"
 config_dir="$HOME/.config/spotify"
 env_file="$config_dir/env"
-app_plist="/Library/LaunchDaemons/com.fightingentropy.spotify-app.plist"
+service_label="$SERVICE_LABEL"
+app_plist="/Library/LaunchDaemons/$service_label.plist"
 
 mkdir -p "$state_dir" "$bin_dir" "$config_dir" "$REMOTE_MUSIC_DIR" "$REMOTE_APP/cache"
 chmod 700 "$state_dir" "$bin_dir" "$config_dir"
@@ -100,6 +105,28 @@ SPOTIFY_CACHE_DIR=$REMOTE_APP/cache
 ENV
   chmod 600 "$env_file"
 fi
+
+set_env_var() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -F= -v key="$key" -v value="$value" '
+    BEGIN { done = 0 }
+    $1 == key { print key "=" value; done = 1; next }
+    { print }
+    END { if (!done) print key "=" value }
+  ' "$env_file" > "$tmp"
+  install -m 600 "$tmp" "$env_file"
+  rm -f "$tmp"
+}
+
+set_env_var HOST "$HOST"
+set_env_var PORT "$PORT"
+set_env_var SPOTIFY_MUSIC_DIR "$REMOTE_MUSIC_DIR"
+set_env_var SPOTIFY_DIST_DIR "$REMOTE_APP/dist/client"
+set_env_var SPOTIFY_CACHE_DIR "$REMOTE_APP/cache"
+set_env_var SPOTIFY_PROXY_HOSTNAMES "$PROXY_HOSTNAMES"
 
 cat > "$bin_dir/spotify-run-server" <<'SCRIPT'
 #!/bin/bash
@@ -141,7 +168,7 @@ cat > "$tmp_plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.fightingentropy.spotify-app</string>
+  <string>$service_label</string>
   <key>ProgramArguments</key>
   <array>
     <string>/Users/hermes/.local/bin/spotify-run-server</string>
@@ -190,8 +217,8 @@ if [[ -n "$remaining_pids" ]]; then
 fi
 
 sudo launchctl bootstrap system "$app_plist"
-sudo launchctl enable system/com.fightingentropy.spotify-app 2>/dev/null || true
-sudo launchctl kickstart -k system/com.fightingentropy.spotify-app
+sudo launchctl enable "system/$service_label" 2>/dev/null || true
+sudo launchctl kickstart -k "system/$service_label"
 
 status="000"
 for attempt in $(seq 1 8); do
@@ -200,7 +227,7 @@ for attempt in $(seq 1 8); do
   sleep 3
 done
 printf 'server_http=%s\n' "$status"
-launchctl print system/com.fightingentropy.spotify-app 2>/dev/null | awk '/state =|pid =|runs =|last exit code =|path =/ {print}'
+launchctl print "system/$service_label" 2>/dev/null | awk '/state =|pid =|runs =|last exit code =|path =/ {print}'
 
 [[ "$status" == "200" ]] || exit 1
 REMOTE

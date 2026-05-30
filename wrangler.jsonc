@@ -32,6 +32,6 @@
 	},
 	"vars": {
 		"AUTH_TRUST_HOST": "true",
-		"MAC_MINI_ORIGIN": "https://spotify-mini.fightingentropy.org"
+		"MAC_MINI_ORIGIN": "https://spotify.streamthatshit.com"
 	}
 }
