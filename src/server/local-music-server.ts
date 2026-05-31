@@ -82,6 +82,7 @@ const LOCAL_USER = {
   name: "Mac mini",
   image: null,
 };
+const PROXY_USER_ID_HEADER = "x-spotify-user-id";
 
 const cwd = process.cwd();
 const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
@@ -759,9 +760,21 @@ async function getLibrary(force = false): Promise<LibrarySnapshot> {
   return refreshLibrary(!force);
 }
 
-async function readLikes(): Promise<string[]> {
+function currentUserIdForRequest(request: Request): string | null {
+  const proxiedUserId = request.headers.get(PROXY_USER_ID_HEADER)?.trim();
+  if (proxiedUserId) return proxiedUserId;
+  return requestNeedsProxyToken(request) ? null : LOCAL_USER.id;
+}
+
+function likesPathForUser(userId: string): string {
+  if (userId === LOCAL_USER.id) return likesPath;
+  const digest = createHash("sha256").update(userId).digest("hex").slice(0, 32);
+  return resolve(dirname(likesPath), `local-likes-${digest}.json`);
+}
+
+async function readLikesFile(path: string): Promise<string[]> {
   try {
-    const raw = await readFile(likesPath, "utf8");
+    const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
   } catch {
@@ -769,9 +782,17 @@ async function readLikes(): Promise<string[]> {
   }
 }
 
-async function writeLikes(ids: string[]): Promise<void> {
-  await mkdir(dirname(likesPath), { recursive: true });
-  await writeFile(likesPath, `${JSON.stringify(Array.from(new Set(ids)), null, 2)}\n`, "utf8");
+async function readLikes(request: Request): Promise<string[]> {
+  const userId = currentUserIdForRequest(request);
+  return userId ? readLikesFile(likesPathForUser(userId)) : [];
+}
+
+async function writeLikes(request: Request, ids: string[]): Promise<void> {
+  const userId = currentUserIdForRequest(request);
+  if (!userId) throw new Error("Unauthorized");
+  const target = likesPathForUser(userId);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, `${JSON.stringify(Array.from(new Set(ids)), null, 2)}\n`, "utf8");
 }
 
 async function readJsonBody<T>(request: Request): Promise<T | null> {
@@ -784,19 +805,20 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
 
 async function handleLikes(request: Request): Promise<Response> {
   if (request.method === "GET") {
-    return jsonCached(request, { likedSongIds: await readLikes() });
+    return jsonCached(request, { likedSongIds: await readLikes(request) });
   }
 
   if (request.method !== "POST" && request.method !== "DELETE") return methodNotAllowed();
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
 
   const payload = await readJsonBody<{ songId?: unknown }>(request);
   const songId = typeof payload?.songId === "string" ? payload.songId : "";
   if (!songId) return json({ error: "Song id is required" }, { status: 400 });
 
-  const likes = new Set(await readLikes());
+  const likes = new Set(await readLikes(request));
   if (request.method === "POST") likes.add(songId);
   else likes.delete(songId);
-  await writeLikes(Array.from(likes));
+  await writeLikes(request, Array.from(likes));
   return json({ ok: true, likedSongIds: Array.from(likes) });
 }
 
@@ -1309,7 +1331,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/home" && request.method === "GET") {
-    const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes()]);
+    const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes(request)]);
     return jsonCached(request, { songs: snapshot.songs, likedSongIds });
   }
 
@@ -1330,13 +1352,14 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/library" && request.method === "GET") {
-    return jsonCached(request, { playlists: [], userId: LOCAL_USER.id }, {
+    return jsonCached(request, { playlists: [], userId: currentUserIdForRequest(request) }, {
       cacheControl: "private, max-age=300, stale-while-revalidate=600",
     });
   }
 
   if (pathname === "/api/liked" && request.method === "GET") {
-    const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes()]);
+    if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+    const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes(request)]);
     const liked = new Set(likedSongIds);
     return jsonCached(request, {
       songs: snapshot.songs.filter((song) => liked.has(song.id)),

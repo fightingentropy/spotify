@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v18";
+const CACHE_VERSION = "spotify-v19";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -213,6 +213,11 @@ async function deleteMediaUrls(urls) {
   );
 }
 
+async function clearRuntimeCaches() {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((key) => key.endsWith("-runtime")).map((key) => caches.delete(key)));
+}
+
 async function mediaResponse(request) {
   const cached = await matchCachedMedia(request.url);
   if (cached) return cached;
@@ -346,5 +351,9 @@ self.addEventListener("message", (event) => {
   }
   if (event.data?.type === "CLEAR_PLAYBACK_CACHE") {
     event.waitUntil(caches.delete(PLAYBACK_CACHE));
+    return;
+  }
+  if (event.data?.type === "CLEAR_RUNTIME_CACHE") {
+    event.waitUntil(clearRuntimeCaches());
   }
 });

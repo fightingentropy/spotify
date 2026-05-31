@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ImgHTMLAttributes } from "react";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
 
@@ -49,6 +49,10 @@ export function CoverImage({
   ...props
 }: CoverImageProps) {
   const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [fallbackSrc, src]);
+
   const resolvedSrc = normalizeCoverImageUrl(
     failed || !src || src.trim().length === 0 ? fallbackSrc : src,
   );

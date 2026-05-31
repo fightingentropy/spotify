@@ -1091,9 +1091,13 @@ function isMacMiniMusicConfigured(env: CloudflareEnv): boolean {
   }
 }
 
+function macMiniProxyPathname(c: Context<AppEnv>): string {
+  return new URL(c.req.url).pathname;
+}
+
 function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
   if (!isMacMiniMusicConfigured(c.env)) return false;
-  const pathname = new URL(c.req.url).pathname;
+  const pathname = macMiniProxyPathname(c);
   const method = c.req.method.toUpperCase();
 
   if (pathname.startsWith("/api/songs/spotify")) return false;
@@ -1112,36 +1116,53 @@ function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
   return false;
 }
 
-function macMiniProxyHeaders(c: Context<AppEnv>): Headers {
+function shouldForwardMacMiniUser(c: Context<AppEnv>): boolean {
+  const pathname = macMiniProxyPathname(c);
+  if (["/api/home", "/api/search-index", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
+    return true;
+  }
+  return pathname.startsWith("/api/playlist/");
+}
+
+function isMacMiniMutation(c: Context<AppEnv>): boolean {
+  const method = c.req.method.toUpperCase();
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+async function getMacMiniProxyUser(c: Context<AppEnv>): Promise<AuthUser | null> {
+  await ensureSchema(c.env);
+  const db = createD1SqlTag(c.env.DB);
+  return getCurrentUser(c.req.raw, db);
+}
+
+function macMiniProxyHeaders(c: Context<AppEnv>, user: AuthUser | null): Headers {
   const headers = new Headers(c.req.raw.headers);
   headers.delete("host");
   headers.delete("content-length");
   headers.delete("cookie");
   headers.delete("authorization");
+  headers.delete("x-spotify-proxy-token");
+  headers.delete("x-spotify-user-id");
   const token = getMacMiniProxyToken(c.env);
   if (token) headers.set("x-spotify-proxy-token", token);
+  if (user) headers.set("x-spotify-user-id", user.id);
   return headers;
 }
 
-async function proxyToMacMini(c: Context<AppEnv>): Promise<Response> {
+async function proxyToMacMini(c: Context<AppEnv>, user: AuthUser | null): Promise<Response> {
   const sourceUrl = new URL(c.req.url);
   const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, getMacMiniOrigin(c.env));
   const method = c.req.method.toUpperCase();
   return fetch(targetUrl.toString(), {
     method,
-    headers: macMiniProxyHeaders(c),
+    headers: macMiniProxyHeaders(c, user),
     body: method === "GET" || method === "HEAD" ? undefined : c.req.raw.body,
     redirect: "manual",
   });
 }
 
-async function authorizeMacMiniMutation(c: Context<AppEnv>): Promise<Response | null> {
-  const method = c.req.method.toUpperCase();
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return null;
-
-  await ensureSchema(c.env);
-  const db = createD1SqlTag(c.env.DB);
-  const user = await getCurrentUser(c.req.raw, db);
+function authorizeMacMiniMutation(c: Context<AppEnv>, user: AuthUser | null): Response | null {
+  if (!isMacMiniMutation(c)) return null;
   if (!user) return jsonError("Unauthorized", 401);
   return null;
 }
@@ -1165,9 +1186,11 @@ const app = new Hono<AppEnv>();
 
 app.use("/api/*", async (c, next) => {
   if (shouldProxyMusicRequest(c)) {
-    const unauthorized = await authorizeMacMiniMutation(c);
+    const needsUser = isMacMiniMutation(c) || shouldForwardMacMiniUser(c);
+    const user = needsUser ? await getMacMiniProxyUser(c) : null;
+    const unauthorized = authorizeMacMiniMutation(c, user);
     if (unauthorized) return unauthorized;
-    return proxyToMacMini(c);
+    return proxyToMacMini(c, user);
   }
   await next();
 });

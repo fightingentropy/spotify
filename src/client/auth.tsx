@@ -48,6 +48,17 @@ function writeCachedAuthUser(user: AuthUser | null): void {
   } catch {}
 }
 
+function clearServiceWorkerApiCache(): void {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+  const message = { type: "CLEAR_RUNTIME_CACHE" };
+  if (navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage(message);
+  }
+  navigator.serviceWorker.ready
+    .then((registration) => registration.active?.postMessage(message))
+    .catch(() => undefined);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [initialUser] = useState<AuthUser | null>(() => readCachedAuthUser());
   const [user, setUser] = useState<AuthUser | null>(initialUser);
@@ -91,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(data.error || "Invalid email or password");
     }
     invalidateApiCache();
+    clearServiceWorkerApiCache();
     writeCachedAuthUser(data.user);
     setUser(data.user);
     setStatus("authenticated");
@@ -102,6 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       credentials: "include",
     }).catch(() => null);
     invalidateApiCache();
+    clearServiceWorkerApiCache();
     writeCachedAuthUser(null);
     setUser(null);
     setStatus("unauthenticated");

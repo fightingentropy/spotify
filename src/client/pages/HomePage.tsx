@@ -173,6 +173,7 @@ export default function HomePage() {
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
+  const durationLookupRef = useRef<Record<string, number | null>>({});
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const warmVisibleSongsRef = useRef<Map<Element, HomeSong>>(new Map());
   const warmObserverRef = useRef<IntersectionObserver | null>(null);
@@ -207,6 +208,10 @@ export default function HomePage() {
   useEffect(() => {
     mergeInitialLikes(data.likedSongIds);
   }, [data.likedSongIds, mergeInitialLikes]);
+
+  useEffect(() => {
+    durationLookupRef.current = durationLookup;
+  }, [durationLookup]);
 
   const registerWarmNode = useCallback((node: HTMLDivElement | null, song: HomeSong) => {
     if (!node || typeof IntersectionObserver === "undefined") return;
@@ -324,7 +329,7 @@ export default function HomePage() {
     for (const song of probeCandidates) {
       if (!song.audioUrl) continue;
       if (getSongDurationSeconds(song) != null) continue;
-      if (durationLookup[song.id] !== undefined) continue;
+      if (durationLookupRef.current[song.id] !== undefined) continue;
       if (durationProbeIdsRef.current.has(song.id)) continue;
       durationProbeIdsRef.current.add(song.id);
       songsToProbe.push(song);
@@ -334,6 +339,17 @@ export default function HomePage() {
 
     let cancelled = false;
     const audioElements: HTMLAudioElement[] = [];
+
+    const rememberDuration = (songId: string, value: number | null) => {
+      durationLookupRef.current = {
+        ...durationLookupRef.current,
+        [songId]: value,
+      };
+      durationProbeIdsRef.current.delete(songId);
+      setDurationLookup((current) =>
+        current[songId] === undefined ? { ...current, [songId]: value } : current,
+      );
+    };
 
     for (const song of songsToProbe) {
       const audio = new Audio();
@@ -345,15 +361,11 @@ export default function HomePage() {
           Number.isFinite(audio.duration) && audio.duration > 0
             ? audio.duration
             : null;
-        setDurationLookup((current) =>
-          current[song.id] === undefined ? { ...current, [song.id]: duration } : current,
-        );
+        rememberDuration(song.id, duration);
       };
       audio.onerror = () => {
         if (cancelled) return;
-        setDurationLookup((current) =>
-          current[song.id] === undefined ? { ...current, [song.id]: null } : current,
-        );
+        rememberDuration(song.id, null);
       };
       audio.src = song.audioUrl;
       audio.load();
@@ -365,8 +377,13 @@ export default function HomePage() {
         audio.removeAttribute("src");
         audio.load();
       }
+      for (const song of songsToProbe) {
+        if (durationLookupRef.current[song.id] === undefined) {
+          durationProbeIdsRef.current.delete(song.id);
+        }
+      }
     };
-  }, [durationLookup, enableVirtualList, listVirtualRange.end, listVirtualRange.start, sortedSongs]);
+  }, [enableVirtualList, listVirtualRange.end, listVirtualRange.start, sortedSongs]);
 
   const currentSongIsInList = useMemo(() => {
     return currentSongId ? sortedSongs.some((song) => song.id === currentSongId) : false;
