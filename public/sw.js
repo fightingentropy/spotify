@@ -5,6 +5,7 @@ const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const MEDIA_CACHE = "spotify-media-v1";
 const PLAYBACK_CACHE = "spotify-playback-v1";
 const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
+const MAX_CACHED_RANGE_BLOB_BYTES = 64 * 1024 * 1024;
 
 const SHELL_URLS = [
   "/",
@@ -24,6 +25,7 @@ const SHELL_URLS = [
 
 const API_CACHE_PATHS = [
   "/api/home",
+  "/api/search-index",
   "/api/library",
   "/api/liked",
   "/api/likes",
@@ -94,6 +96,7 @@ async function matchCachedMedia(urlValue) {
   if (!url.pathname.startsWith("/api/files/") && !url.pathname.startsWith("/api/artwork/")) {
     return null;
   }
+  if (!url.search) return null;
 
   for (const cacheName of [MEDIA_CACHE, PLAYBACK_CACHE, RUNTIME_CACHE]) {
     const cache = await caches.open(cacheName);
@@ -148,6 +151,10 @@ async function cachedRangeResponse(request) {
 
   const cached = await matchCachedMedia(request.url);
   if (!cached || !cached.ok) return null;
+  const contentLength = Number(cached.headers.get("content-length") || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_CACHED_RANGE_BLOB_BYTES) {
+    return null;
+  }
 
   const blob = await cached.blob();
   const range = parseRangeHeader(rangeHeader, blob.size);

@@ -1,19 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Hls from "hls.js";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
-import NowPlayingSheet from "@/components/NowPlayingSheet";
 import { CoverImage } from "@/components/CoverImage";
-import { isBrowserLocalSong } from "@/store/browser-local-library";
+import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isRadioSong } from "@/lib/player-song";
 import { useMediaSession } from "@/lib/use-media-session";
-import { useOfflineStore } from "@/client/offline";
+import { prefetchUpcomingPlayback } from "@/client/playback-warm";
 
 function resolvePlayableSrc(src: string): string {
   if (/^(blob:|data:|https?:)/i.test(src)) return src;
@@ -54,8 +52,29 @@ function canPlayHlsNatively(audio: HTMLAudioElement): boolean {
 
 type AudioSourceState = {
   src: string;
-  hls: Hls | null;
+  hls: HlsInstance | null;
 };
+
+type HlsInstance = {
+  attachMedia: (media: HTMLMediaElement) => void;
+  destroy: () => void;
+  loadSource: (src: string) => void;
+};
+
+type HlsConstructor = {
+  new (config?: { enableWorker?: boolean; lowLatencyMode?: boolean }): HlsInstance;
+  isSupported: () => boolean;
+};
+
+let hlsConstructorPromise: Promise<HlsConstructor | null> | null = null;
+const NowPlayingSheet = lazy(() => import("@/components/NowPlayingSheet"));
+
+function loadHlsConstructor(): Promise<HlsConstructor | null> {
+  hlsConstructorPromise ??= import("hls.js")
+    .then((module) => module.default as HlsConstructor)
+    .catch(() => null);
+  return hlsConstructorPromise;
+}
 
 function errorName(error: unknown): string {
   if (typeof error !== "object" || error === null || !("name" in error)) return "";
@@ -90,7 +109,6 @@ function PlayerBar(): React.ReactElement | null {
   const pause = usePlayerStore((s) => s.pause);
   const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
   const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
-  const prefetchUpcoming = useOfflineStore((state) => state.prefetchUpcoming);
 
   const navigate = useNavigate();
   const toggleLike = useLikesStore((state) => state.toggleLike);
@@ -164,16 +182,36 @@ function PlayerBar(): React.ReactElement | null {
     current?.hls?.destroy();
     audioSourceStateRef.current.delete(audio);
 
-    if (isHlsPlaylistSrc(absolute) && !canPlayHlsNatively(audio) && Hls.isSupported()) {
+    if (isHlsPlaylistSrc(absolute) && !canPlayHlsNatively(audio)) {
       audio.removeAttribute("src");
       audio.load();
-      const hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-      });
-      hls.loadSource(absolute);
-      hls.attachMedia(audio);
-      audioSourceStateRef.current.set(audio, { src: absolute, hls });
+      audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
+      void (async () => {
+        const HlsConstructor = await loadHlsConstructor();
+        const latest = audioSourceStateRef.current.get(audio);
+        if (latest?.src !== absolute || latest.hls) return;
+
+        if (!HlsConstructor?.isSupported()) {
+          if (audio.src !== absolute) audio.src = absolute;
+          if (isPlayingRef.current) void audio.play().catch(() => {});
+          return;
+        }
+
+        const hls = new HlsConstructor({
+          enableWorker: true,
+          lowLatencyMode: true,
+        });
+        hls.loadSource(absolute);
+        hls.attachMedia(audio);
+
+        const currentAfterAttach = audioSourceStateRef.current.get(audio);
+        if (currentAfterAttach?.src === absolute) {
+          audioSourceStateRef.current.set(audio, { src: absolute, hls });
+          if (isPlayingRef.current) void audio.play().catch(() => {});
+        } else {
+          hls.destroy();
+        }
+      })();
       return;
     }
 
@@ -284,8 +322,8 @@ function PlayerBar(): React.ReactElement | null {
 
   useEffect(() => {
     if (!currentSong) return;
-    void prefetchUpcoming(queue, currentIndex);
-  }, [currentIndex, currentSong?.id, prefetchUpcoming, queue]);
+    void prefetchUpcomingPlayback(queue, currentIndex);
+  }, [currentIndex, currentSong?.id, queue]);
 
   useEffect(() => {
     return () => {
@@ -726,15 +764,19 @@ function PlayerBar(): React.ReactElement | null {
 
   return (
     <>
-      <NowPlayingSheet
-        open={nowPlayingOpen}
-        onClose={() => setNowPlayingOpen(false)}
-        song={currentSong}
-        isPlaying={isPlaying}
-        currentTime={safeCurrentTime}
-        duration={hasSeekableDuration ? duration : 0}
-        onSeek={onSeek}
-      />
+      {nowPlayingOpen ? (
+        <Suspense fallback={null}>
+          <NowPlayingSheet
+            open={nowPlayingOpen}
+            onClose={() => setNowPlayingOpen(false)}
+            song={currentSong}
+            isPlaying={isPlaying}
+            currentTime={safeCurrentTime}
+            duration={hasSeekableDuration ? duration : 0}
+            onSeek={onSeek}
+          />
+        </Suspense>
+      ) : null}
       <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
       <audio
         ref={audioARef}

@@ -278,6 +278,35 @@ function jsonError(message: string, status = 400): Response {
   return Response.json({ error: message }, { status });
 }
 
+function ifNoneMatchMatches(value: string | null, etag: string): boolean {
+  if (!value) return false;
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .some((item) => item === "*" || item === etag);
+}
+
+async function jsonCached(
+  c: Context<AppEnv>,
+  payload: unknown,
+  init?: ResponseInit & { cacheControl?: string },
+): Promise<Response> {
+  const { cacheControl, ...responseInit } = init ?? {};
+  const body = JSON.stringify(payload);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  const etag = `W/"${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32)}"`;
+  const headers = new Headers(responseInit.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+  headers.set("cache-control", cacheControl || "private, max-age=30, stale-while-revalidate=300");
+  headers.set("etag", etag);
+
+  if (ifNoneMatchMatches(c.req.header("if-none-match") ?? null, etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+
+  return new Response(body, { ...responseInit, headers });
+}
+
 function parseHttpUrl(value: string): URL | null {
   try {
     const parsed = new URL(value);
@@ -420,8 +449,7 @@ function toApiFileUrl(key: string): string {
   return `/api/files/${parts.join("/")}`;
 }
 
-function parseStorageKeyFromApiPath(pathname: string): string {
-  const encoded = pathname.slice("/api/files/".length);
+function parseStorageKeyFromPathSuffix(encoded: string): string {
   return encoded
     .split("/")
     .filter(Boolean)
@@ -433,6 +461,16 @@ function parseStorageKeyFromApiPath(pathname: string): string {
       }
     })
     .join("/");
+}
+
+function parseStorageKeyFromApiPath(pathname: string): string {
+  return parseStorageKeyFromPathSuffix(pathname.slice("/api/files/".length));
+}
+
+function parseArtworkWidth(value: string | undefined): number {
+  const width = Number(value || 0);
+  if (!Number.isFinite(width) || width <= 0) return 256;
+  return Math.max(32, Math.min(1024, Math.round(width)));
 }
 
 function extensionForStoredFile(kind: "image" | "audio", fileName: string, contentType: string): string {
@@ -990,6 +1028,27 @@ async function listSongs(db: SqlTag) {
   `;
 }
 
+async function listSearchSongs(db: SqlTag) {
+  await ensureSongColumns(db);
+  const rows = await db<Pick<SongRow, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "createdAt">>`
+    SELECT "id", "title", "artist", "imageUrl", "audioUrl", "createdAt"
+    FROM "Song"
+    ORDER BY "createdAt" DESC
+    LIMIT 5000
+  `;
+  return rows.map((row) =>
+    songToPlayerSong({
+      ...row,
+      album: null,
+      duration: null,
+      lyricsUrl: null,
+      audioBitDepth: null,
+      audioSampleRate: null,
+      userId: "",
+    } as SongRow),
+  );
+}
+
 function parseRangeHeader(rangeHeader: string, size: number): { start: number; end: number } | null {
   if (!rangeHeader.startsWith("bytes=") || size <= 0) return null;
   const rangeValue = rangeHeader.slice("bytes=".length).trim();
@@ -1041,7 +1100,7 @@ function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
   if (pathname.startsWith("/api/files/local/")) return true;
   if (pathname.startsWith("/api/artwork/local/")) return true;
   if (pathname.startsWith("/api/songs/")) return true;
-  if (["/api/music/source", "/api/home", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
+  if (["/api/music/source", "/api/home", "/api/search-index", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
     return true;
   }
   if (pathname === "/api/songs") {
@@ -1207,12 +1266,20 @@ app.get("/api/home", async (c) => {
       ? db<{ songId: string }>`SELECT "songId" FROM "Like" WHERE "userId" = ${user.id}`
       : Promise.resolve([] as Array<{ songId: string }>),
   ]);
-  return c.json({ songs: songs.map(songToPlayerSong), likedSongIds: likes.map((like) => like.songId) });
+  return jsonCached(c, { songs: songs.map(songToPlayerSong), likedSongIds: likes.map((like) => like.songId) });
+});
+
+app.get("/api/search-index", async (c) => {
+  return jsonCached(c, { songs: await listSearchSongs(c.get("db")) }, {
+    cacheControl: "private, max-age=300, stale-while-revalidate=600",
+  });
 });
 
 app.get("/api/library", async (c) => {
   const user = c.get("user");
-  return c.json({ playlists: await listPlaylists(c.get("db"), user?.id ?? null), userId: user?.id ?? null });
+  return jsonCached(c, { playlists: await listPlaylists(c.get("db"), user?.id ?? null), userId: user?.id ?? null }, {
+    cacheControl: "private, max-age=300, stale-while-revalidate=600",
+  });
 });
 
 app.get("/api/liked", async (c) => {
@@ -1225,7 +1292,7 @@ app.get("/api/liked", async (c) => {
     WHERE l."userId" = ${user.id}
     ORDER BY l."createdAt" DESC
   `;
-  return c.json({ songs: rows.map(songToPlayerSong), likedSongIds: rows.map((row) => row.songId) });
+  return jsonCached(c, { songs: rows.map(songToPlayerSong), likedSongIds: rows.map((row) => row.songId) });
 });
 
 app.get("/api/playlist/:id", async (c) => {
@@ -1251,7 +1318,7 @@ app.get("/api/playlist/:id", async (c) => {
     WHERE ps."playlistId" = ${id}
     ORDER BY ps."order" ASC
   `;
-  return c.json({
+  return jsonCached(c, {
     playlist,
     songs: songRows.map(songToPlayerSong),
     likedSongIds: user ? songRows.filter((row) => !!row.likedSongId).map((row) => row.id) : [],
@@ -1474,7 +1541,7 @@ app.post("/api/songs/spotify", async (c) => {
   });
 });
 
-app.get("/api/songs", async (c) => c.json(await listSongs(c.get("db"))));
+app.get("/api/songs", async (c) => jsonCached(c, await listSongs(c.get("db"))));
 
 app.post("/api/songs", async (c) => {
   const user = requireUser(c.get("user"));
@@ -1624,7 +1691,7 @@ app.get("/api/songs/:id", async (c) => {
     LIMIT 1
   `;
   if (!rows[0]) return jsonError("Song not found", 404);
-  return c.json(songToPlayerSong(rows[0]));
+  return jsonCached(c, songToPlayerSong(rows[0]));
 });
 
 app.patch("/api/songs/:id", async (c) => {
@@ -1695,13 +1762,13 @@ app.post("/api/songs/:id/assets", async (c) => {
 
 app.get("/api/likes", async (c) => {
   const user = c.get("user");
-  if (!user) return c.json({ likes: [] });
+  if (!user) return jsonCached(c, { likes: [] });
   const likes = await c.get("db")<{ songId: string }>`
     SELECT "songId"
     FROM "Like"
     WHERE "userId" = ${user.id}
   `;
-  return c.json({ likes: likes.map((like) => like.songId) });
+  return jsonCached(c, { likes: likes.map((like) => like.songId) });
 });
 
 app.post("/api/likes", async (c) => {
@@ -1804,6 +1871,48 @@ app.get("/api/files/*", async (c) => {
       "Cache-Control": "public, max-age=31536000, immutable",
     },
   });
+});
+
+app.get("/api/artwork/r2/*", async (c) => {
+  const url = new URL(c.req.url);
+  const key = normalizeStorageKey(parseStorageKeyFromPathSuffix(url.pathname.slice("/api/artwork/r2/".length)));
+  const width = parseArtworkWidth(c.req.query("w"));
+  const contentType = inferContentTypeFromKey(key).split(";")[0]?.trim() || "";
+  if (!IMAGE_MIME_TYPES.has(contentType)) return jsonError("Unsupported artwork format", 415);
+
+  const cacheKey = new Request(url.toString(), c.req.raw);
+  const artworkCache = await caches.open("spotify-artwork-v1");
+  const cached = await artworkCache.match(cacheKey).catch(() => undefined);
+  if (cached) return cached;
+
+  const object = await c.env.MEDIA.get(key);
+  if (!object?.body) return jsonError("Not found", 404);
+
+  try {
+    const transformed = await c.env.IMAGES
+      .input(object.body)
+      .transform({ width, fit: "cover" })
+      .output({ format: "image/webp", quality: 82, anim: false });
+    const response = transformed.response();
+    const headers = new Headers(response.headers);
+    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    headers.set("Content-Type", transformed.contentType());
+    const finalResponse = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+    await artworkCache.put(cacheKey, finalResponse.clone()).catch(() => undefined);
+    return finalResponse;
+  } catch {
+    const fallback = await c.env.MEDIA.get(key);
+    return new Response(fallback?.body ?? null, {
+      headers: {
+        "Content-Type": contentType,
+        "Cache-Control": "public, max-age=31536000, immutable",
+      },
+    });
+  }
 });
 
 app.get("/api/artwork/*", (c) => c.redirect("/apple-icon.png", 302));

@@ -2,7 +2,7 @@
 
 import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
-import { warmPlaybackSong } from "@/client/offline";
+import { warmPlaybackSong } from "@/client/playback-warm";
 import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
@@ -41,15 +41,14 @@ const SongListItemComponent = function SongListItem({
   const setSong = usePlayerStore((state) => state.setSong);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
-  const currentSongId = usePlayerStore((state) => state.currentSong?.id);
-  const isPlaying = usePlayerStore((state) => state.isPlaying);
-
-  const isActive = currentSongId === song.id;
-  const isActiveAndPlaying = isActive && isPlaying;
+  const isActive = usePlayerStore(useCallback((state) => state.currentSong?.id === song.id, [song.id]));
+  const isActiveAndPlaying = usePlayerStore(
+    useCallback((state) => state.currentSong?.id === song.id && state.isPlaying, [song.id]),
+  );
 
   const handlePlay = useCallback(() => {
     if (isActive) {
-      if (isPlaying) pause();
+      if (isActiveAndPlaying) pause();
       else play();
       return;
     }
@@ -59,7 +58,7 @@ const SongListItemComponent = function SongListItem({
     }
     setSong(song);
     play();
-  }, [isActive, isPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
+  }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {

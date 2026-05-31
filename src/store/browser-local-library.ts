@@ -1,7 +1,10 @@
 "use client";
 
 import { create } from "zustand";
+import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import type { PlayerSong } from "@/types/player";
+
+export { isBrowserLocalSong };
 
 type DirectoryPickerMode = "read" | "readwrite";
 type WellKnownDirectory =
@@ -173,17 +176,6 @@ export function resolveFolderPickerKind(): FolderPickerKind {
 export function isBrowserFolderPickerSupported(): boolean {
   const kind = resolveFolderPickerKind();
   return kind === "handle" || kind === "webkit";
-}
-
-export function isBrowserLocalSong(song: PlayerSong | null | undefined): boolean {
-  if (!song) return false;
-  return (
-    song.source === "browser-local" ||
-    song.source === "picked-file" ||
-    song.id.startsWith("browser-local:") ||
-    song.id.startsWith("picked-file:") ||
-    song.audioUrl.startsWith("blob:")
-  );
 }
 
 function extensionOf(name: string): string {

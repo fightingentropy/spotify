@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Link, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -7,13 +7,12 @@ import InstallPrompt from "@/components/InstallPrompt";
 import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
 import NowPlayingSidebar from "@/components/NowPlayingSidebar";
-import OfflineStatusIndicator from "@/components/OfflineStatusIndicator";
 import { PlayerBar } from "@/components/PlayerBar";
 import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
 import ProfilePage from "@/client/pages/ProfilePage";
-import { useApiData, type HomePayload, type LibraryPayload } from "@/client/api";
+import { useApiData, type LibraryPayload } from "@/client/api";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
@@ -36,6 +35,7 @@ const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
 const SignInPage = lazy(loadSignInPage);
 const RegisterPage = lazy(loadRegisterPage);
+const OfflineStatusIndicator = lazy(() => import("@/components/OfflineStatusIndicator"));
 
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
   return (
@@ -86,34 +86,35 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
       void load().catch(() => undefined);
     };
     const prefetch = () => {
+      if (status === "unauthenticated") {
+        prefetchRoute(loadSignInPage);
+        prefetchRoute(loadRegisterPage);
+        prefetchRoute(loadSearchPage);
+        return;
+      }
       prefetchRoute(loadSearchPage);
       prefetchRoute(loadLibraryPage);
       prefetchRoute(loadLikedPage);
       prefetchRoute(loadDownloadedPage);
       prefetchRoute(loadRadioPage);
       prefetchRoute(loadSettingsPage);
-      prefetchRoute(loadSignInPage);
-      prefetchRoute(loadRegisterPage);
     };
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
-    const eagerId = window.setTimeout(prefetch, 250);
     window.addEventListener("online", prefetch);
 
     if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
-      const id = idleWindow.requestIdleCallback(prefetch, { timeout: 5_000 });
+      const id = idleWindow.requestIdleCallback(prefetch, { timeout: 8_000 });
       return () => {
-        window.clearTimeout(eagerId);
         window.removeEventListener("online", prefetch);
         idleWindow.cancelIdleCallback?.(id);
       };
     }
 
-    const id = window.setTimeout(prefetch, 2_000);
+    const id = window.setTimeout(prefetch, 4_000);
     return () => {
-      window.clearTimeout(eagerId);
       window.clearTimeout(id);
       window.removeEventListener("online", prefetch);
     };
@@ -129,26 +130,15 @@ function Shell() {
       userId: null,
     },
   );
-  const { data: searchLibrary } = useApiData<HomePayload>("/api/home", {
-    songs: [],
-    likedSongIds: [],
-  });
-  const searchSongs = useMemo(() => {
-    return [...searchLibrary.songs].sort((left, right) => {
-      const leftTime = Date.parse(left.createdAt || "");
-      const rightTime = Date.parse(right.createdAt || "");
-      const a = Number.isFinite(leftTime) ? leftTime : 0;
-      const b = Number.isFinite(rightTime) ? rightTime : 0;
-      return b - a;
-    });
-  }, [searchLibrary.songs]);
   useIdleRoutePrefetch(status);
 
   return (
     <>
       <PwaRegister />
       <InstallPrompt />
-      <OfflineStatusIndicator />
+      <Suspense fallback={null}>
+        <OfflineStatusIndicator />
+      </Suspense>
       <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <Link to="/" className="font-semibold inline-flex shrink-0 items-center gap-2 touch-manipulation">
@@ -156,7 +146,6 @@ function Shell() {
             <span className="hidden sm:inline">Spotify</span>
           </Link>
           <HomeSearchCommandPalette
-            songs={searchSongs}
             className="hidden w-[22rem] justify-self-center lg:block xl:w-[30rem]"
           />
           <nav className="hidden justify-self-end lg:flex items-center gap-4 xl:gap-6">

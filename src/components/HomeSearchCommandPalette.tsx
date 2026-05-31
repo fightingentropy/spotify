@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { warmPlaybackSong } from "@/client/offline";
+import { warmPlaybackSong } from "@/client/playback-warm";
+import { useApiData, type SearchIndexPayload } from "@/client/api";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
 import { cn } from "@/lib/utils";
 
 type HomeSearchCommandPaletteProps = {
-  songs: PlayerSong[];
   className?: string;
 };
 
@@ -17,12 +17,18 @@ function normalizeSongPart(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export function HomeSearchCommandPalette({ songs, className }: HomeSearchCommandPaletteProps) {
+export function HomeSearchCommandPalette({ className }: HomeSearchCommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const setQueue = usePlayerStore((state) => state.setQueue);
+  const { data, loading, error } = useApiData<SearchIndexPayload>(
+    "/api/search-index",
+    { songs: [] },
+    { enabled: open },
+  );
+  const songs = data.songs;
 
   const dedupedSongs = useMemo(() => {
     const unique = new Map<string, PlayerSong>();
@@ -147,7 +153,15 @@ export function HomeSearchCommandPalette({ songs, className }: HomeSearchCommand
             </div>
 
             <div className="max-h-[60vh] overflow-y-auto p-2">
-              {query.trim().length === 0 ? (
+              {loading ? (
+                <div className="px-3 py-10 text-center text-sm text-foreground/65">
+                  Loading songs...
+                </div>
+              ) : error ? (
+                <div className="px-3 py-10 text-center text-sm text-red-300">
+                  {error}
+                </div>
+              ) : query.trim().length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
                   Start typing to search songs
                 </div>

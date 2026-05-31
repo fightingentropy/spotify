@@ -1,8 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { invalidateLibraryApiCache } from "@/client/api";
-import { queueOfflineMutation } from "@/client/offline";
+import { patchLikeApiCache } from "@/client/api";
 import type { PlayerSong } from "@/types/player";
 
 type LikeToggleResult = {
@@ -154,11 +153,12 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         pending: removeKey(state.pending, songId),
         hydrated: true,
       }));
-      invalidateLibraryApiCache();
+      patchLikeApiCache(songId, nextLiked, song);
 
       return { ok: true, status: response.status };
     } catch (error) {
       try {
+        const { queueOfflineMutation } = await import("@/client/offline");
         await queueOfflineMutation({
           type: "like",
           payload: { songId, nextLiked, song },
@@ -167,6 +167,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           pending: removeKey(state.pending, songId),
           hydrated: true,
         }));
+        patchLikeApiCache(songId, nextLiked, song);
         return { ok: true, status: 202 };
       } catch {}
 

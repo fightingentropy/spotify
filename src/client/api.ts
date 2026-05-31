@@ -4,7 +4,7 @@ import {
   readOfflineApiSnapshot,
   removeOfflineApiSnapshots,
   writeOfflineApiSnapshot,
-} from "@/client/offline";
+} from "@/client/offline-api-snapshots";
 
 export type PlaylistEntry = {
   id: string;
@@ -37,6 +37,7 @@ function getApiPath(url: string): string {
 function getApiCacheTtl(url: string): number {
   const path = getApiPath(url);
   if (path === "/api/home") return 2 * 60_000;
+  if (path === "/api/search-index") return 5 * 60_000;
   if (path === "/api/library") return 5 * 60_000;
   if (path === "/api/music/source") return 30_000;
   if (path === "/api/liked" || path === "/api/likes") return 60_000;
@@ -48,6 +49,7 @@ function isPersistableApiUrl(url: string): boolean {
   const path = getApiPath(url);
   return (
     path === "/api/home" ||
+    path === "/api/search-index" ||
     path === "/api/library" ||
     path === "/api/liked" ||
     path === "/api/likes" ||
@@ -97,6 +99,88 @@ function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
     void writeOfflineApiSnapshot(url, data, entry.etag, entry.fetchedAt);
   }
   return data;
+}
+
+function hasStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function cloneCacheData<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+}
+
+function updateLikedIdsInPayload(data: unknown, songId: string, nextLiked: boolean): boolean {
+  if (!data || typeof data !== "object") return false;
+  const target = data as { likedSongIds?: unknown; likes?: unknown };
+  let changed = false;
+  if (hasStringArray(target.likedSongIds)) {
+    const set = new Set(target.likedSongIds);
+    const had = set.has(songId);
+    if (nextLiked) set.add(songId);
+    else set.delete(songId);
+    target.likedSongIds = Array.from(set);
+    changed = had !== nextLiked;
+  }
+  if (hasStringArray(target.likes)) {
+    const set = new Set(target.likes);
+    const had = set.has(songId);
+    if (nextLiked) set.add(songId);
+    else set.delete(songId);
+    target.likes = Array.from(set);
+    changed = changed || had !== nextLiked;
+  }
+  return changed;
+}
+
+function updateLikedSongsInPayload(
+  data: unknown,
+  payload: { songId: string; nextLiked: boolean; song?: PlayerSong },
+): boolean {
+  if (!data || typeof data !== "object" || !("songs" in data)) return false;
+  const target = data as { songs?: unknown };
+  if (!Array.isArray(target.songs)) return false;
+  const songs = target.songs;
+  if (payload.nextLiked) {
+    if (!payload.song) return false;
+    const exists = songs.some((song) => {
+      return song && typeof song === "object" && (song as PlayerSong).id === payload.songId;
+    });
+    if (exists) return false;
+    target.songs = [payload.song, ...songs];
+    return true;
+  }
+  const before = songs.length;
+  const nextSongs = songs.filter((song) => {
+    return !(song && typeof song === "object" && (song as PlayerSong).id === payload.songId);
+  });
+  target.songs = nextSongs;
+  return before !== nextSongs.length;
+}
+
+export function patchLikeApiCache(songId: string, nextLiked: boolean, song?: PlayerSong): void {
+  for (const [url, entry] of Array.from(apiCache.entries())) {
+    if (entry.data === undefined) continue;
+    const path = getApiPath(url);
+    if (
+      path !== "/api/home" &&
+      path !== "/api/liked" &&
+      path !== "/api/likes" &&
+      !path.startsWith("/api/playlist/")
+    ) {
+      continue;
+    }
+
+    const next = cloneCacheData(entry.data);
+    let changed = updateLikedIdsInPayload(next, songId, nextLiked);
+    if (path === "/api/liked") {
+      changed = updateLikedSongsInPayload(next, { songId, nextLiked, song }) || changed;
+    }
+    if (changed) writeApiCache(url, next, null);
+  }
 }
 
 async function fetchApiData<T>(url: string): Promise<T> {
@@ -168,6 +252,7 @@ export function invalidateApiCache(match?: string | RegExp | ((url: string) => b
 export function invalidateLibraryApiCache(): void {
   invalidateApiCache((url) =>
     url === "/api/home" ||
+    url === "/api/search-index" ||
     url === "/api/songs" ||
     url === "/api/liked" ||
     url === "/api/likes" ||
@@ -177,10 +262,11 @@ export function invalidateLibraryApiCache(): void {
   );
 }
 
-export function useApiData<T>(url: string, initialValue: T) {
+export function useApiData<T>(url: string, initialValue: T, options?: { enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
   const cachedInitial = getCachedData<T>(url);
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
-  const [loading, setLoading] = useState(!cachedInitial);
+  const [loading, setLoading] = useState(enabled && !cachedInitial);
   const [error, setError] = useState<string | null>(null);
 
   function setData(nextData: T | ((current: T) => T)) {
@@ -195,6 +281,11 @@ export function useApiData<T>(url: string, initialValue: T) {
   }
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
 
     async function load() {
@@ -231,7 +322,7 @@ export function useApiData<T>(url: string, initialValue: T) {
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [enabled, url]);
 
   return { data, loading, error, setData };
 }
@@ -239,6 +330,10 @@ export function useApiData<T>(url: string, initialValue: T) {
 export type HomePayload = {
   songs: PlayerSong[];
   likedSongIds: string[];
+};
+
+export type SearchIndexPayload = {
+  songs: PlayerSong[];
 };
 
 export type LibraryPayload = {

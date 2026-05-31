@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Check,
@@ -13,15 +13,22 @@ import {
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData, type HomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
-import { warmPlaybackSong } from "@/client/offline";
+import { warmPlaybackSong } from "@/client/playback-warm";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { cn, formatTime } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
-import {
-  OfflineBulkDownloadButton,
-  OfflineSongDownloadButton,
-} from "@/components/OfflineDownloadButton";
+
+const OfflineBulkDownloadButton = lazy(() =>
+  import("@/components/OfflineDownloadButton").then((module) => ({
+    default: module.OfflineBulkDownloadButton,
+  })),
+);
+const OfflineSongDownloadButton = lazy(() =>
+  import("@/components/OfflineDownloadButton").then((module) => ({
+    default: module.OfflineSongDownloadButton,
+  })),
+);
 
 type HomeSong = PlayerSong & {
   album?: string | null;
@@ -34,6 +41,9 @@ type HomeViewMode = "list" | "grid";
 const HOME_VIEW_MODE_KEY = "spotify_home_view_mode";
 const HOME_LIST_GRID =
   "md:grid-cols-[3rem_minmax(0,2.1fr)_minmax(0,1.05fr)_minmax(7.75rem,0.78fr)_2.75rem_5rem_2.25rem] xl:grid-cols-[4.25rem_minmax(0,2.4fr)_minmax(0,1.15fr)_minmax(8rem,0.9fr)_3rem_5.25rem_2.5rem]";
+const HOME_VIRTUALIZATION_MIN_ITEMS = 100;
+const HOME_LIST_ROW_HEIGHT = 88;
+const HOME_VIRTUAL_OVERSCAN_ROWS = 8;
 
 function formatDateAdded(dateStr: string | undefined): string {
   if (!dateStr) return "Unknown";
@@ -97,6 +107,18 @@ function getSongDuration(song: HomeSong, loadedDuration?: number | null): string
   return seconds == null || seconds <= 0 ? "--:--" : formatTime(seconds);
 }
 
+function shouldSkipSpeculativeMetadataProbe(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  return !!(
+    connection?.saveData ||
+    connection?.effectiveType === "slow-2g" ||
+    connection?.effectiveType === "2g"
+  );
+}
+
 function SaveToLikedButton({
   liked,
   pending,
@@ -149,7 +171,9 @@ export default function HomePage() {
   const { user } = useAuth();
   const [viewMode, setViewMode] = useState<HomeViewMode>("list");
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
+  const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
   const warmVisibleSongsRef = useRef<Map<Element, HomeSong>>(new Map());
   const warmObserverRef = useRef<IntersectionObserver | null>(null);
   const { data, loading, error } = useApiData<HomePayload>("/api/home", {
@@ -232,16 +256,79 @@ export default function HomePage() {
     });
   }, [data.songs]);
 
+  const enableVirtualList =
+    viewMode === "list" && sortedSongs.length >= HOME_VIRTUALIZATION_MIN_ITEMS;
+
   useEffect(() => {
+    if (!enableVirtualList) {
+      setListVirtualRange({ start: 0, end: sortedSongs.length });
+      return;
+    }
+
+    let frameId = 0;
+    const updateRange = () => {
+      frameId = 0;
+      const el = listContainerRef.current;
+      if (!el) {
+        setListVirtualRange({ start: 0, end: Math.min(sortedSongs.length, 40) });
+        return;
+      }
+
+      const rect = el.getBoundingClientRect();
+      const containerTop = rect.top + window.scrollY;
+      const viewportTop = window.scrollY;
+      const viewportBottom = viewportTop + window.innerHeight;
+      const localViewportTop = Math.max(0, viewportTop - containerTop);
+      const localViewportBottom = Math.max(0, viewportBottom - containerTop);
+      const nextStart = Math.max(
+        0,
+        Math.floor(localViewportTop / HOME_LIST_ROW_HEIGHT) - HOME_VIRTUAL_OVERSCAN_ROWS,
+      );
+      const nextEnd = Math.min(
+        sortedSongs.length,
+        Math.ceil(localViewportBottom / HOME_LIST_ROW_HEIGHT) + HOME_VIRTUAL_OVERSCAN_ROWS,
+      );
+
+      setListVirtualRange((current) =>
+        current.start === nextStart && current.end === nextEnd
+          ? current
+          : { start: nextStart, end: Math.max(nextStart, nextEnd) },
+      );
+    };
+
+    const scheduleRangeUpdate = () => {
+      if (frameId) return;
+      frameId = window.requestAnimationFrame(updateRange);
+    };
+
+    updateRange();
+    window.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
+    window.addEventListener("resize", scheduleRangeUpdate);
+
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      window.removeEventListener("scroll", scheduleRangeUpdate);
+      window.removeEventListener("resize", scheduleRangeUpdate);
+    };
+  }, [enableVirtualList, sortedSongs.length]);
+
+  useEffect(() => {
+    if (shouldSkipSpeculativeMetadataProbe()) return;
     const songsToProbe: HomeSong[] = [];
-    for (const song of sortedSongs) {
+    const probeCandidates = enableVirtualList
+      ? sortedSongs.slice(
+          Math.max(0, listVirtualRange.start - HOME_VIRTUAL_OVERSCAN_ROWS),
+          Math.max(24, listVirtualRange.end),
+        )
+      : sortedSongs.slice(0, 24);
+    for (const song of probeCandidates) {
       if (!song.audioUrl) continue;
       if (getSongDurationSeconds(song) != null) continue;
       if (durationLookup[song.id] !== undefined) continue;
       if (durationProbeIdsRef.current.has(song.id)) continue;
       durationProbeIdsRef.current.add(song.id);
       songsToProbe.push(song);
-      if (songsToProbe.length >= 80) break;
+      if (songsToProbe.length >= 24) break;
     }
     if (songsToProbe.length === 0) return;
 
@@ -279,7 +366,7 @@ export default function HomePage() {
         audio.load();
       }
     };
-  }, [sortedSongs]);
+  }, [durationLookup, enableVirtualList, listVirtualRange.end, listVirtualRange.start, sortedSongs]);
 
   const currentSongIsInList = useMemo(() => {
     return currentSongId ? sortedSongs.some((song) => song.id === currentSongId) : false;
@@ -325,6 +412,96 @@ export default function HomePage() {
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
+  };
+
+  const renderHomeListSong = (song: HomeSong, index: number) => {
+    const active = currentSongId === song.id;
+    const liked = !!likedLookup[song.id];
+    const likePending = !!pendingLikes[song.id];
+    const artists = song.artist || "Unknown Artist";
+
+    return (
+      <div
+        key={song.id}
+        ref={(node) => registerWarmNode(node, song)}
+        onClick={() => handlePlaySong(index)}
+        onPointerEnter={() => warmSongSoon(song)}
+        onFocus={() => warmSongSoon(song)}
+        className={cn(
+          "group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
+          HOME_LIST_GRID,
+          active ? "bg-white/[0.11]" : "hover:bg-white/[0.07]",
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-11 items-center justify-center text-[18px] tabular-nums text-white/[0.68]",
+            active && "text-[#1ed760]",
+          )}
+        >
+          {active && isPlaying ? (
+            <Pause size={19} fill="currentColor" />
+          ) : (
+            <>
+              <span className="group-hover:hidden">{index + 1}</span>
+              <Play size={18} fill="currentColor" className="hidden translate-x-0.5 text-white group-hover:block" />
+            </>
+          )}
+        </div>
+
+        <div className="flex min-w-0 items-center gap-5">
+          <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
+            <CoverImage
+              src={song.imageUrl}
+              alt={song.title}
+              fill
+              sizes="48px"
+              className="object-cover"
+              loading={index < 8 ? "eager" : "lazy"}
+            />
+          </div>
+          <div className="min-w-0">
+            <div
+              className={cn(
+                "truncate text-[20px] font-medium leading-7 text-white",
+                active && "text-[#1ed760]",
+              )}
+            >
+              {song.title}
+            </div>
+            <div className="truncate text-[18px] leading-7 text-white/[0.66]">{artists}</div>
+          </div>
+        </div>
+
+        <div className="hidden min-w-0 items-center text-[18px] text-white/[0.66] md:flex">
+          <span className="truncate">{getSongAlbum(song)}</span>
+        </div>
+
+        <div className="hidden items-center text-[18px] text-white/[0.66] md:flex">
+          {formatDateAdded(song.createdAt)}
+        </div>
+
+        <div className="hidden justify-center md:flex">
+          <SaveToLikedButton
+            liked={liked}
+            pending={likePending}
+            canLike={!!user}
+            className="h-9 w-9 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            onToggle={() => void handleToggleLike(song.id)}
+          />
+        </div>
+
+        <div className="flex justify-end text-[18px] tabular-nums text-white/[0.66] md:justify-center md:text-center">
+          {getSongDuration(song, durationLookup[song.id])}
+        </div>
+
+        <div className="hidden justify-end md:flex">
+          <Suspense fallback={null}>
+            <OfflineSongDownloadButton song={song} className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" />
+          </Suspense>
+        </div>
+      </div>
+    );
   };
 
   if (loading) {
@@ -373,7 +550,9 @@ export default function HomePage() {
             <Shuffle size={30} className="sm:h-[34px] sm:w-[34px]" />
           </button>
 
-          <OfflineBulkDownloadButton songs={sortedSongs} scope="home" iconOnly className="text-white/70 hover:text-white sm:h-12 sm:w-12" />
+          <Suspense fallback={null}>
+            <OfflineBulkDownloadButton songs={sortedSongs} scope="home" iconOnly className="text-white/70 hover:text-white sm:h-12 sm:w-12" />
+          </Suspense>
 
           <div className="ml-auto flex items-center gap-1 rounded-full border border-white/[0.12] bg-white/[0.04] p-1 text-white/[0.68]">
             <button
@@ -449,6 +628,10 @@ export default function HomePage() {
                       ref={(node) => registerWarmNode(node, song)}
                       role="button"
                       tabIndex={0}
+                      style={{
+                        contentVisibility: "auto",
+                        containIntrinsicSize: "18rem",
+                      }}
                       onClick={() => handlePlaySong(index)}
                       onPointerEnter={() => warmSongSoon(song)}
                       onFocus={() => warmSongSoon(song)}
@@ -473,10 +656,12 @@ export default function HomePage() {
                           className="object-cover"
 	                          loading={index < 8 ? "eager" : "lazy"}
 	                        />
-	                        <OfflineSongDownloadButton
-	                          song={song}
-	                          className="absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 sm:opacity-0 sm:group-hover:opacity-100"
-	                        />
+	                        <Suspense fallback={null}>
+	                          <OfflineSongDownloadButton
+	                            song={song}
+	                            className="absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 sm:opacity-0 sm:group-hover:opacity-100"
+	                          />
+	                        </Suspense>
 	                        <button
                           type="button"
                           aria-label={active && isPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
@@ -517,94 +702,27 @@ export default function HomePage() {
                   );
                 })}
               </div>
+            ) : enableVirtualList ? (
+              <div
+                ref={listContainerRef}
+                className="relative"
+                style={{ height: `${sortedSongs.length * HOME_LIST_ROW_HEIGHT}px` }}
+              >
+                {sortedSongs.slice(listVirtualRange.start, listVirtualRange.end).map((song, offset) => {
+                  const index = listVirtualRange.start + offset;
+                  return (
+                    <div
+                      key={song.id}
+                      className="absolute left-0 right-0"
+                      style={{ top: `${index * HOME_LIST_ROW_HEIGHT}px` }}
+                    >
+                      {renderHomeListSong(song, index)}
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
-              sortedSongs.map((song, index) => {
-              const active = currentSongId === song.id;
-              const liked = !!likedLookup[song.id];
-              const likePending = !!pendingLikes[song.id];
-              const artists = song.artist || "Unknown Artist";
-
-              return (
-                <div
-                  key={song.id}
-                  ref={(node) => registerWarmNode(node, song)}
-                  onClick={() => handlePlaySong(index)}
-                  onPointerEnter={() => warmSongSoon(song)}
-                  onFocus={() => warmSongSoon(song)}
-                  className={cn(
-                    "group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
-                    HOME_LIST_GRID,
-                    active ? "bg-white/[0.11]" : "hover:bg-white/[0.07]",
-                  )}
-                >
-                  <div
-                    className={cn(
-                      "flex h-11 items-center justify-center text-[18px] tabular-nums text-white/[0.68]",
-                      active && "text-[#1ed760]",
-                    )}
-                  >
-                    {active && isPlaying ? (
-                      <Pause size={19} fill="currentColor" />
-                    ) : (
-                      <>
-                        <span className="group-hover:hidden">{index + 1}</span>
-                        <Play size={18} fill="currentColor" className="hidden translate-x-0.5 text-white group-hover:block" />
-                      </>
-                    )}
-                  </div>
-
-                  <div className="flex min-w-0 items-center gap-5">
-                    <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
-                      <CoverImage
-                        src={song.imageUrl}
-                        alt={song.title}
-                        fill
-                        sizes="48px"
-                        className="object-cover"
-                        loading={index < 8 ? "eager" : "lazy"}
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <div
-                        className={cn(
-                          "truncate text-[20px] font-medium leading-7 text-white",
-                          active && "text-[#1ed760]",
-                        )}
-                      >
-                        {song.title}
-                      </div>
-                      <div className="truncate text-[18px] leading-7 text-white/[0.66]">{artists}</div>
-                    </div>
-                  </div>
-
-                  <div className="hidden min-w-0 items-center text-[18px] text-white/[0.66] md:flex">
-                    <span className="truncate">{getSongAlbum(song)}</span>
-                  </div>
-
-                  <div className="hidden items-center text-[18px] text-white/[0.66] md:flex">
-                    {formatDateAdded(song.createdAt)}
-                  </div>
-
-                  <div className="hidden justify-center md:flex">
-                    <SaveToLikedButton
-                      liked={liked}
-                      pending={likePending}
-                      canLike={!!user}
-                      className="h-9 w-9 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                      onToggle={() => void handleToggleLike(song.id)}
-                    />
-                  </div>
-
-                  <div className="flex justify-end text-[18px] tabular-nums text-white/[0.66] md:justify-center md:text-center">
-                    {getSongDuration(song, durationLookup[song.id])}
-                  </div>
-
-	                  <div className="hidden justify-end md:flex">
-	                    <OfflineSongDownloadButton song={song} className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" />
-	                  </div>
-                </div>
-              );
-              })
+              sortedSongs.map(renderHomeListSong)
             )}
           </div>
         </section>

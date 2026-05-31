@@ -15,6 +15,33 @@ type CoverImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onErro
   unoptimized?: boolean;
 };
 
+const COVER_IMAGE_WIDTHS = [64, 128, 256, 384, 640];
+
+function artworkVariantUrl(src: string, width: number): string | null {
+  if (!src.startsWith("/api/files/")) return null;
+  if (src.startsWith("/api/files/local/")) return null;
+  const path = src.slice("/api/files/".length);
+  const cleanPath = path.split(/[?#]/)[0] || "";
+  if (!/\.(jpe?g|png|webp|gif)$/i.test(cleanPath)) return null;
+  const encodedPath = cleanPath
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  if (!encodedPath) return null;
+  return `/api/artwork/r2/${encodedPath}?w=${width}`;
+}
+
+function artworkSrcSet(src: string): string | undefined {
+  const entries = COVER_IMAGE_WIDTHS
+    .map((width) => {
+      const url = artworkVariantUrl(src, width);
+      return url ? `${url} ${width}w` : "";
+    })
+    .filter(Boolean);
+  return entries.length > 0 ? entries.join(", ") : undefined;
+}
+
 export function CoverImage({
   src,
   fallbackSrc = "/apple-icon.png",
@@ -25,11 +52,12 @@ export function CoverImage({
   const resolvedSrc = normalizeCoverImageUrl(
     failed || !src || src.trim().length === 0 ? fallbackSrc : src,
   );
+  const generatedSrcSet = artworkSrcSet(resolvedSrc);
   const {
     fill,
     width,
     height,
-    sizes: _sizes,
+    sizes,
     priority: _priority,
     quality: _quality,
     placeholder: _placeholder,
@@ -44,9 +72,13 @@ export function CoverImage({
       {...imgProps}
       alt={alt}
       src={resolvedSrc}
-      loading={loading === "eager" ? "eager" : "lazy"}
+      loading={_priority || loading === "eager" ? "eager" : "lazy"}
+      decoding="async"
+      fetchPriority={_priority ? "high" : undefined}
       width={fill ? undefined : width}
       height={fill ? undefined : height}
+      sizes={sizes}
+      srcSet={imgProps.srcSet ?? generatedSrcSet}
       style={{
         ...(fill
           ? {

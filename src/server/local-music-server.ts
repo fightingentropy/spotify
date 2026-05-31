@@ -1313,6 +1313,22 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     return jsonCached(request, { songs: snapshot.songs, likedSongIds });
   }
 
+  if (pathname === "/api/search-index" && request.method === "GET") {
+    const snapshot = await getLibrary();
+    return jsonCached(request, {
+      songs: snapshot.songs.map((song) => ({
+        id: song.id,
+        title: song.title,
+        artist: song.artist,
+        imageUrl: song.imageUrl,
+        audioUrl: song.audioUrl,
+        createdAt: song.createdAt,
+        source: song.source,
+        localPath: song.localPath,
+      })),
+    }, { cacheControl: "private, max-age=300, stale-while-revalidate=600" });
+  }
+
   if (pathname === "/api/library" && request.method === "GET") {
     return jsonCached(request, { playlists: [], userId: LOCAL_USER.id }, {
       cacheControl: "private, max-age=300, stale-while-revalidate=600",

@@ -1,10 +1,9 @@
 import MobileSearch from "@/components/MobileSearch";
-import { useApiData, type HomePayload } from "@/client/api";
+import { useApiData, type SearchIndexPayload } from "@/client/api";
 
 export default function SearchPage() {
-  const { data, loading, error } = useApiData<HomePayload>("/api/home", {
+  const { data, loading, error } = useApiData<SearchIndexPayload>("/api/search-index", {
     songs: [],
-    likedSongIds: [],
   });
   const songs = data.songs;
 

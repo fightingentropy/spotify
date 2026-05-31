@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import type { PlayerSong } from "@/types/player";
-import { isBrowserLocalSong } from "@/store/browser-local-library";
+import { isBrowserLocalSong } from "@/lib/browser-local-song";
 
 export type DownloadScope = "home" | "liked" | `playlist:${string}` | `song:${string}`;
 export type OfflineDownloadStatus = "queued" | "downloading" | "downloaded" | "failed";
@@ -110,7 +110,7 @@ const MUTATION_STORE = "mutations";
 export const OFFLINE_MEDIA_CACHE = "spotify-media-v1";
 export const OFFLINE_PLAYBACK_CACHE = "spotify-playback-v1";
 const OFFLINE_SYNC_EVENT = "spotify-offline-sync";
-const PLAYBACK_WARM_BYTES = 2 * 1024 * 1024;
+const PLAYBACK_WARM_BYTES = 512 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
 const PLAYBACK_WARM_DEDUPE_MS = 2 * 60 * 1_000;
 const PLAYBACK_WARM_QUEUE_LIMIT = 12;
@@ -271,6 +271,18 @@ function resolveUrl(value: string): string {
   return new URL(value, location.origin).toString();
 }
 
+function shouldSkipSpeculativeMediaFetch(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  return !!(
+    connection?.saveData ||
+    connection?.effectiveType === "slow-2g" ||
+    connection?.effectiveType === "2g"
+  );
+}
+
 function songAssetUrls(song: PlayerSong): string[] {
   return uniqueStrings([song.audioUrl, song.imageUrl, song.lyricsUrl]).filter(sameOriginCacheableUrl).map(resolveUrl);
 }
@@ -424,6 +436,7 @@ async function cacheUrl(
 async function warmPlaybackUrl(url: string): Promise<void> {
   if (typeof window === "undefined") return;
   if (!sameOriginCacheableUrl(url)) return;
+  if (shouldSkipSpeculativeMediaFetch()) return;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PLAYBACK_WARM_TIMEOUT_MS);
   try {
@@ -1154,6 +1167,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   },
   prefetchUpcoming: async (queue, currentIndex) => {
     if (prefetchRunning) return;
+    if (shouldSkipSpeculativeMediaFetch()) return;
     prefetchRunning = true;
     try {
       const upcoming = queue.slice(currentIndex + 1, currentIndex + 4).filter((song) => !isBrowserLocalSong(song));
