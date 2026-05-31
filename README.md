@@ -6,15 +6,15 @@ the Mac mini is the music storage and streaming backend.
 
 ## Current Production Setup
 
-- Public app: `https://spotify.erlinhoxha.workers.dev`
+- Public app: `https://spotify.fightingentropy.org`
 - Mac mini LAN app/server: `http://m4mini.local:5174`
-- Private Worker-to-Mac-mini origin: `https://spotify.streamthatshit.com`
+- Private Worker-to-Mac-mini origin: `https://spotify-origin.fightingentropy.org`
 - Mac mini music folder: `/Users/hermes/Music`
 - Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
-- Music server launchd service: `com.streamthatshit.spotify-app`
+- Music server launchd service: `com.fightingentropy.spotify-app`
 
 The private origin hostname is only for Worker-to-Mac-mini traffic. Direct
-public requests to `spotify.streamthatshit.com` should return `401` unless the
+public requests to `spotify-origin.fightingentropy.org` should return `401` unless the
 request includes the shared proxy token.
 
 ## Architecture
@@ -25,10 +25,9 @@ Phone/browser
        -> auth/session in D1
        -> Spotify metadata/import helpers
        -> proxy music APIs to Mac mini when MAC_MINI_ORIGIN is set
-            -> Direct HTTPS origin: spotify.streamthatshit.com
-                 -> router/reverse proxy
-                      -> Mac mini local server on 127.0.0.1:5174
-                           -> /Users/hermes/Music
+            -> Cloudflare Tunnel origin: spotify-origin.fightingentropy.org
+                 -> Mac mini local server on 127.0.0.1:5174
+                      -> /Users/hermes/Music
 ```
 
 In the active deployed mode, uploaded/imported music is not stored in R2. R2 is
@@ -53,11 +52,11 @@ and likes.
 ## Important Runtime Notes
 
 - Keep the Mac mini music server launchd service running:
-  - `com.streamthatshit.spotify-app`
+  - `com.fightingentropy.spotify-app`
 - `m4mini.local` only works on the LAN. Cloudflare reaches the Mac mini through
-  the public HTTPS origin hostname instead.
-- The origin hostname should be a DNS-only record pointed at the home public IP,
-  with the router forwarding HTTPS traffic to the Mac mini reverse proxy.
+  the `spotify-mini` Cloudflare Tunnel and the public HTTPS origin hostname.
+- Keep the Mac mini tunnel launchd service running:
+  - `com.fightingentropy.spotify-tunnel`
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
 - The Settings page intentionally only shows user-facing playback/download
@@ -149,7 +148,7 @@ bun run deploy
 The active `wrangler.jsonc` contains:
 
 ```json
-"MAC_MINI_ORIGIN": "https://spotify.streamthatshit.com"
+"MAC_MINI_ORIGIN": "https://spotify-origin.fightingentropy.org"
 ```
 
 Set or rotate the Worker secret:
@@ -170,7 +169,7 @@ SPOTIFY_CACHE_DIR=/Users/hermes/Developer/spotify/cache
 SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
-SPOTIFY_PROXY_HOSTNAMES=spotify.streamthatshit.com
+SPOTIFY_PROXY_HOSTNAMES=spotify-origin.fightingentropy.org
 ```
 
 ## Verification
@@ -182,8 +181,8 @@ bun --bun tsc --noEmit
 bun run lint
 bun run build
 bun run mini:check
-curl -I https://spotify.erlinhoxha.workers.dev
-curl -sS -o /dev/null -w "%{http_code}\n" https://spotify.streamthatshit.com/api/music/source
+curl -I https://spotify.fightingentropy.org
+curl -sS -o /dev/null -w "%{http_code}\n" https://spotify-origin.fightingentropy.org/api/music/source
 ```
 
 Expected behavior:

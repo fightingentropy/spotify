@@ -518,7 +518,7 @@ async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
       headers: {
-        "user-agent": "spotify/1.0 (+https://spotify.erlinhoxha.workers.dev)",
+        "user-agent": "spotify/1.0 (+https://spotify.fightingentropy.org)",
         ...(init?.headers || {}),
       },
     });

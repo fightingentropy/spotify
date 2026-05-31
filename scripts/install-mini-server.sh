@@ -8,8 +8,8 @@ REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
 PORT="${PORT:-5174}"
 HOST="${HOST:-0.0.0.0}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
-PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify.streamthatshit.com}"
-SERVICE_LABEL="${SERVICE_LABEL:-com.streamthatshit.spotify-app}"
+PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify-origin.fightingentropy.org}"
+SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-app}"
 
 usage() {
   cat <<'USAGE'
@@ -17,7 +17,7 @@ Usage: scripts/install-mini-server.sh [options]
 
 Installs/updates the Mac mini Spotify music server:
   - /Users/hermes/.local/bin/spotify-run-server
-  - /Library/LaunchDaemons/com.streamthatshit.spotify-app.plist
+  - /Library/LaunchDaemons/com.fightingentropy.spotify-app.plist
   - /Users/hermes/.config/spotify/env
 
 Options:
@@ -32,8 +32,8 @@ Environment:
   REMOTE_APP             Default: /Users/hermes/Developer/spotify
   REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
   BUN_BIN                Default: /opt/homebrew/bin/bun
-  PROXY_HOSTNAMES        Default: spotify.streamthatshit.com
-  SERVICE_LABEL          Default: com.streamthatshit.spotify-app
+  PROXY_HOSTNAMES        Default: spotify-origin.fightingentropy.org
+  SERVICE_LABEL          Default: com.fightingentropy.spotify-app
 USAGE
 }
 
@@ -76,6 +76,7 @@ config_dir="$HOME/.config/spotify"
 env_file="$config_dir/env"
 service_label="$SERVICE_LABEL"
 app_plist="/Library/LaunchDaemons/$service_label.plist"
+legacy_service_labels="com.streamthatshit.spotify-app"
 
 mkdir -p "$state_dir" "$bin_dir" "$config_dir" "$REMOTE_MUSIC_DIR" "$REMOTE_APP/cache"
 chmod 700 "$state_dir" "$bin_dir" "$config_dir"
@@ -196,6 +197,13 @@ PLIST
 sudo install -m 644 "$tmp_plist" "$app_plist"
 rm -f "$tmp_plist"
 
+for legacy_label in $legacy_service_labels; do
+  [[ "$legacy_label" == "$service_label" ]] && continue
+  legacy_plist="/Library/LaunchDaemons/$legacy_label.plist"
+  sudo launchctl bootout system "$legacy_plist" 2>/dev/null || true
+  sudo rm -f "$legacy_plist"
+done
+
 sudo launchctl bootout system "$app_plist" 2>/dev/null || true
 listener_pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
 parent_pids=""
@@ -216,6 +224,7 @@ if [[ -n "$remaining_pids" ]]; then
   sleep 1
 fi
 
+sudo launchctl enable "system/$service_label" 2>/dev/null || true
 sudo launchctl bootstrap system "$app_plist"
 sudo launchctl enable "system/$service_label" 2>/dev/null || true
 sudo launchctl kickstart -k "system/$service_label"

@@ -2,6 +2,12 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"main": "src/worker/index.ts",
 	"name": "spotify",
+	"routes": [
+		{
+			"pattern": "spotify.fightingentropy.org",
+			"custom_domain": true
+		}
+	],
 	"compatibility_date": "2026-05-23",
 	"compatibility_flags": [
 		"nodejs_compat",
@@ -32,6 +38,6 @@
 	},
 	"vars": {
 		"AUTH_TRUST_HOST": "true",
-		"MAC_MINI_ORIGIN": "https://spotify.streamthatshit.com"
+		"MAC_MINI_ORIGIN": "https://spotify-origin.fightingentropy.org"
 	}
 }
