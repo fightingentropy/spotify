@@ -7,6 +7,7 @@ import { useApiData, type SearchIndexPayload } from "@/client/api";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
 
 type HomeSearchCommandPaletteProps = {
@@ -97,6 +98,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
         if (!selected) return;
         const queueIndex = songs.findIndex((song) => song.id === selected.id);
         if (queueIndex >= 0) {
+          requestImmediatePlayback(selected);
           setQueue(songs, queueIndex);
           setOpen(false);
         }
@@ -179,6 +181,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     onClick={() => {
                       const queueIndex = songs.findIndex((item) => item.id === song.id);
                       if (queueIndex >= 0) {
+                        requestImmediatePlayback(song);
                         setQueue(songs, queueIndex);
                         setOpen(false);
                       }

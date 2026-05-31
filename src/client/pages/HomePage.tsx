@@ -16,6 +16,7 @@ import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
 
@@ -185,6 +186,7 @@ export default function HomePage() {
   const setQueue = usePlayerStore((state) => state.setQueue);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
+  const currentSong = usePlayerStore((state) => state.currentSong);
   const currentSongId = usePlayerStore((state) => state.currentSong?.id ?? null);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const shuffle = usePlayerStore((state) => state.shuffle);
@@ -396,21 +398,30 @@ export default function HomePage() {
 
   const handlePlaySong = (index: number) => {
     const song = sortedSongs[index];
+    if (!song) return;
     if (song?.id === currentSongId) {
       if (isPlaying) pause();
-      else play();
+      else {
+        requestImmediatePlayback(song);
+        play();
+      }
       return;
     }
+    requestImmediatePlayback(song);
     setQueue(sortedSongs, index);
   };
 
   const handlePlayAll = () => {
     if (currentSongIsInList) {
       if (isPlaying) pause();
-      else play();
+      else {
+        requestImmediatePlayback(currentSong);
+        play();
+      }
       return;
     }
     if (sortedSongs.length > 0) {
+      requestImmediatePlayback(sortedSongs[0]);
       setQueue(sortedSongs, 0);
     }
   };

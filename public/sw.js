@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v19";
+const CACHE_VERSION = "spotify-v20";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -238,25 +238,18 @@ async function mediaResponse(request) {
   }
 }
 
-async function navigationResponse(event, request) {
+async function navigationResponse(request) {
   const cache = await caches.open(SHELL_CACHE);
-  const cached =
-    (await cache.match(request, { ignoreSearch: true })) ||
-    (await cache.match("/", { ignoreSearch: true }));
-
-  const refreshed = fetch(request).then(async (response) => {
-    await putCache(SHELL_CACHE, request, response.clone());
-    return response;
-  });
-
-  if (cached) {
-    event.waitUntil(refreshed.then(() => undefined).catch(() => undefined));
-    return cached;
-  }
 
   try {
-    return await refreshed;
+    const response = await fetch(request, { cache: "reload" });
+    await putCache(SHELL_CACHE, request, response.clone());
+    return response;
   } catch {
+    const cached =
+      (await cache.match(request, { ignoreSearch: true })) ||
+      (await cache.match("/", { ignoreSearch: true }));
+    if (cached) return cached;
     return new Response("<!doctype html><title>Spotify</title><body>Spotify is offline.</body>", {
       headers: { "Content-Type": "text/html; charset=utf-8" },
       status: 503,
@@ -299,7 +292,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname === "/sw.js") return;
 
   if (request.mode === "navigate") {
-    event.respondWith(navigationResponse(event, request));
+    event.respondWith(navigationResponse(request));
     return;
   }
 

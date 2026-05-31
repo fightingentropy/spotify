@@ -5,6 +5,7 @@ import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
 import { RADIO_STATIONS } from "@/lib/radio-stations";
 import { cn } from "@/lib/utils";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 
 export default function RadioPage() {
   const setQueue = usePlayerStore((state) => state.setQueue);
@@ -18,10 +19,12 @@ export default function RadioPage() {
     if (!station) return;
 
     if (currentStationId === station.id) {
+      if (!isPlaying) requestImmediatePlayback(station);
       toggle();
       return;
     }
 
+    requestImmediatePlayback(station);
     setQueue(RADIO_STATIONS, index);
   }
 

@@ -5,6 +5,7 @@ import { Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 
 type MobileSearchProps = {
   songs: PlayerSong[];
@@ -79,7 +80,10 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
               type="button"
               onClick={() => {
                 const queueIndex = songs.findIndex((item) => item.id === song.id);
-                if (queueIndex >= 0) setQueue(songs, queueIndex);
+                if (queueIndex >= 0) {
+                  requestImmediatePlayback(song);
+                  setQueue(songs, queueIndex);
+                }
               }}
               className="w-full min-h-[56px] px-2 rounded-xl flex items-center gap-3 text-left active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
             >

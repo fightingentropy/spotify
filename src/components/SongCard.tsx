@@ -6,6 +6,7 @@ import { warmPlaybackSong } from "@/client/playback-warm";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { Heart, Pause, Pencil, Play } from "lucide-react";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 
@@ -50,12 +51,17 @@ const SongCardComponent = function SongCard({
   const handlePlay = useCallback(() => {
     if (isActive) {
       if (isActiveAndPlaying) pause();
-      else play();
+      else {
+        requestImmediatePlayback(song);
+        play();
+      }
       return;
     }
     if (typeof songIndex === "number" && onPlayAt) {
+      requestImmediatePlayback(song);
       onPlayAt(songIndex);
     } else {
+      requestImmediatePlayback(song);
       setSong(song);
       play();
     }

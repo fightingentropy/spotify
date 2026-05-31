@@ -7,6 +7,7 @@ import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 
 type SongListItemProps = {
@@ -49,13 +50,18 @@ const SongListItemComponent = function SongListItem({
   const handlePlay = useCallback(() => {
     if (isActive) {
       if (isActiveAndPlaying) pause();
-      else play();
+      else {
+        requestImmediatePlayback(song);
+        play();
+      }
       return;
     }
     if (typeof songIndex === "number" && onPlayAt) {
+      requestImmediatePlayback(song);
       onPlayAt(songIndex);
       return;
     }
+    requestImmediatePlayback(song);
     setSong(song);
     play();
   }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, setSong, song, songIndex]);

@@ -10,6 +10,7 @@ import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuf
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isRadioSong } from "@/lib/player-song";
+import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
 import { prefetchUpcomingPlayback } from "@/client/playback-warm";
 
@@ -94,7 +95,6 @@ function PlayerBar(): React.ReactElement | null {
   const repeatMode = usePlayerStore((s) => s.repeatMode);
   const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
   const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
-  const toggle = usePlayerStore((s) => s.toggle);
   const play = usePlayerStore((s) => s.play);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
@@ -239,6 +239,23 @@ function PlayerBar(): React.ReactElement | null {
         return false;
       });
   }, [getActiveAudio, pause]);
+
+  useEffect(() => {
+    function onPlaybackGesture(event: Event) {
+      const detail = (event as CustomEvent<PlaybackGestureDetail>).detail;
+      if (!detail?.audioUrl) return;
+      const audio = getActiveAudio();
+      if (!audio) return;
+
+      cancelActiveCrossfade();
+      loadAudioSource(audio, detail.audioUrl);
+      isPlayingRef.current = true;
+      void playAudio(audio);
+    }
+
+    window.addEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
+    return () => window.removeEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
+  }, [cancelActiveCrossfade, getActiveAudio, loadAudioSource, playAudio]);
 
   const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
     if (!isPlayingRef.current || audio !== getActiveAudio()) return;
@@ -696,6 +713,15 @@ function PlayerBar(): React.ReactElement | null {
     }
   }, [getActiveAudio]);
 
+  const handleTogglePlayback = useCallback(() => {
+    if (isPlaying) {
+      pause();
+      return;
+    }
+    requestImmediatePlayback(currentSong);
+    play();
+  }, [currentSong, isPlaying, pause, play]);
+
   // Global keyboard shortcuts (always register to keep hook order stable)
   useEffect(() => {
     function isTypingTarget(target: EventTarget | null): boolean {
@@ -720,7 +746,7 @@ function PlayerBar(): React.ReactElement | null {
       if ((e.code === "Space" || e.key === " " || e.key === "Spacebar") && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();
-        toggle();
+        handleTogglePlayback();
         return;
       }
       // Meta + Arrow for previous/next track
@@ -753,31 +779,10 @@ function PlayerBar(): React.ReactElement | null {
     const options = { capture: true };
     window.addEventListener("keydown", onKeyDown, options);
     return () => window.removeEventListener("keydown", onKeyDown, options);
-  }, [next, previous, duration, toggle, getActiveAudio, onSeek]);
+  }, [next, previous, duration, handleTogglePlayback, getActiveAudio, onSeek]);
 
-  if (!currentSong) return null;
-  const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !currentSongIsRadio;
-  const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
-  const progress = hasSeekableDuration ? Math.min(100, Math.max(0, (safeCurrentTime / duration) * 100)) : 0;
-
-  const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
-
-  return (
+  const audioElements = (
     <>
-      {nowPlayingOpen ? (
-        <Suspense fallback={null}>
-          <NowPlayingSheet
-            open={nowPlayingOpen}
-            onClose={() => setNowPlayingOpen(false)}
-            song={currentSong}
-            isPlaying={isPlaying}
-            currentTime={safeCurrentTime}
-            duration={hasSeekableDuration ? duration : 0}
-            onSeek={onSeek}
-          />
-        </Suspense>
-      ) : null}
-      <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
       <audio
         ref={audioARef}
         hidden
@@ -856,6 +861,33 @@ function PlayerBar(): React.ReactElement | null {
           next();
         }}
       />
+    </>
+  );
+
+  if (!currentSong) return audioElements;
+  const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !currentSongIsRadio;
+  const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
+  const progress = hasSeekableDuration ? Math.min(100, Math.max(0, (safeCurrentTime / duration) * 100)) : 0;
+
+  const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
+
+  return (
+    <>
+      {nowPlayingOpen ? (
+        <Suspense fallback={null}>
+          <NowPlayingSheet
+            open={nowPlayingOpen}
+            onClose={() => setNowPlayingOpen(false)}
+            song={currentSong}
+            isPlaying={isPlaying}
+            currentTime={safeCurrentTime}
+            duration={hasSeekableDuration ? duration : 0}
+            onSeek={onSeek}
+          />
+        </Suspense>
+      ) : null}
+      <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
+      {audioElements}
       {/* Mobile mini player */}
       <div className="lg:hidden relative">
         <div
@@ -905,7 +937,7 @@ function PlayerBar(): React.ReactElement | null {
           <button
             type="button"
             aria-label={isPlaying ? "Pause" : "Play"}
-            onClick={toggle}
+            onClick={handleTogglePlayback}
             className="h-11 w-11 rounded-full grid place-items-center bg-white text-black touch-manipulation shrink-0"
           >
             {isPlaying ? <Pause size={20} /> : <Play size={20} className="translate-x-[1px]" />}
@@ -954,7 +986,7 @@ function PlayerBar(): React.ReactElement | null {
             <button aria-label="Previous" onClick={previous} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipBack size={18} />
             </button>
-            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={toggle} className="h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
+            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={handleTogglePlayback} className="h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
               {isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-[1px]" />}
             </button>
             <button aria-label="Next" onClick={next} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
