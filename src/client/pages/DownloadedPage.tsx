@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { Download } from "lucide-react";
 import { useApiData, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
-import { useOfflineStore } from "@/client/offline";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { SongGrid } from "@/components/SongGrid";
 
 export default function DownloadedPage() {
@@ -23,7 +23,7 @@ export default function DownloadedPage() {
     return Object.values(records)
       .filter((record) => record.status === "downloaded")
       .sort((left, right) => right.updatedAt - left.updatedAt)
-      .map((record) => record.song);
+      .map((record) => resolveOfflinePlaybackSong(record.song));
   }, [records]);
 
   return (

@@ -14,6 +14,7 @@ import { CoverImage } from "@/components/CoverImage";
 import { useApiData, type HomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
@@ -197,6 +198,12 @@ export default function HomePage() {
   const pendingLikes = useLikesStore((state) => state.pending);
   const likesHydrated = useLikesStore((state) => state.hydrated);
   const toggleLike = useLikesStore((state) => state.toggleLike);
+  const offlineRecords = useOfflineStore((state) => state.records);
+
+  const resolveHomeSong = useCallback(
+    (song: HomeSong): HomeSong => resolveOfflinePlaybackSong(song) as HomeSong,
+    [offlineRecords],
+  );
 
   useEffect(() => {
     try {
@@ -333,12 +340,13 @@ export default function HomePage() {
         )
       : sortedSongs.slice(0, 24);
     for (const song of probeCandidates) {
-      if (!song.audioUrl) continue;
-      if (getSongDurationSeconds(song) != null) continue;
+      const probeSong = resolveHomeSong(song);
+      if (!probeSong.audioUrl) continue;
+      if (getSongDurationSeconds(probeSong) != null) continue;
       if (durationLookupRef.current[song.id] !== undefined) continue;
       if (durationProbeIdsRef.current.has(song.id)) continue;
       durationProbeIdsRef.current.add(song.id);
-      songsToProbe.push(song);
+      songsToProbe.push(probeSong);
       if (songsToProbe.length >= 24) break;
     }
     if (songsToProbe.length === 0) return;
@@ -389,7 +397,7 @@ export default function HomePage() {
         }
       }
     };
-  }, [enableVirtualList, listVirtualRange.end, listVirtualRange.start, sortedSongs]);
+  }, [enableVirtualList, listVirtualRange.end, listVirtualRange.start, resolveHomeSong, sortedSongs]);
 
   const currentSongIsInList = useMemo(() => {
     return currentSongId ? sortedSongs.some((song) => song.id === currentSongId) : false;
@@ -447,18 +455,19 @@ export default function HomePage() {
   };
 
   const renderHomeListSong = (song: HomeSong, index: number) => {
+    const displaySong = resolveHomeSong(song);
     const active = currentSongId === song.id;
     const liked = !!likedLookup[song.id];
     const likePending = !!pendingLikes[song.id];
-    const artists = song.artist || "Unknown Artist";
+    const artists = displaySong.artist || "Unknown Artist";
 
     return (
       <div
         key={song.id}
-        ref={(node) => registerWarmNode(node, song)}
+        ref={(node) => registerWarmNode(node, displaySong)}
         onClick={() => handlePlaySong(index)}
-        onPointerEnter={() => warmSongSoon(song)}
-        onFocus={() => warmSongSoon(song)}
+        onPointerEnter={() => warmSongSoon(displaySong)}
+        onFocus={() => warmSongSoon(displaySong)}
         className={cn(
           "group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
           HOME_LIST_GRID,
@@ -482,10 +491,10 @@ export default function HomePage() {
         </div>
 
         <div className="flex min-w-0 items-center gap-5">
-          <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
-            <CoverImage
-              src={song.imageUrl}
-              alt={song.title}
+	          <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
+	            <CoverImage
+	              src={displaySong.imageUrl}
+	              alt={displaySong.title}
               fill
               sizes="48px"
               className="object-cover"
@@ -499,14 +508,14 @@ export default function HomePage() {
                 active && "text-[#1ed760]",
               )}
             >
-              {song.title}
+	              {displaySong.title}
             </div>
             <div className="truncate text-[18px] leading-7 text-white/[0.66]">{artists}</div>
           </div>
         </div>
 
         <div className="hidden min-w-0 items-center text-[18px] text-white/[0.66] md:flex">
-          <span className="truncate">{getSongAlbum(song)}</span>
+	          <span className="truncate">{getSongAlbum(displaySong)}</span>
         </div>
 
         <div className="hidden items-center text-[18px] text-white/[0.66] md:flex">
@@ -524,7 +533,7 @@ export default function HomePage() {
         </div>
 
         <div className="flex justify-end text-[18px] tabular-nums text-white/[0.66] md:justify-center md:text-center">
-          {getSongDuration(song, durationLookup[song.id])}
+	          {getSongDuration(displaySong, durationLookup[song.id])}
         </div>
 
         <div className="hidden justify-end md:flex">
@@ -649,15 +658,16 @@ export default function HomePage() {
               </div>
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]">
-                {sortedSongs.map((song, index) => {
-                  const active = currentSongId === song.id;
-                  const liked = !!likedLookup[song.id];
-                  const likePending = !!pendingLikes[song.id];
+	                {sortedSongs.map((song, index) => {
+	                  const displaySong = resolveHomeSong(song);
+	                  const active = currentSongId === song.id;
+	                  const liked = !!likedLookup[song.id];
+	                  const likePending = !!pendingLikes[song.id];
 
                   return (
                     <div
                       key={song.id}
-                      ref={(node) => registerWarmNode(node, song)}
+	                      ref={(node) => registerWarmNode(node, displaySong)}
                       role="button"
                       tabIndex={0}
                       style={{
@@ -665,8 +675,8 @@ export default function HomePage() {
                         containIntrinsicSize: "18rem",
                       }}
                       onClick={() => handlePlaySong(index)}
-                      onPointerEnter={() => warmSongSoon(song)}
-                      onFocus={() => warmSongSoon(song)}
+	                      onPointerEnter={() => warmSongSoon(displaySong)}
+	                      onFocus={() => warmSongSoon(displaySong)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
@@ -679,10 +689,10 @@ export default function HomePage() {
                         active ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
                       )}
                     >
-                      <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
-	                        <CoverImage
-                          src={song.imageUrl}
-                          alt={song.title}
+	                      <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+		                        <CoverImage
+	                          src={displaySong.imageUrl}
+	                          alt={displaySong.title}
                           fill
                           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 180px"
                           className="object-cover"
@@ -696,7 +706,7 @@ export default function HomePage() {
 	                        </Suspense>
 	                        <button
                           type="button"
-                          aria-label={active && isPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
+	                          aria-label={active && isPlaying ? `Pause ${displaySong.title}` : `Play ${displaySong.title}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             handlePlaySong(index);
@@ -713,11 +723,11 @@ export default function HomePage() {
                           )}
                         </button>
                       </div>
-                      <div className="mt-3 min-w-0">
-                        <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
-                          {song.title}
-                        </div>
-                        <div className="truncate text-[14px] leading-5 text-white/[0.62]">{song.artist || "Unknown Artist"}</div>
+	                      <div className="mt-3 min-w-0">
+	                        <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
+	                          {displaySong.title}
+	                        </div>
+	                        <div className="truncate text-[14px] leading-5 text-white/[0.62]">{displaySong.artist || "Unknown Artist"}</div>
                       </div>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <div className="min-w-0 truncate text-[13px] text-white/[0.46]">{formatDateAdded(song.createdAt)}</div>

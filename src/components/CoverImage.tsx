@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ImgHTMLAttributes } from "react";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { OFFLINE_PLAYBACK_SEARCH_PARAM } from "@/lib/player-song";
 
 type CoverImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onError"> & {
   src: string | null | undefined;
@@ -18,6 +19,11 @@ type CoverImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onErro
 const COVER_IMAGE_WIDTHS = [64, 128, 256, 384, 640];
 
 function artworkVariantUrl(src: string, width: number): string | null {
+  try {
+    if (new URL(src, "http://localhost").searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
+      return null;
+    }
+  } catch {}
   if (!src.startsWith("/api/files/")) return null;
   if (src.startsWith("/api/files/local/")) return null;
   const path = src.slice("/api/files/".length);

@@ -9,6 +9,7 @@ import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type HomeSearchCommandPaletteProps = {
   className?: string;
@@ -24,6 +25,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const setQueue = usePlayerStore((state) => state.setQueue);
+  const offlineRecords = useOfflineStore((state) => state.records);
   const { data, loading, error } = useApiData<SearchIndexPayload>(
     "/api/search-index",
     { songs: [] },
@@ -63,6 +65,11 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       .slice(0, 20);
   }, [dedupedSongs, query]);
 
+  const resolvedResults = useMemo(
+    () => results.map((song) => resolveOfflinePlaybackSong(song)),
+    [offlineRecords, results],
+  );
+
   useEffect(() => {
     if (!open) return;
     setQuery("");
@@ -84,7 +91,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       }
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        setActiveIndex((prev) => Math.min(prev + 1, Math.max(0, results.length - 1)));
+        setActiveIndex((prev) => Math.min(prev + 1, Math.max(0, resolvedResults.length - 1)));
         return;
       }
       if (event.key === "ArrowUp") {
@@ -94,7 +101,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        const selected = results[activeIndex];
+        const selected = resolvedResults[activeIndex];
         if (!selected) return;
         const queueIndex = songs.findIndex((song) => song.id === selected.id);
         if (queueIndex >= 0) {
@@ -107,7 +114,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, open, results, setQueue, songs]);
+  }, [activeIndex, open, resolvedResults, setQueue, songs]);
 
   useEffect(() => {
     if (!open) return;
@@ -172,7 +179,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                   No songs found
                 </div>
               ) : (
-                results.map((song, index) => (
+                resolvedResults.map((song, index) => (
                   <button
                     key={song.id}
                     type="button"

@@ -6,6 +6,7 @@ import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type MobileSearchProps = {
   songs: PlayerSong[];
@@ -18,6 +19,7 @@ function normalizeSongPart(value: string): string {
 export default function MobileSearch({ songs }: MobileSearchProps) {
   const [query, setQuery] = useState("");
   const setQueue = usePlayerStore((state) => state.setQueue);
+  const offlineRecords = useOfflineStore((state) => state.records);
 
   const dedupedSongs = useMemo(() => {
     const unique = new Map<string, PlayerSong>();
@@ -47,6 +49,11 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
       .slice(0, 50);
   }, [dedupedSongs, query]);
 
+  const resolvedResults = useMemo(
+    () => results.map((song) => resolveOfflinePlaybackSong(song)),
+    [offlineRecords, results],
+  );
+
   return (
     <div className="px-4 py-6 max-w-7xl mx-auto">
       <h1 className="text-2xl font-bold mb-5">Search</h1>
@@ -71,10 +78,10 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
       <div className="space-y-1">
         {query.trim().length === 0 ? (
           <div className="py-12 text-center text-sm opacity-70">Start typing to search songs</div>
-        ) : results.length === 0 ? (
+        ) : resolvedResults.length === 0 ? (
           <div className="py-12 text-center text-sm opacity-70">No songs found</div>
         ) : (
-          results.map((song) => (
+          resolvedResults.map((song) => (
             <button
               key={song.id}
               type="button"

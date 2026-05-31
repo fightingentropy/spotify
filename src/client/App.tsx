@@ -97,6 +97,7 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
       prefetchRoute(loadLikedPage);
       prefetchRoute(loadDownloadedPage);
       prefetchRoute(loadRadioPage);
+      prefetchRoute(loadPlaylistPage);
       prefetchRoute(loadSettingsPage);
     };
     const idleWindow = window as Window & {

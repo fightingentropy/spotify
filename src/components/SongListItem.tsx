@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useCallback, useMemo, type KeyboardEvent, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
@@ -9,6 +9,7 @@ import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type SongListItemProps = {
   song: PlayerSong;
@@ -42,29 +43,31 @@ const SongListItemComponent = function SongListItem({
   const setSong = usePlayerStore((state) => state.setSong);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
+  const offlineRecord = useOfflineStore(useCallback((state) => state.records[song.id], [song.id]));
   const isActive = usePlayerStore(useCallback((state) => state.currentSong?.id === song.id, [song.id]));
   const isActiveAndPlaying = usePlayerStore(
     useCallback((state) => state.currentSong?.id === song.id && state.isPlaying, [song.id]),
   );
+  const resolvedSong = useMemo(() => resolveOfflinePlaybackSong(song), [offlineRecord, song]);
 
   const handlePlay = useCallback(() => {
     if (isActive) {
       if (isActiveAndPlaying) pause();
       else {
-        requestImmediatePlayback(song);
+        requestImmediatePlayback(resolvedSong);
         play();
       }
       return;
     }
     if (typeof songIndex === "number" && onPlayAt) {
-      requestImmediatePlayback(song);
+      requestImmediatePlayback(resolvedSong);
       onPlayAt(songIndex);
       return;
     }
-    requestImmediatePlayback(song);
+    requestImmediatePlayback(resolvedSong);
     setSong(song);
     play();
-  }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, setSong, song, songIndex]);
+  }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, resolvedSong, setSong, song, songIndex]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -90,8 +93,8 @@ const SongListItemComponent = function SongListItem({
       role="button"
       tabIndex={0}
       onClick={handlePlay}
-      onPointerEnter={() => warmPlaybackSong(song, true)}
-      onFocus={() => warmPlaybackSong(song, true)}
+      onPointerEnter={() => warmPlaybackSong(resolvedSong, true)}
+      onFocus={() => warmPlaybackSong(resolvedSong, true)}
       onKeyDown={handleKeyDown}
       aria-pressed={isActiveAndPlaying}
       className={cn(
@@ -110,8 +113,8 @@ const SongListItemComponent = function SongListItem({
           </div>
         ) : null}
         <CoverImage
-          src={song.imageUrl}
-          alt={song.title}
+          src={resolvedSong.imageUrl}
+          alt={resolvedSong.title}
           fill
           sizes="48px"
           className="object-cover"
@@ -121,8 +124,8 @@ const SongListItemComponent = function SongListItem({
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{song.title}</div>
-        <div className="text-xs opacity-70 truncate">{song.artist}</div>
+        <div className="text-sm font-medium truncate">{resolvedSong.title}</div>
+        <div className="text-xs opacity-70 truncate">{resolvedSong.artist}</div>
         {editMode ? (
           <div className="text-[11px] opacity-60 truncate">
             {song.audioBitDepth && song.audioSampleRate

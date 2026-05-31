@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v20";
+const CACHE_VERSION = "spotify-v22";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -6,6 +6,8 @@ const MEDIA_CACHE = "spotify-media-v1";
 const PLAYBACK_CACHE = "spotify-playback-v1";
 const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
 const MAX_CACHED_RANGE_BLOB_BYTES = 64 * 1024 * 1024;
+const OFFLINE_PLAYBACK_SEARCH_PARAM = "spotify_offline";
+const API_REFRESH_HEADER = "x-spotify-api-refresh";
 
 const SHELL_URLS = [
   "/",
@@ -29,6 +31,7 @@ const API_CACHE_PATHS = [
   "/api/library",
   "/api/liked",
   "/api/likes",
+  "/api/music/source",
   "/api/songs",
 ];
 
@@ -145,18 +148,21 @@ function parseRangeHeader(rangeHeader, size) {
   return { start, end };
 }
 
-async function cachedRangeResponse(request) {
+async function cachedRangeResponse(request, options = {}) {
   const rangeHeader = request.headers.get("range");
   if (!rangeHeader) return null;
 
   const cached = await matchCachedMedia(request.url);
   if (!cached || !cached.ok) return null;
   const contentLength = Number(cached.headers.get("content-length") || 0);
-  if (Number.isFinite(contentLength) && contentLength > MAX_CACHED_RANGE_BLOB_BYTES) {
+  if (!options.ignoreSizeLimit && Number.isFinite(contentLength) && contentLength > MAX_CACHED_RANGE_BLOB_BYTES) {
     return null;
   }
 
   const blob = await cached.blob();
+  if (!options.ignoreSizeLimit && blob.size > MAX_CACHED_RANGE_BLOB_BYTES) {
+    return null;
+  }
   const range = parseRangeHeader(rangeHeader, blob.size);
   if (!range) return null;
 
@@ -175,6 +181,12 @@ async function cachedRangeResponse(request) {
 }
 
 async function rangeResponse(request) {
+  const url = new URL(request.url);
+  if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
+    const cached = await cachedRangeResponse(request, { ignoreSizeLimit: true });
+    if (cached) return cached;
+  }
+
   try {
     return await fetch(request);
   } catch {
@@ -229,6 +241,12 @@ async function clearRuntimeCaches() {
 }
 
 async function mediaResponse(request) {
+  const url = new URL(request.url);
+  if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
+    const cached = await matchCachedMedia(request.url);
+    if (cached) return cached;
+  }
+
   try {
     return await fetch(request);
   } catch {
@@ -311,7 +329,11 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isCacheableApiRequest(url)) {
-    event.respondWith(networkFirst(request, RUNTIME_CACHE));
+    event.respondWith(
+      request.headers.get(API_REFRESH_HEADER) === "1"
+        ? networkFirst(request, RUNTIME_CACHE)
+        : staleWhileRevalidate(event, request, RUNTIME_CACHE),
+    );
     return;
   }
 

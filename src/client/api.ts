@@ -22,8 +22,8 @@ type ApiCacheEntry<T = unknown> = {
   promise?: Promise<T>;
 };
 
-const DEFAULT_API_CACHE_TTL_MS = 120_000;
 const API_CACHE_MAX_STALE_MS = 30 * 24 * 60 * 60 * 1000;
+const API_REFRESH_HEADER = "x-spotify-api-refresh";
 const apiCache = new Map<string, ApiCacheEntry>();
 
 function getApiPath(url: string): string {
@@ -32,17 +32,6 @@ function getApiPath(url: string): string {
   } catch {
     return url.split("?")[0] || url;
   }
-}
-
-function getApiCacheTtl(url: string): number {
-  const path = getApiPath(url);
-  if (path === "/api/home") return 2 * 60_000;
-  if (path === "/api/search-index") return 5 * 60_000;
-  if (path === "/api/library") return 5 * 60_000;
-  if (path === "/api/music/source") return 30_000;
-  if (path === "/api/liked" || path === "/api/likes") return 60_000;
-  if (path.startsWith("/api/playlist/")) return 60_000;
-  return DEFAULT_API_CACHE_TTL_MS;
 }
 
 function isPersistableApiUrl(url: string): boolean {
@@ -99,6 +88,10 @@ function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
     void writeOfflineApiSnapshot(url, data, entry.etag, entry.fetchedAt);
   }
   return data;
+}
+
+function canSyncApiData(): boolean {
+  return typeof navigator === "undefined" || navigator.onLine !== false;
 }
 
 function hasStringArray(value: unknown): value is string[] {
@@ -189,11 +182,12 @@ async function fetchApiData<T>(url: string): Promise<T> {
 
   const promise = (async () => {
     const headers = new Headers({ accept: "application/json" });
+    headers.set(API_REFRESH_HEADER, "1");
     if (cached?.etag && cached.data !== undefined) headers.set("if-none-match", cached.etag);
 
     const response = await fetch(url, {
       credentials: "include",
-      cache: "default",
+      cache: "no-cache",
       headers,
     });
     if (response.status === 304 && cached?.data !== undefined) {
@@ -268,6 +262,7 @@ export function useApiData<T>(url: string, initialValue: T, options?: { enabled?
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
   const [loading, setLoading] = useState(enabled && !cachedInitial);
   const [error, setError] = useState<string | null>(null);
+  const [syncRevision, setSyncRevision] = useState(0);
 
   function setData(nextData: T | ((current: T) => T)) {
     setDataState((current) => {
@@ -281,6 +276,13 @@ export function useApiData<T>(url: string, initialValue: T, options?: { enabled?
   }
 
   useEffect(() => {
+    if (!enabled || typeof window === "undefined") return;
+    const handleOnline = () => setSyncRevision((current) => current + 1);
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [enabled]);
+
+  useEffect(() => {
     if (!enabled) {
       setLoading(false);
       return;
@@ -291,10 +293,6 @@ export function useApiData<T>(url: string, initialValue: T, options?: { enabled?
     async function load() {
       const cached = await getCacheEntryAsync<T>(url);
       const cachedData = cached?.data;
-      const fresh =
-        cachedData !== undefined &&
-        cached?.fetchedAt !== undefined &&
-        Date.now() - cached.fetchedAt < getApiCacheTtl(url);
 
       if (cancelled) return;
       if (cachedData !== undefined) {
@@ -302,9 +300,17 @@ export function useApiData<T>(url: string, initialValue: T, options?: { enabled?
         setLoading(false);
         setError(null);
       } else {
+        setDataState(initialValue);
         setLoading(true);
       }
-      if (fresh) return;
+
+      if (!canSyncApiData()) {
+        if (cachedData === undefined) {
+          setError("You're offline and this data has not been cached yet.");
+        }
+        setLoading(false);
+        return;
+      }
 
       setError(null);
       try {
@@ -322,7 +328,7 @@ export function useApiData<T>(url: string, initialValue: T, options?: { enabled?
     return () => {
       cancelled = true;
     };
-  }, [enabled, url]);
+  }, [enabled, syncRevision, url]);
 
   return { data, loading, error, setData };
 }

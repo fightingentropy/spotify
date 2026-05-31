@@ -1,7 +1,9 @@
 "use client";
 
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
+import { isOfflinePlaybackSong } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
+import { resolveOfflinePlaybackSong } from "@/client/offline";
 
 const PLAYBACK_CACHE = "spotify-playback-v1";
 const PLAYBACK_WARM_BYTES = 512 * 1024;
@@ -97,8 +99,16 @@ async function pumpWarmPlaybackQueue(): Promise<void> {
 }
 
 export function warmPlaybackSong(song: PlayerSong, priority = false): void {
-  if (typeof window === "undefined" || isBrowserLocalSong(song) || !sameOriginCacheableUrl(song.audioUrl)) return;
-  const url = resolveUrl(song.audioUrl);
+  const playbackSong = resolveOfflinePlaybackSong(song);
+  if (
+    typeof window === "undefined" ||
+    isBrowserLocalSong(playbackSong) ||
+    isOfflinePlaybackSong(playbackSong) ||
+    !sameOriginCacheableUrl(playbackSong.audioUrl)
+  ) {
+    return;
+  }
+  const url = resolveUrl(playbackSong.audioUrl);
   const seenAt = warmPlaybackSeen.get(url);
   const timestamp = now();
   if (seenAt && timestamp - seenAt < PLAYBACK_WARM_DEDUPE_MS) {
@@ -127,10 +137,15 @@ export function warmPlaybackSong(song: PlayerSong, priority = false): void {
 
 export async function prefetchUpcomingPlayback(queue: PlayerSong[], currentIndex: number): Promise<void> {
   if (shouldSkipSpeculativeMediaFetch()) return;
-  const upcoming = queue.slice(currentIndex + 1, currentIndex + 4).filter((song) => !isBrowserLocalSong(song));
-  const audioUrls = uniqueStrings(upcoming.map((song) => song.audioUrl)).filter(sameOriginCacheableUrl);
+  const upcoming = queue
+    .slice(currentIndex + 1, currentIndex + 4)
+    .map((song) => resolveOfflinePlaybackSong(song))
+    .filter((song) => !isBrowserLocalSong(song));
+  const audioUrls = uniqueStrings(
+    upcoming.filter((song) => !isOfflinePlaybackSong(song)).map((song) => song.audioUrl),
+  ).filter(sameOriginCacheableUrl);
   const sidecarUrls = uniqueStrings(
-    upcoming.flatMap((song) => [song.imageUrl, song.lyricsUrl]),
+    upcoming.filter((song) => !isOfflinePlaybackSong(song)).flatMap((song) => [song.imageUrl, song.lyricsUrl]),
   ).filter(sameOriginCacheableUrl);
 
   for (const url of audioUrls) {

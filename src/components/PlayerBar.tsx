@@ -9,10 +9,11 @@ import { cn, formatTime } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
-import { isRadioSong } from "@/lib/player-song";
+import { isOfflinePlaybackSong, isRadioSong } from "@/lib/player-song";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
 import { prefetchUpcomingPlayback } from "@/client/playback-warm";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 function resolvePlayableSrc(src: string): string {
   if (/^(blob:|data:|https?:)/i.test(src)) return src;
@@ -115,10 +116,19 @@ function PlayerBar(): React.ReactElement | null {
   const likedLookup = useLikesStore((state) => state.likedSongIds);
   const pendingLookup = useLikesStore((state) => state.pending);
   const likesHydrated = useLikesStore((state) => state.hydrated);
+  const hydrateOffline = useOfflineStore((state) => state.hydrate);
+  const offlineRecords = useOfflineStore((state) => state.records);
 
-  const currentSongId = currentSong?.id ?? null;
-  const currentSongIsBrowserLocal = isBrowserLocalSong(currentSong);
-  const currentSongIsRadio = isRadioSong(currentSong);
+  const resolvePlaybackSong = useCallback((song: PlayerSong) => resolveOfflinePlaybackSong(song), [offlineRecords]);
+  const playbackSong = useMemo(
+    () => (currentSong ? resolvePlaybackSong(currentSong) : null),
+    [currentSong, resolvePlaybackSong],
+  );
+
+  const currentSongId = playbackSong?.id ?? null;
+  const currentSongIsBrowserLocal = isBrowserLocalSong(playbackSong);
+  const currentSongIsRadio = isRadioSong(playbackSong);
+  const currentSongIsOffline = isOfflinePlaybackSong(playbackSong);
   const songIsLiked = currentSongId ? !!likedLookup[currentSongId] : false;
   const likePending = currentSongId ? !!pendingLookup[currentSongId] : false;
 
@@ -163,7 +173,11 @@ function PlayerBar(): React.ReactElement | null {
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
-  const src = currentSong?.audioUrl || null;
+  const src = playbackSong?.audioUrl || null;
+
+  useEffect(() => {
+    void hydrateOffline();
+  }, [hydrateOffline]);
 
   const unloadAudioSource = useCallback((audio: HTMLAudioElement) => {
     const current = audioSourceStateRef.current.get(audio);
@@ -227,6 +241,22 @@ function PlayerBar(): React.ReactElement | null {
     cancel?.();
   }, []);
 
+  const resetPendingSeek = useCallback(() => {
+    if (pendingSeekTimeoutRef.current != null) {
+      window.clearTimeout(pendingSeekTimeoutRef.current);
+      pendingSeekTimeoutRef.current = null;
+    }
+    pendingSeekRef.current = null;
+    lastSeekTargetRef.current = null;
+    resumeAfterSeekRef.current = false;
+  }, []);
+
+  const resetPlaybackClock = useCallback((nextDuration = 0) => {
+    resetPendingSeek();
+    setCurrentTime(0);
+    setDuration(finiteMediaDuration(nextDuration) ?? 0);
+  }, [resetPendingSeek]);
+
   const playAudio = useCallback((audio: HTMLAudioElement): Promise<boolean> => {
     const requestId = ++playRequestIdRef.current;
     return audio.play()
@@ -248,6 +278,9 @@ function PlayerBar(): React.ReactElement | null {
       if (!audio) return;
 
       cancelActiveCrossfade();
+      if (audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(detail.audioUrl)) {
+        resetPlaybackClock();
+      }
       loadAudioSource(audio, detail.audioUrl);
       isPlayingRef.current = true;
       void playAudio(audio);
@@ -255,7 +288,7 @@ function PlayerBar(): React.ReactElement | null {
 
     window.addEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
     return () => window.removeEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
-  }, [cancelActiveCrossfade, getActiveAudio, loadAudioSource, playAudio]);
+  }, [cancelActiveCrossfade, getActiveAudio, loadAudioSource, playAudio, resetPlaybackClock]);
 
   const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
     if (!isPlayingRef.current || audio !== getActiveAudio()) return;
@@ -311,7 +344,7 @@ function PlayerBar(): React.ReactElement | null {
   }, [duration, getActiveAudio, performSeek]);
 
   useMediaSession({
-    song: currentSong,
+    song: playbackSong,
     isPlaying,
     currentTime,
     duration,
@@ -325,8 +358,8 @@ function PlayerBar(): React.ReactElement | null {
   });
 
   useEffect(() => {
-    if (!currentSongIsRadio) requestMediaCache(currentSong);
-  }, [currentSong?.id, currentSong?.audioUrl, currentSong?.imageUrl, currentSongIsRadio]);
+    if (!currentSongIsRadio && !currentSongIsOffline) requestMediaCache(playbackSong);
+  }, [playbackSong?.id, playbackSong?.audioUrl, playbackSong?.imageUrl, currentSongIsOffline, currentSongIsRadio]);
 
   useEffect(() => {
     return () => {
@@ -456,7 +489,7 @@ function PlayerBar(): React.ReactElement | null {
   }, [setSong, setQueue, pause]);
 
   useEffect(() => {
-    if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio) return;
+    if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsOffline) return;
 
     let cancelled = false;
     const songId = currentSongId;
@@ -478,7 +511,7 @@ function PlayerBar(): React.ReactElement | null {
     return () => {
       cancelled = true;
     };
-  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsRadio, replaceSong]);
+  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsRadio, replaceSong]);
 
   useEffect(() => {
     if (!currentSongId) {
@@ -503,10 +536,11 @@ function PlayerBar(): React.ReactElement | null {
     if (!src) {
       unloadAudioSource(audio);
       if (other) unloadAudioSource(other);
-      setCurrentTime(0);
-      setDuration(0);
+      resetPlaybackClock();
       return;
     }
+    const sourceChanged = audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(src);
+    if (sourceChanged) resetPlaybackClock(playbackSong?.duration ?? 0);
     loadAudioSource(audio, src);
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
@@ -520,7 +554,7 @@ function PlayerBar(): React.ReactElement | null {
       playRequestIdRef.current += 1;
       audio.pause();
     }
-  }, [src, isPlaying, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio]);
+  }, [src, isPlaying, playbackSong?.duration, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio, resetPlaybackClock]);
 
   // Crossfade: if enabled, monitor active element time and overlap next track
   useEffect(() => {
@@ -585,12 +619,13 @@ function PlayerBar(): React.ReactElement | null {
           return;
         }
         if (!nextSong) { crossfadingRef.current = false; return; }
-        const nextSongId = nextSong.id;
+        const nextPlaybackSong = resolvePlaybackSong(nextSong);
+        const nextSongId = nextPlaybackSong.id;
         const nextIndexToCommit = nextIdx;
 
         // Prepare incoming track
         suppressAutoLoadRef.current = true;
-        if (nextSong.audioUrl) loadAudioSource(incoming, nextSong.audioUrl);
+        if (nextPlaybackSong.audioUrl) loadAudioSource(incoming, nextPlaybackSong.audioUrl);
         incoming.currentTime = 0;
         incoming.volume = 0;
 
@@ -663,7 +698,7 @@ function PlayerBar(): React.ReactElement | null {
         cancelFade();
       }
     };
-  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, shuffle]);
+  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, resolvePlaybackSong, shuffle]);
 
   // Save queue/song and playback position right before page unload
   useEffect(() => {
@@ -718,9 +753,9 @@ function PlayerBar(): React.ReactElement | null {
       pause();
       return;
     }
-    requestImmediatePlayback(currentSong);
+    requestImmediatePlayback(playbackSong);
     play();
-  }, [currentSong, isPlaying, pause, play]);
+  }, [playbackSong, isPlaying, pause, play]);
 
   // Global keyboard shortcuts (always register to keep hook order stable)
   useEffect(() => {
@@ -864,7 +899,7 @@ function PlayerBar(): React.ReactElement | null {
     </>
   );
 
-  if (!currentSong) return audioElements;
+  if (!playbackSong) return audioElements;
   const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !currentSongIsRadio;
   const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
   const progress = hasSeekableDuration ? Math.min(100, Math.max(0, (safeCurrentTime / duration) * 100)) : 0;
@@ -878,7 +913,7 @@ function PlayerBar(): React.ReactElement | null {
           <NowPlayingSheet
             open={nowPlayingOpen}
             onClose={() => setNowPlayingOpen(false)}
-            song={currentSong}
+            song={playbackSong}
             isPlaying={isPlaying}
             currentTime={safeCurrentTime}
             duration={hasSeekableDuration ? duration : 0}
@@ -907,7 +942,7 @@ function PlayerBar(): React.ReactElement | null {
             aria-label="Open now playing"
           >
             <CoverImage
-              src={currentSong.imageUrl || "/apple-icon.png"}
+              src={playbackSong.imageUrl || "/apple-icon.png"}
               alt="cover"
               width={48}
               height={48}
@@ -915,8 +950,8 @@ function PlayerBar(): React.ReactElement | null {
               sizes="48px"
             />
             <div className="min-w-0">
-              <div className="text-[15px] font-medium leading-5 truncate text-white">{currentSong.title}</div>
-              <div className="text-[13px] leading-5 text-white/[0.62] truncate">{currentSong.artist}</div>
+              <div className="text-[15px] font-medium leading-5 truncate text-white">{playbackSong.title}</div>
+              <div className="text-[13px] leading-5 text-white/[0.62] truncate">{playbackSong.artist}</div>
             </div>
           </button>
           {!currentSongIsRadio ? (
@@ -949,7 +984,7 @@ function PlayerBar(): React.ReactElement | null {
       <div className="hidden h-[84px] grid-cols-[minmax(15rem,1fr)_minmax(27rem,44rem)_minmax(15rem,1fr)] items-center gap-4 px-4 py-3 sm:px-6 lg:grid">
         <div className="flex min-w-0 items-center justify-start gap-3 sm:gap-4">
           <CoverImage
-            src={currentSong.imageUrl || "/apple-icon.png"}
+            src={playbackSong.imageUrl || "/apple-icon.png"}
             alt="cover"
             width={48}
             height={48}
@@ -957,8 +992,8 @@ function PlayerBar(): React.ReactElement | null {
             sizes="48px"
           />
           <div className="min-w-0 max-w-[20rem]">
-            <div className="truncate text-[15px] font-medium leading-5 text-white">{currentSong.title}</div>
-            <div className="truncate text-[13px] leading-5 text-white/[0.62]">{currentSong.artist}</div>
+            <div className="truncate text-[15px] font-medium leading-5 text-white">{playbackSong.title}</div>
+            <div className="truncate text-[13px] leading-5 text-white/[0.62]">{playbackSong.artist}</div>
           </div>
           {!currentSongIsRadio ? (
             <button

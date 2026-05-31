@@ -6,6 +6,7 @@ import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
 import { isRadioSong } from "@/lib/player-song";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type LyricsState = {
   status: "idle" | "loading" | "ready" | "error";
@@ -38,7 +39,12 @@ function parseCredits(artist: string): Array<{ name: string; role: string }> {
 export default function NowPlayingSidebar() {
   const currentSong = usePlayerStore((state) => state.currentSong);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
-  const liveStream = isRadioSong(currentSong);
+  const offlineRecords = useOfflineStore((state) => state.records);
+  const displaySong = useMemo(
+    () => (currentSong ? resolveOfflinePlaybackSong(currentSong) : null),
+    [currentSong, offlineRecords],
+  );
+  const liveStream = isRadioSong(displaySong);
 
   const [collapsed, setCollapsed] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
@@ -49,20 +55,20 @@ export default function NowPlayingSidebar() {
   const loadedLyricsKeyRef = useRef<string | null>(null);
 
   const credits = useMemo(
-    () => parseCredits(currentSong?.artist || ""),
-    [currentSong?.artist],
+    () => parseCredits(displaySong?.artist || ""),
+    [displaySong?.artist],
   );
 
   useEffect(() => {
     if (!showLyrics) return;
 
-    const lyricsUrl = currentSong?.lyricsUrl;
+    const lyricsUrl = displaySong?.lyricsUrl;
     if (!lyricsUrl) {
       setLyricsState({ status: "idle", text: "" });
       loadedLyricsKeyRef.current = null;
       return;
     }
-    const lyricsKey = `${currentSong?.id ?? ""}:${lyricsUrl}`;
+    const lyricsKey = `${displaySong?.id ?? ""}:${lyricsUrl}`;
     if (loadedLyricsKeyRef.current === lyricsKey) {
       return;
     }
@@ -95,7 +101,7 @@ export default function NowPlayingSidebar() {
     return () => {
       cancelled = true;
     };
-  }, [currentSong?.id, currentSong?.lyricsUrl, showLyrics]);
+  }, [displaySong?.id, displaySong?.lyricsUrl, showLyrics]);
 
   return (
     <aside
@@ -129,22 +135,22 @@ export default function NowPlayingSidebar() {
               Now Playing
             </span>
           </div>
-        ) : !currentSong ? (
+        ) : !displaySong ? (
           <div className="h-full grid place-items-center text-[15px] leading-6 text-white/[0.62] text-center px-4">
             Select a song to see now playing details.
           </div>
         ) : (
           <div className="space-y-5 pb-4">
             <img
-              src={normalizeCoverImageUrl(currentSong.imageUrl)}
-              alt={currentSong.title}
+              src={normalizeCoverImageUrl(displaySong.imageUrl)}
+              alt={displaySong.title}
               loading="eager"
               className="w-full aspect-square rounded-md object-cover bg-white/[0.08]"
             />
 
             <div>
-              <div className="text-[22px] font-semibold leading-tight text-white">{currentSong.title}</div>
-              <div className="text-[16px] leading-6 text-white/[0.68] mt-1">{currentSong.artist}</div>
+              <div className="text-[22px] font-semibold leading-tight text-white">{displaySong.title}</div>
+              <div className="text-[16px] leading-6 text-white/[0.68] mt-1">{displaySong.artist}</div>
               <div className="text-[13px] leading-5 text-white/[0.55] mt-1">
                 {isPlaying ? "Playing" : "Paused"}
               </div>

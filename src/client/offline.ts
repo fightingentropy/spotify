@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { PlayerSong } from "@/types/player";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
+import { isOfflinePlaybackSong, preferOfflinePlaybackSong } from "@/lib/player-song";
 
 export type DownloadScope = "home" | "liked" | `playlist:${string}` | `song:${string}`;
 export type OfflineDownloadStatus = "queued" | "downloading" | "downloaded" | "failed";
@@ -1022,6 +1023,26 @@ export function getSongDownloadState(
   record: OfflineDownloadRecord | undefined,
 ): OfflineDownloadStatus | "none" {
   return record?.status ?? "none";
+}
+
+export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong;
+export function resolveOfflinePlaybackSong(song: PlayerSong | null | undefined): PlayerSong | null | undefined;
+export function resolveOfflinePlaybackSong(song: PlayerSong | null | undefined): PlayerSong | null | undefined {
+  if (!song || isBrowserLocalSong(song) || isOfflinePlaybackSong(song)) return song;
+  const record = useOfflineStore.getState().records[song.id];
+  if (record?.status !== "downloaded") return song;
+
+  return preferOfflinePlaybackSong({
+    ...record.song,
+    ...song,
+    album: song.album ?? record.song.album,
+    duration: song.duration ?? record.song.duration,
+    audioBitDepth: song.audioBitDepth ?? record.song.audioBitDepth,
+    audioSampleRate: song.audioSampleRate ?? record.song.audioSampleRate,
+    audioUrl: record.audioUrl || record.song.audioUrl || song.audioUrl,
+    imageUrl: record.imageUrl || song.imageUrl,
+    lyricsUrl: record.lyricsUrl ?? song.lyricsUrl ?? record.song.lyricsUrl,
+  });
 }
 
 export function getScopeDownloadState(
