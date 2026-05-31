@@ -1,158 +1,89 @@
-# Enhanced Spotify Features
+# Current Spotify App Features
 
-Your Spotify app now includes advanced features that match and exceed SpotiFLAC's capabilities:
+This app is a private Spotify-style music library for the Mac mini. The public
+site is served at `https://spotify.fightingentropy.org` through direct Caddy, and
+the music files live on the Mac mini at `/Users/hermes/Music`.
 
-## 🎵 Batch Downloads
+## Playback
 
-### Supported Batch Types:
-- **Albums**: Download entire albums from Spotify album URLs
-- **Playlists**: Download all tracks from Spotify playlists
-- **Individual Tracks**: Standard single track downloads
+- Streams local Mac mini tracks through direct Caddy with HTTP range support.
+- Keeps FLAC as the server-side import format by default.
+- Supports native browser playback for FLAC, M4A/AAC, MP3, WAV, OGG, Opus, and
+  other formats the browser can decode.
+- Starts playback inside the original click/keyboard gesture so browser
+  autoplay protections do not block normal play actions.
+- Uses a persistent dual-audio player for crossfade and seamless source changes.
+- Supports shuffle, repeat, previous/next, seeking, volume, mute, media-session
+  controls, and resume position.
+- Prefetches nearby playback assets and upcoming tracks for faster starts.
 
-### Usage:
-1. Paste a Spotify album or playlist URL in the download field
-2. Select your preferred quality and format settings
-3. Click "Fetch" to analyze the batch
-4. Review the batch information (track count, format, etc.)
-5. Click "Download All" to start the batch download
+## Library
 
-## 🎧 Multiple Audio Formats
+- Scans `/Users/hermes/Music` on the Mac mini and builds the app library from
+  audio files plus `.spotify.json` sidecars.
+- Reads embedded metadata, local sidecar metadata, cover files, embedded cover
+  art, and lyrics files when present.
+- Uses remote artwork lookup as a fallback when local or embedded art is
+  missing.
+- Provides Home, Search, Liked Songs, Downloads, Radio Stations, Upload,
+  Library, Settings, and Profile routes.
+- Shows built-in library collections separately from custom playlists.
+- Displays existing custom playlists from the Worker/D1 backend when present.
+- Supports playlist reordering for existing custom playlists, including offline
+  mutation queueing.
 
-### Supported Output Formats:
-- **FLAC**: Lossless compression (default)
-- **WAV**: Uncompressed PCM audio
-- **MP3**: 320kbps high-quality lossy (browser dependent)
-- **AAC/M4A**: Advanced Audio Codec (browser dependent)
-- **OGG Vorbis**: Open-source lossy format (browser dependent)
-- **Opus**: Modern low-latency codec (browser dependent)
+## Import And Upload
 
-### Format Availability:
-Format support depends on your browser's capabilities. The app automatically detects which formats your browser can encode and only shows supported options.
+- Manual uploads accept audio files plus optional title, artist, cover art, and
+  lyrics.
+- Spotify import accepts track, album, playlist, and Liked Songs URLs.
+- Liked Songs import requires a Spotify `sp_dc` cookie.
+- Provider selection supports Auto, Qobuz, and Tidal.
+- Quality profiles are CD quality, 24-bit/48 kHz, and max available.
+- Server imports save FLAC/original audio to the Mac mini music folder.
+- Browser/local saves can convert to MP3, AAC/M4A, OGG, Opus, or WAV when the
+  current browser supports the encoder.
+- Imports can include synchronized LRC lyrics when available, with plain-text
+  fallback.
 
-## 📊 Enhanced Metadata
+## Offline
 
-### Comprehensive Track Information:
-- **Basic Metadata**: Title, Artist, Album, Album Artist
-- **Track Details**: Track/Disc numbers, Total tracks/discs
-- **Release Information**: Release date, Genre
-- **Industry Codes**: ISRC (International Standard Recording Code), UPC (Universal Product Code)
-- **Credits**: Composer, Publisher, Copyright information
-- **Technical**: Bit depth, Sample rate, Duration
+- Songs, liked songs, playlists, artwork, and lyrics can be downloaded for
+  offline playback on the current device.
+- Offline API snapshots allow cached pages to open while offline after they have
+  been visited once.
+- Like changes, playlist reorders, and metadata/asset edits can queue offline
+  and sync later.
+- Settings includes storage usage, quota, persistent-storage status, retry,
+  manual sync, playback-cache clearing, and download clearing.
 
-### Metadata Sources:
-- **Spotify Web API**: Basic track information
-- **Deezer API**: Extended metadata including ISRC, UPC, genre
-- **MusicBrainz**: Composer and publisher information (when ISRC available)
-- **Song.link**: Cross-platform track matching
+## Settings
 
-## ⚙️ Quality Profiles
+- Playback: crossfade on/off and duration from 0 to 12 seconds.
+- Offline: local download/cache management and sync status.
+- Downloads: provider and quality profile.
+- Operational controls and internal status panels are intentionally kept out of
+  normal app chrome.
 
-### Available Quality Settings:
-- **CD Quality**: 16-bit/44.1kHz (standard CD quality)
-- **Hi-Res 48kHz**: 24-bit/48kHz (studio quality)
-- **Maximum**: Highest quality available from the source
+## Production Architecture
 
-### Download Sources:
-- **Auto**: Automatically selects the best available source (Qobuz → Tidal)
-- **Qobuz**: Prioritizes Qobuz for lossless downloads
-- **Tidal**: Uses Tidal's streaming service
-- **Amazon Music**: Fallback option for unavailable tracks
+- Public app: `https://spotify.fightingentropy.org`
+- Mac mini app/server: `http://m4mini.local:5174`
+- Worker backend: `https://spotify.erlinhoxha.workers.dev`
+- Music server launchd service: `com.fightingentropy.spotify-app`
+- Shared Caddy launchd service: `com.fightingentropy.netflix-caddy`
+- DNS drift watcher launchd service: `com.fightingentropy.spotify-dns-watch`
 
-## 🌐 Cross-Platform Features
+Caddy serves the frontend and direct media routes from the Mac mini. Browser API
+requests for auth/import/library metadata go to the Worker backend, and trusted
+Worker-to-Mac-mini requests use `MAC_MINI_PROXY_TOKEN` and `SPOTIFY_PROXY_TOKEN`.
 
-### Web App Benefits:
-- **Universal Access**: Works on desktop, mobile, and tablet browsers
-- **No Installation**: Runs directly in your browser
-- **Cloud Storage**: Files stored securely in Cloudflare R2
-- **Progressive Web App**: Install as native app on supported devices
+## Operational Checks
 
-### Local Library Integration:
-- **Folder Selection**: Choose local folder for direct file saving
-- **Automatic Organization**: Files organized by artist/album structure
-- **Metadata Embedding**: Full metadata written to audio files
-- **Cover Art**: High-quality album artwork included
-
-## 🎼 Advanced Features
-
-### Lyrics Support:
-- **Multiple Sources**: Spotify Lyrics API, LRCLib
-- **Synchronized Lyrics**: Time-stamped LRC format when available
-- **Plain Text**: Standard lyrics as fallback
-- **Automatic Detection**: Lyrics fetched automatically during download
-
-### Playlist Management:
-- **Personal Library**: Create and manage custom playlists
-- **Like System**: Mark favorite tracks
-- **Search & Browse**: Find tracks in your library
-- **Streaming Playback**: Play downloaded tracks directly in the app
-
-### User Features:
-- **Account System**: Secure user accounts with authentication
-- **Cloud Sync**: Access your library from any device
-- **Upload Support**: Add your own music files to the library
-- **Settings**: Customize download preferences and quality settings
-
-## 🔧 Technical Implementation
-
-### Backend Capabilities:
-- **Cloudflare Workers**: Serverless backend for scalability
-- **D1 Database**: SQLite-compatible database for metadata
-- **R2 Storage**: Object storage for audio files and artwork
-- **Rate Limiting**: Intelligent request throttling
-- **Error Handling**: Comprehensive error recovery
-
-### Audio Processing:
-- **Web Audio API**: Client-side audio format conversion
-- **MediaRecorder API**: Native browser encoding for supported formats
-- **Metadata Preservation**: Full tag information retained across conversions
-- **Quality Optimization**: Automatic bitrate and sample rate selection
-
-## 🚀 Performance Features
-
-### Optimizations:
-- **Parallel Processing**: Multiple downloads can run simultaneously
-- **Streaming Downloads**: Large files streamed efficiently
-- **Caching**: Intelligent caching of metadata and artwork
-- **Compression**: Efficient data transfer and storage
-
-### Browser Compatibility:
-- **Modern Browsers**: Chrome, Firefox, Safari, Edge
-- **Mobile Support**: iOS Safari, Android Chrome
-- **PWA Features**: Offline capability, app-like experience
-- **Responsive Design**: Optimized for all screen sizes
-
-## 📝 Usage Notes
-
-### Best Practices:
-1. **Format Selection**: Choose FLAC for archival quality, MP3 for compatibility
-2. **Quality Settings**: Use "Maximum" for best results, "CD" for smaller files
-3. **Batch Downloads**: Monitor progress for large albums/playlists
-4. **Metadata**: Review and edit metadata after download if needed
-
-### Limitations:
-- **Format Conversion**: Some formats require browser support
-- **Batch Size**: Maximum 100 tracks per batch operation
-- **Rate Limits**: API calls are throttled to prevent blocking
-- **Regional Availability**: Track availability varies by region
-
-## 🆚 Comparison with SpotiFLAC
-
-### Advantages Over SpotiFLAC:
-✅ **Full Music Library**: Complete streaming and library management
-✅ **Web-Based**: No installation required, works on any device
-✅ **Cloud Storage**: Access files from anywhere
-✅ **User Accounts**: Personal libraries and settings
-✅ **Upload Support**: Add your own music files
-✅ **Playlist Creation**: Organize downloaded music
-✅ **Real-time Streaming**: Play music directly in the app
-
-### SpotiFLAC Features Now Supported:
-✅ **Batch Downloads**: Albums and playlists
-✅ **Multiple Formats**: FLAC, MP3, AAC, OGG, Opus, WAV
-✅ **Enhanced Metadata**: ISRC, UPC, composer, publisher
-✅ **Quality Selection**: CD, Hi-Res, Maximum
-✅ **Multiple Sources**: Qobuz, Tidal, Amazon Music
-✅ **Lyrics Support**: Synchronized and plain text
-✅ **Cover Art**: High-quality album artwork
-
-Your Spotify app now provides a comprehensive music downloading and library management solution that exceeds SpotiFLAC's capabilities while offering the convenience of a web-based platform with cloud storage and streaming features.
+- `bun run mini:check` verifies the Mac mini server, launchd state, scan count,
+  and LAN reachability.
+- `bun run mini:install-caddy` installs or refreshes the direct Caddy route.
+- `bun run mini:install-dns-watch` installs or refreshes the DNS drift watcher.
+- Live media health should include a `206` response for FLAC range requests.
+- DNS watch logs should show `dns_ok` in
+  `/Users/hermes/.local/state/spotify/dns-watch.log`.

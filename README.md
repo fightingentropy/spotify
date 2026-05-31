@@ -59,7 +59,7 @@ media path.
   - `com.fightingentropy.spotify-app`
 - Keep the shared Caddy launchd service running:
   - `com.fightingentropy.netflix-caddy`
-- Keep the Cloudflare DNS drift watcher launchd service running:
+- Keep the DNS drift watcher launchd service running:
   - `com.fightingentropy.spotify-dns-watch`
 - `m4mini.local` only works on the LAN. Public traffic should reach the Mac mini
   through the router's 80/443 port forwards and the direct DNS-only record for
@@ -100,6 +100,7 @@ media path.
   scan count, and LAN reachability.
 - `wrangler.jsonc` - Cloudflare Worker bindings, `workers.dev` backend, and
   `MAC_MINI_ORIGIN`.
+- `FEATURES.md` - current user-facing features and production capabilities.
 
 ## Local Development
 
@@ -142,7 +143,7 @@ Install/update the direct Caddy route:
 bun run mini:install-caddy
 ```
 
-Install/update the Cloudflare DNS drift watcher:
+Install/update the DNS drift watcher:
 
 ```bash
 bun run mini:install-dns-watch
@@ -205,7 +206,7 @@ SPOTIFY_DNS_WATCH_NAME=spotify.fightingentropy.org
 Useful checks after deploy:
 
 ```bash
-bun --bun tsc --noEmit
+bun run typecheck
 bun run lint
 bun run build
 bun run mini:check
@@ -229,6 +230,8 @@ Expected behavior:
 ## API Surface
 
 - `GET /api/home`
+- `GET /api/search-index`
+- `GET /api/music/source`
 - `GET /api/library`
 - `GET /api/liked`
 - `GET /api/playlist/:id`
@@ -243,10 +246,14 @@ Expected behavior:
 - `POST /api/songs/spotify/batch`
 - `GET /api/songs/spotify/cover`
 - `GET /api/files/*`
+- `GET /api/files/local/*`
 - `GET /api/artwork/*`
+- `GET /api/artwork/local/*`
+- `GET /api/artwork/r2/*`
 - `GET/POST/DELETE /api/likes`
 - `POST /api/register`
 - `GET /api/auth/session`
+- `GET /api/auth/me`
 - `POST /api/auth/signin`
 - `POST /api/auth/signout`
 
@@ -260,6 +267,7 @@ Expected behavior:
 - `bun run local:music` - run the Bun local music server.
 - `bun run mini:deploy` - deploy build/server to Mac mini.
 - `bun run mini:install-server` - install Mac mini launchd app service.
+- `bun run mini:install-caddy` - install direct Caddy route.
 - `bun run mini:install-dns-watch` - install DNS drift watcher launchd service.
 - `bun run mini:sync-music` - sync music files to Mac mini.
 - `bun run mini:check` - verify Mac mini health.
