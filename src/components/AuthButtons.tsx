@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
+import { ChevronDown, LogIn, LogOut, Settings, UserRound } from "lucide-react";
 import { useAuth } from "@/client/auth";
 
 export const PROFILE_IMAGE_URL = "/profile.jpg";
@@ -12,6 +12,29 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
   const navigate = useNavigate();
 
   if (compact) {
+    if (status === "loading") {
+      return (
+        <div
+          className="h-10 w-10 shrink-0 rounded-full border border-white/[0.12] bg-white/[0.06]"
+          aria-label="Checking session"
+          title="Checking session"
+        />
+      );
+    }
+
+    if (!user) {
+      return (
+        <Link
+          to="/signin"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.06] text-white/[0.76] transition hover:border-white/[0.32] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+          aria-label="Sign in"
+          title="Sign in"
+        >
+          <LogIn size={20} />
+        </Link>
+      );
+    }
+
     return (
       <Link
         to="/profile"

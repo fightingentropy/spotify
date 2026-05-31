@@ -5,9 +5,18 @@ import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
   plugins: [react(), cloudflare()],
+  legacy: {
+    skipWebSocketTokenCheck: true,
+  },
   server: {
     port: 5174,
     strictPort: true,
+    hmr: {
+      protocol: "ws",
+      host: "127.0.0.1",
+      port: 5175,
+      clientPort: 5175,
+    },
   },
   preview: {
     port: 5174,

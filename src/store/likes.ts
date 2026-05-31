@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { patchLikeApiCache } from "@/client/api";
+import { queueOfflineMutation } from "@/client/offline";
 import type { PlayerSong } from "@/types/player";
 
 type LikeToggleResult = {
@@ -158,7 +159,6 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: true, status: response.status };
     } catch (error) {
       try {
-        const { queueOfflineMutation } = await import("@/client/offline");
         await queueOfflineMutation({
           type: "like",
           payload: { songId, nextLiked, song },

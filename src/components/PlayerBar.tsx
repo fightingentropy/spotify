@@ -72,7 +72,7 @@ let hlsConstructorPromise: Promise<HlsConstructor | null> | null = null;
 const NowPlayingSheet = lazy(() => import("@/components/NowPlayingSheet"));
 
 function loadHlsConstructor(): Promise<HlsConstructor | null> {
-  hlsConstructorPromise ??= import("hls.js")
+  hlsConstructorPromise ??= import("hls.js/light")
     .then((module) => module.default as HlsConstructor)
     .catch(() => null);
   return hlsConstructorPromise;

@@ -467,6 +467,19 @@ function parseStorageKeyFromApiPath(pathname: string): string {
   return parseStorageKeyFromPathSuffix(pathname.slice("/api/files/".length));
 }
 
+async function storageKeyBelongsToUser(db: SqlTag, key: string, userId: string): Promise<boolean> {
+  await ensureSongColumns(db);
+  const fileUrl = toApiFileUrl(key);
+  const rows = await db<{ id: string }>`
+    SELECT "id"
+    FROM "Song"
+    WHERE "userId" = ${userId}
+      AND ("audioUrl" = ${fileUrl} OR "imageUrl" = ${fileUrl} OR "lyricsUrl" = ${fileUrl})
+    LIMIT 1
+  `;
+  return Boolean(rows[0]);
+}
+
 function parseArtworkWidth(value: string | undefined): number {
   const width = Number(value || 0);
   if (!Number.isFinite(width) || width <= 0) return 256;
@@ -1018,21 +1031,25 @@ async function listPlaylists(db: SqlTag, userId: string | null) {
   return rows.map((row) => ({ ...row, songsCount: Number(row.songsCount ?? 0) }));
 }
 
-async function listSongs(db: SqlTag) {
+async function listSongs(db: SqlTag, userId: string | null) {
   await ensureSongColumns(db);
+  if (!userId) return [];
   return db<SongRow>`
     SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
     FROM "Song"
+    WHERE "userId" = ${userId}
     ORDER BY "title" ASC
     LIMIT 5000
   `;
 }
 
-async function listSearchSongs(db: SqlTag) {
+async function listSearchSongs(db: SqlTag, userId: string | null) {
   await ensureSongColumns(db);
+  if (!userId) return [];
   const rows = await db<Pick<SongRow, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "createdAt">>`
     SELECT "id", "title", "artist", "imageUrl", "audioUrl", "createdAt"
     FROM "Song"
+    WHERE "userId" = ${userId}
     ORDER BY "createdAt" DESC
     LIMIT 5000
   `;
@@ -1284,16 +1301,21 @@ app.get("/api/home", async (c) => {
   const db = c.get("db");
   const user = c.get("user");
   const [songs, likes] = await Promise.all([
-    listSongs(db),
+    listSongs(db, user?.id ?? null),
     user
       ? db<{ songId: string }>`SELECT "songId" FROM "Like" WHERE "userId" = ${user.id}`
       : Promise.resolve([] as Array<{ songId: string }>),
   ]);
-  return jsonCached(c, { songs: songs.map(songToPlayerSong), likedSongIds: likes.map((like) => like.songId) });
+  const visibleSongIds = new Set(songs.map((song) => song.id));
+  return jsonCached(c, {
+    songs: songs.map(songToPlayerSong),
+    likedSongIds: likes.map((like) => like.songId).filter((songId) => visibleSongIds.has(songId)),
+  });
 });
 
 app.get("/api/search-index", async (c) => {
-  return jsonCached(c, { songs: await listSearchSongs(c.get("db")) }, {
+  const user = c.get("user");
+  return jsonCached(c, { songs: await listSearchSongs(c.get("db"), user?.id ?? null) }, {
     cacheControl: "private, max-age=300, stale-while-revalidate=600",
   });
 });
@@ -1313,6 +1335,7 @@ app.get("/api/liked", async (c) => {
     FROM "Like" l
     INNER JOIN "Song" s ON s."id" = l."songId"
     WHERE l."userId" = ${user.id}
+      AND s."userId" = ${user.id}
     ORDER BY l."createdAt" DESC
   `;
   return jsonCached(c, { songs: rows.map(songToPlayerSong), likedSongIds: rows.map((row) => row.songId) });
@@ -1564,7 +1587,10 @@ app.post("/api/songs/spotify", async (c) => {
   });
 });
 
-app.get("/api/songs", async (c) => jsonCached(c, await listSongs(c.get("db"))));
+app.get("/api/songs", async (c) => {
+  const user = c.get("user");
+  return jsonCached(c, await listSongs(c.get("db"), user?.id ?? null));
+});
 
 app.post("/api/songs", async (c) => {
   const user = requireUser(c.get("user"));
@@ -1706,11 +1732,13 @@ app.post("/api/songs", async (c) => {
 });
 
 app.get("/api/songs/:id", async (c) => {
+  const user = requireUser(c.get("user"));
   await ensureSongColumns(c.get("db"));
   const rows = await c.get("db")<SongRow>`
     SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
     FROM "Song"
     WHERE "id" = ${c.req.param("id")}
+      AND "userId" = ${user.id}
     LIMIT 1
   `;
   if (!rows[0]) return jsonError("Song not found", 404);
@@ -1787,9 +1815,11 @@ app.get("/api/likes", async (c) => {
   const user = c.get("user");
   if (!user) return jsonCached(c, { likes: [] });
   const likes = await c.get("db")<{ songId: string }>`
-    SELECT "songId"
-    FROM "Like"
-    WHERE "userId" = ${user.id}
+    SELECT l."songId"
+    FROM "Like" l
+    INNER JOIN "Song" s ON s."id" = l."songId"
+    WHERE l."userId" = ${user.id}
+      AND s."userId" = ${user.id}
   `;
   return jsonCached(c, { likes: likes.map((like) => like.songId) });
 });
@@ -1799,7 +1829,9 @@ app.post("/api/likes", async (c) => {
   const payload = await readJson<{ songId?: unknown }>(c.req.raw);
   const songId = toStringValue(payload?.songId);
   if (!songId) return jsonError("Missing songId", 400);
-  const song = await c.get("db")<{ id: string }>`SELECT "id" FROM "Song" WHERE "id" = ${songId} LIMIT 1`;
+  const song = await c.get("db")<{ id: string }>`
+    SELECT "id" FROM "Song" WHERE "id" = ${songId} AND "userId" = ${user.id} LIMIT 1
+  `;
   if (!song[0]) return jsonError("Song not found", 404);
   await c.get("db")`
     INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
@@ -1856,6 +1888,10 @@ app.post("/api/playlist/:id/reorder", async (c) => {
 
 app.get("/api/files/*", async (c) => {
   const key = normalizeStorageKey(parseStorageKeyFromApiPath(new URL(c.req.url).pathname));
+  const user = requireUser(c.get("user"));
+  if (!(await storageKeyBelongsToUser(c.get("db"), key, user.id))) {
+    return jsonError("Not found", 404);
+  }
   const object = await c.env.MEDIA.head(key);
   if (!object) return jsonError("Not found", 404);
   const size = Number(object.size || 0);
@@ -1881,7 +1917,7 @@ app.get("/api/files/*", async (c) => {
         "Content-Length": String(length),
         "Content-Range": `bytes ${parsed.start}-${parsed.end}/${size}`,
         "Accept-Ranges": "bytes",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "private, max-age=31536000, immutable",
       },
     });
   }
@@ -1891,7 +1927,7 @@ app.get("/api/files/*", async (c) => {
       "Content-Type": contentType,
       "Content-Length": String(size),
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "private, max-age=31536000, immutable",
     },
   });
 });
@@ -1899,6 +1935,10 @@ app.get("/api/files/*", async (c) => {
 app.get("/api/artwork/r2/*", async (c) => {
   const url = new URL(c.req.url);
   const key = normalizeStorageKey(parseStorageKeyFromPathSuffix(url.pathname.slice("/api/artwork/r2/".length)));
+  const user = requireUser(c.get("user"));
+  if (!(await storageKeyBelongsToUser(c.get("db"), key, user.id))) {
+    return jsonError("Not found", 404);
+  }
   const width = parseArtworkWidth(c.req.query("w"));
   const contentType = inferContentTypeFromKey(key).split(";")[0]?.trim() || "";
   if (!IMAGE_MIME_TYPES.has(contentType)) return jsonError("Unsupported artwork format", 415);
@@ -1918,7 +1958,7 @@ app.get("/api/artwork/r2/*", async (c) => {
       .output({ format: "image/webp", quality: 82, anim: false });
     const response = transformed.response();
     const headers = new Headers(response.headers);
-    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    headers.set("Cache-Control", "private, max-age=31536000, immutable");
     headers.set("Content-Type", transformed.contentType());
     const finalResponse = new Response(response.body, {
       status: response.status,
@@ -1932,7 +1972,7 @@ app.get("/api/artwork/r2/*", async (c) => {
     return new Response(fallback?.body ?? null, {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "private, max-age=31536000, immutable",
       },
     });
   }

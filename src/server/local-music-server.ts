@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { createWriteStream, existsSync } from "node:fs";
 import type { Stats } from "node:fs";
+import { isIP } from "node:net";
 import {
   mkdir,
   readFile,
@@ -12,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { parseFile } from "music-metadata";
@@ -119,6 +121,10 @@ const proxyHostnames = new Set(
 );
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
 const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
+const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
+const MAX_REMOTE_REDIRECTS = 5;
 
 let librarySnapshot: LibrarySnapshot | null = null;
 let scanPromise: Promise<LibrarySnapshot> | null = null;
@@ -184,6 +190,22 @@ function isLoopbackHost(host: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
 }
 
+function isPrivateIpv4Host(host: string): boolean {
+  const octets = host.split(".").map((part) => Number(part));
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  return (
+    octets[0] === 10 ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function isLocalNetworkHost(host: string): boolean {
+  return isLoopbackHost(host) || host === "m4mini.local" || host.endsWith(".local") || isPrivateIpv4Host(host);
+}
+
 function hasValidProxyToken(request: Request): boolean {
   return Boolean(proxyToken && request.headers.get("x-spotify-proxy-token") === proxyToken);
 }
@@ -204,7 +226,7 @@ function requestNeedsProxyToken(request: Request): boolean {
 }
 
 function allowsImplicitLocalUser(request: Request): boolean {
-  return !requestNeedsProxyToken(request) && isLoopbackHost(requestHostname(request));
+  return !requestNeedsProxyToken(request) && isLocalNetworkHost(requestHostname(request));
 }
 
 function isMutationRequest(request: Request): boolean {
@@ -474,6 +496,102 @@ function parseHttpUrl(value: string): URL | null {
   } catch {
     return null;
   }
+}
+
+function isPrivateOrReservedIpAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) {
+    const octets = address.split(".").map((part) => Number(part));
+    const [a, b] = octets;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+
+  if (family === 6) {
+    const normalized = address.toLowerCase();
+    if (normalized.startsWith("::ffff:")) {
+      return isPrivateOrReservedIpAddress(normalized.slice("::ffff:".length));
+    }
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe8") ||
+      normalized.startsWith("fe9") ||
+      normalized.startsWith("fea") ||
+      normalized.startsWith("feb") ||
+      normalized.startsWith("ff")
+    );
+  }
+
+  return true;
+}
+
+function isBlockedRemoteHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    !normalized ||
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    !normalized.includes(".") ||
+    (isIP(normalized) !== 0 && isPrivateOrReservedIpAddress(normalized))
+  );
+}
+
+async function assertPublicHttpUrl(url: URL): Promise<void> {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new RemoteUrlError("Only valid http(s) URLs are supported");
+  }
+  if (url.username || url.password) {
+    throw new RemoteUrlError("Remote URLs with credentials are not supported");
+  }
+  if (isBlockedRemoteHostname(url.hostname)) {
+    throw new RemoteUrlError("Remote URL host is not allowed");
+  }
+
+  const addresses = await lookup(url.hostname, { all: true }).catch(() => []);
+  if (!addresses.length) throw new RemoteUrlError("Remote URL host could not be resolved");
+  if (addresses.some(({ address }) => isPrivateOrReservedIpAddress(address))) {
+    throw new RemoteUrlError("Remote URL host resolves to a private network address");
+  }
+}
+
+async function fetchPublicHttpUrl(url: URL, init: RequestInit = {}, timeoutMs = 5_000): Promise<Response> {
+  let nextUrl = url;
+  let nextInit = { ...init };
+
+  for (let redirectCount = 0; redirectCount <= MAX_REMOTE_REDIRECTS; redirectCount += 1) {
+    await assertPublicHttpUrl(nextUrl);
+    const response = await fetchWithTimeout(
+      nextUrl.toString(),
+      { ...nextInit, redirect: "manual" },
+      timeoutMs,
+    );
+
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+
+    const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
+    if (!location) return response;
+
+    nextUrl = new URL(location, nextUrl);
+    if (response.status === 303) {
+      nextInit = { ...nextInit, method: "GET", body: undefined };
+    }
+  }
+
+  throw new RemoteUrlError("Remote URL redirected too many times");
 }
 
 function outputFormatFromPayload(value: unknown): OutputFormat {
@@ -901,13 +1019,68 @@ async function saveFile(file: File, path: string): Promise<void> {
   await writeFile(path, new Uint8Array(await file.arrayBuffer()));
 }
 
-async function saveResponseBody(response: Response, path: string): Promise<void> {
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function isSupportedUploadFile(file: File, allowedExtensions: Set<string>, mimePrefix: string): boolean {
+  const ext = extname(file.name).toLowerCase();
+  const mimeType = file.type.toLowerCase();
+  return allowedExtensions.has(ext) || (mimeType ? mimeType.startsWith(mimePrefix) : false);
+}
+
+function validateUploadFile(
+  file: File,
+  label: string,
+  maxBytes: number,
+  allowedExtensions?: Set<string>,
+  mimePrefix?: string,
+): Response | null {
+  if (file.size > maxBytes) {
+    return json({ error: `${label} is too large` }, { status: 413 });
+  }
+  if (allowedExtensions && mimePrefix && !isSupportedUploadFile(file, allowedExtensions, mimePrefix)) {
+    return json({ error: `${label} type is not supported` }, { status: 415 });
+  }
+  return null;
+}
+
+function assertRemoteResponseSize(response: Response, maxBytes: number, label: string): void {
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new PayloadTooLargeError(`${label} is too large`);
+  }
+}
+
+function byteLimitTransform(maxBytes: number, label: string): Transform {
+  let total = 0;
+  return new Transform({
+    transform(chunk: Buffer | Uint8Array, _encoding, callback) {
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        callback(new PayloadTooLargeError(`${label} is too large`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
+
+async function saveResponseBody(response: Response, path: string, maxBytes?: number, label = "File"): Promise<void> {
   if (!response.body) throw new Error("Remote file response had no body");
+  if (maxBytes) assertRemoteResponseSize(response, maxBytes, label);
   await mkdir(dirname(path), { recursive: true });
-  await pipeline(
-    Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>),
-    createWriteStream(path),
-  );
+  try {
+    const source = Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>);
+    if (maxBytes) {
+      await pipeline(source, byteLimitTransform(maxBytes, label), createWriteStream(path));
+    } else {
+      await pipeline(source, createWriteStream(path));
+    }
+  } catch (error) {
+    await rm(path, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function deleteSongEntryFiles(entry: LocalSongEntry): Promise<void> {
@@ -934,8 +1107,8 @@ async function saveRemoteImage(imageUrl: string, stem: string, audioPath: string
   const parsed = parseHttpUrl(imageUrl);
   if (!parsed) return undefined;
 
-  const response = await fetchWithTimeout(
-    parsed.toString(),
+  const response = await fetchPublicHttpUrl(
+    parsed,
     { headers: { accept: "image/*,*/*" } },
     20_000,
   );
@@ -950,7 +1123,7 @@ async function saveRemoteImage(imageUrl: string, stem: string, audioPath: string
     contentTypeExtension(contentType || "image/jpeg"),
   );
   const coverName = `${stem}.cover${ext}`;
-  await saveResponseBody(response, resolve(dirname(audioPath), coverName));
+  await saveResponseBody(response, resolve(dirname(audioPath), coverName), MAX_IMAGE_BYTES, "Image file");
   return coverName;
 }
 
@@ -986,9 +1159,21 @@ async function handleRemoteSongUpload(payload: {
       { status: 400 },
     );
   }
+  if (byteLength(lyricsText) > MAX_LYRICS_BYTES) {
+    return json({ error: "Lyrics text is too large" }, { status: 413 });
+  }
 
   const parsedAudioUrl = parseHttpUrl(audioUrl);
   if (!parsedAudioUrl) return json({ error: "Only valid http(s) audio URLs are supported" }, { status: 400 });
+  let response: Response;
+  try {
+    response = await fetchPublicHttpUrl(parsedAudioUrl, { headers: { accept: "audio/*,*/*" } }, 120_000);
+  } catch (error) {
+    if (error instanceof RemoteUrlError) {
+      return json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
 
   const snapshot = await getLibrary();
   const existingEntry = snapshot.songs
@@ -1012,16 +1197,19 @@ async function handleRemoteSongUpload(payload: {
     );
   }
 
-  const response = await fetchWithTimeout(
-    parsedAudioUrl.toString(),
-    { headers: { accept: "audio/*,*/*" } },
-    120_000,
-  );
   if (!response.ok || !response.body) {
     return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
   }
 
   const contentType = response.headers.get("content-type") || "";
+  const normalizedContentType = contentType.split(";")[0]?.trim().toLowerCase() || "";
+  if (
+    normalizedContentType &&
+    !normalizedContentType.startsWith("audio/") &&
+    normalizedContentType !== "application/octet-stream"
+  ) {
+    return json({ error: "Remote audio URL did not return an audio file" }, { status: 415 });
+  }
   const audioExt = extensionFromRemoteUrl(
     audioUrl,
     AUDIO_EXTENSIONS,
@@ -1044,7 +1232,17 @@ async function handleRemoteSongUpload(payload: {
       ))
     : audioPath;
 
-  await saveResponseBody(response, tempAudioPath);
+  try {
+    await saveResponseBody(response, tempAudioPath, MAX_AUDIO_BYTES, "Audio file");
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) {
+      return json({ error: error.message }, { status: 413 });
+    }
+    if (error instanceof RemoteUrlError) {
+      return json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
   if (existingEntry && replaceExisting) {
     await deleteSongEntryFiles(existingEntry);
     await mkdir(dirname(audioPath), { recursive: true });
@@ -1105,6 +1303,16 @@ async function handleSongUpload(request: Request): Promise<Response> {
   if (!title || !artist || !(audio instanceof File)) {
     return json({ error: "Title, artist, and audio are required" }, { status: 400 });
   }
+  const invalidAudio = validateUploadFile(audio, "Audio file", MAX_AUDIO_BYTES, AUDIO_EXTENSIONS, "audio/");
+  if (invalidAudio) return invalidAudio;
+  if (image instanceof File && image.size > 0) {
+    const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
+    if (invalidImage) return invalidImage;
+  }
+  const lyricsText = typeof form.get("lyricsText") === "string" ? String(form.get("lyricsText")).trim() : "";
+  if (byteLength(lyricsText) > MAX_LYRICS_BYTES) {
+    return json({ error: "Lyrics text is too large" }, { status: 413 });
+  }
 
   const audioExt = AUDIO_EXTENSIONS.has(extname(audio.name).toLowerCase())
     ? extname(audio.name).toLowerCase()
@@ -1129,7 +1337,6 @@ async function handleSongUpload(request: Request): Promise<Response> {
     sidecar.coverFile = coverName;
   }
 
-  const lyricsText = typeof form.get("lyricsText") === "string" ? String(form.get("lyricsText")).trim() : "";
   if (lyricsText) {
     const lyricsName = `${basename(audioPath, extname(audioPath))}.lrc`;
     await writeFile(resolve(dirname(audioPath), lyricsName), `${lyricsText}\n`, "utf8");
@@ -1178,6 +1385,17 @@ async function handleSongAssets(id: string, request: Request): Promise<Response>
   const image = form.get("image");
   const lyricsFile = form.get("lyricsFile");
   const lyricsText = typeof form.get("lyricsText") === "string" ? String(form.get("lyricsText")).trim() : "";
+  if (image instanceof File && image.size > 0) {
+    const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
+    if (invalidImage) return invalidImage;
+  }
+  if (lyricsFile instanceof File && lyricsFile.size > 0) {
+    const invalidLyrics = validateUploadFile(lyricsFile, "Lyrics file", MAX_LYRICS_BYTES, LYRICS_EXTENSIONS, "text/");
+    if (invalidLyrics) return invalidLyrics;
+  }
+  if (byteLength(lyricsText) > MAX_LYRICS_BYTES) {
+    return json({ error: "Lyrics text is too large" }, { status: 413 });
+  }
 
   if (image instanceof File && image.size > 0) {
     const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
@@ -1220,6 +1438,10 @@ type DownloadedArtwork = {
   contentType: string;
   sourceUrl: string;
 };
+
+class PayloadTooLargeError extends Error {}
+
+class RemoteUrlError extends Error {}
 
 function scoreItunesArtwork(song: PlayerSong, result: ItunesArtworkResult): number {
   if (!result.artworkUrl100) return 0;
