@@ -130,58 +130,52 @@ export default function LibrarySidebarClient({
             )}
           </Link>
 
-          {userId ? (
+          {userId && playlists.length > 0 ? (
             <div className="mt-4 pt-4 border-t border-white/[0.12]">
               {!collapsed && (
                 <div className="px-2.5 mb-2 text-[13px] uppercase tracking-wide text-white/[0.55]">
-                  Playlists
+                  Custom playlists
                 </div>
               )}
-              {playlists.length > 0 ? (
-                <div className="space-y-1.5">
-                  {playlists.map((pl) => (
-                    <Link
-                      key={pl.id}
-                      to={`/playlist/${pl.id}`}
-                      title={pl.name}
-                      className={cn(
-                        "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
-                        collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
-                      )}
-                    >
-                      <div className="h-10 w-10 rounded-[5px] bg-white/[0.08] text-white/[0.78] grid place-items-center shrink-0">
-                        <ListMusic size={18} />
+              <div className="space-y-1.5">
+                {playlists.map((pl) => (
+                  <Link
+                    key={pl.id}
+                    to={`/playlist/${pl.id}`}
+                    title={pl.name}
+                    className={cn(
+                      "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+                      collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
+                    )}
+                  >
+                    <div className="h-10 w-10 rounded-[5px] bg-white/[0.08] text-white/[0.78] grid place-items-center shrink-0">
+                      <ListMusic size={18} />
+                    </div>
+                    {!collapsed && (
+                      <div className="min-w-0">
+                        <div className="text-[16px] font-medium leading-6 truncate text-white">{pl.name}</div>
+                        <div className="text-[13px] leading-5 text-white/[0.62]">{pl.songsCount ?? 0} tracks</div>
                       </div>
-                      {!collapsed && (
-                        <div className="min-w-0">
-                          <div className="text-[16px] font-medium leading-6 truncate text-white">{pl.name}</div>
-                          <div className="text-[13px] leading-5 text-white/[0.62]">{pl.songsCount ?? 0} tracks</div>
-                        </div>
-                      )}
-                    </Link>
-                  ))}
-                </div>
-              ) : !collapsed ? (
-                <div className="px-2.5 text-[15px] leading-6 text-white/[0.62]">
-                  No playlists yet.
-                </div>
-              ) : null}
+                    )}
+                  </Link>
+                ))}
+              </div>
             </div>
-          ) : (
+          ) : !userId ? (
             <div className="mt-4 pt-4 border-t border-white/[0.12]">
               {!collapsed && (
                 <>
-                  <div className="px-2.5 mb-2 text-[13px] uppercase tracking-wide text-white/[0.55]">Playlists</div>
+                  <div className="px-2.5 mb-2 text-[13px] uppercase tracking-wide text-white/[0.55]">Custom playlists</div>
                   <div className="px-2.5 text-[15px] leading-6 text-white/[0.62]">
                     <Link className="underline underline-offset-2 hover:text-white" to="/signin">
                       Sign in
                     </Link>{" "}
-                    to manage playlists.
+                    to manage custom playlists.
                   </div>
                 </>
               )}
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </aside>

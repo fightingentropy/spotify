@@ -227,7 +227,6 @@ fi
 sudo launchctl enable "system/$service_label" 2>/dev/null || true
 sudo launchctl bootstrap system "$app_plist"
 sudo launchctl enable "system/$service_label" 2>/dev/null || true
-sudo launchctl kickstart -k "system/$service_label"
 
 status="000"
 for attempt in $(seq 1 8); do
