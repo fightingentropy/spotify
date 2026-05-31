@@ -1,62 +1,68 @@
 # Spotify
 
-Spotify is a Vite React music app served by a Cloudflare Worker. The current
-production setup uses Cloudflare for the public app, auth, and API edge, while
-the Mac mini is the music storage and streaming backend.
+Spotify is a Vite React music app served directly from the Mac mini through
+Caddy. Cloudflare Workers are still available on `workers.dev` for lightweight
+auth/import API work, but the public app and FLAC media stream through the home
+Caddy path.
 
 ## Current Production Setup
 
 - Public app: `https://spotify.fightingentropy.org`
 - Mac mini LAN app/server: `http://m4mini.local:5174`
-- Private Worker-to-Mac-mini origin: `https://spotify-origin.fightingentropy.org`
+- Worker backend for auth/import APIs: `https://spotify.erlinhoxha.workers.dev`
 - Mac mini music folder: `/Users/hermes/Music`
 - Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
 - Music server launchd service: `com.fightingentropy.spotify-app`
+- Shared Caddy launchd service: `com.fightingentropy.netflix-caddy`
 
-The private origin hostname is only for Worker-to-Mac-mini traffic. Direct
-public requests to `spotify-origin.fightingentropy.org` should return `401` unless the
-request includes the shared proxy token.
+`spotify.fightingentropy.org` should be a DNS-only record pointing at the home
+public IP. Caddy terminates TLS, routes static assets and media directly to the
+Mac mini server, and forwards auth/import API calls to the Worker backend.
 
 ## Architecture
 
 ```text
 Phone/browser
-  -> Cloudflare Worker + static assets
-       -> auth/session in D1
-       -> Spotify metadata/import helpers
-       -> proxy music APIs to Mac mini when MAC_MINI_ORIGIN is set
-            -> Cloudflare Tunnel origin: spotify-origin.fightingentropy.org
-                 -> Mac mini local server on 127.0.0.1:5174
-                      -> /Users/hermes/Music
+  -> Caddy: spotify.fightingentropy.org
+       -> static app and media ranges: 127.0.0.1:5174
+       -> auth/import APIs: spotify.erlinhoxha.workers.dev
+            -> Worker calls MAC_MINI_ORIGIN=https://spotify.fightingentropy.org
+                 -> Caddy trusted proxy-token route
+                      -> Mac mini local server on 127.0.0.1:5174
+                           -> /Users/hermes/Music
 ```
 
-In the active deployed mode, uploaded/imported music is not stored in R2. R2 is
-still configured as a fallback/legacy storage mode, but `MAC_MINI_ORIGIN` makes
-the Worker use the Mac mini for library reads, uploads, artwork, audio, lyrics,
-and likes.
+Uploaded/imported music is stored on the Mac mini. R2 is still configured as a
+fallback/legacy storage mode in the Worker, but direct Caddy is the production
+media path.
 
 ## Data Flow
 
-- Library load: app calls `/api/home`; Worker proxies to the Mac mini; Mac mini
-  returns the scanned songs and liked ids.
-- Audio streaming: song `audioUrl` values point at `/api/files/local/*`; Worker
-  proxies range requests to the Mac mini so seeking works.
+- Library load: app calls `/api/home`; Caddy forwards browser API requests to
+  the Worker, and the Worker calls back through direct Caddy with the shared
+  proxy token and user id.
+- Audio streaming: song `audioUrl` values point at `/api/files/local/*`; Caddy
+  routes those range requests directly to the Mac mini server so seeking stays
+  off the Worker/Tunnel path.
 - Artwork: local sidecar/embedded art is served first; missing art can be cached
   from online artwork lookup by the Mac mini server.
 - Manual upload: browser posts to `/api/songs`; Worker requires auth, forwards
   the upload to the Mac mini, and the Mac mini saves it into `/Users/hermes/Music`.
-- Spotify import: Worker resolves metadata/provider stream URLs, then sends the
-  final remote audio URL to the Mac mini; the Mac mini downloads and stores the
-  audio, cover, lyrics, and sidecar metadata.
+- Spotify import: Worker resolves metadata/provider stream URLs, then calls the
+  direct Caddy origin; the Mac mini downloads and stores the audio, cover,
+  lyrics, and sidecar metadata.
 
 ## Important Runtime Notes
 
 - Keep the Mac mini music server launchd service running:
   - `com.fightingentropy.spotify-app`
-- `m4mini.local` only works on the LAN. Cloudflare reaches the Mac mini through
-  the `spotify-mini` Cloudflare Tunnel and the public HTTPS origin hostname.
-- Keep the Mac mini tunnel launchd service running:
-  - `com.fightingentropy.spotify-tunnel`
+- Keep the shared Caddy launchd service running:
+  - `com.fightingentropy.netflix-caddy`
+- `m4mini.local` only works on the LAN. Public traffic should reach the Mac mini
+  through the router's 80/443 port forwards and the direct DNS-only record for
+  `spotify.fightingentropy.org`.
+- The old `com.fightingentropy.spotify-tunnel` service is no longer part of the
+  target production path once DNS is switched to direct Caddy.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
 - The Settings page intentionally only shows user-facing playback/download
@@ -81,11 +87,14 @@ and likes.
 - `scripts/deploy-mini.sh` - builds/syncs the app and local server to Mac mini.
 - `scripts/install-mini-server.sh` - installs/restarts the Mac mini launchd app
   service.
+- `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
+  `spotify.fightingentropy.org`.
 - `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
   `/Users/hermes/Music`.
 - `scripts/check-mini.sh` - health check for Mac mini server, launchd, library
   scan count, and LAN reachability.
-- `wrangler.jsonc` - Cloudflare Worker bindings and `MAC_MINI_ORIGIN`.
+- `wrangler.jsonc` - Cloudflare Worker bindings, `workers.dev` backend, and
+  `MAC_MINI_ORIGIN`.
 
 ## Local Development
 
@@ -122,6 +131,12 @@ Check the Mac mini server:
 bun run mini:check
 ```
 
+Install/update the direct Caddy route:
+
+```bash
+bun run mini:install-caddy
+```
+
 Sync music to the Mac mini:
 
 ```bash
@@ -137,9 +152,9 @@ bash scripts/sync-mini-music.sh --source /Users/erlinhoxha/Movies
 The sync copies audio, cover, lyrics, and `.spotify.json` sidecar files. It does
 not delete remote files.
 
-## Cloudflare Deployment
+## Cloudflare Worker Deployment
 
-Deploy the public app:
+Deploy the Worker backend:
 
 ```bash
 bun run deploy
@@ -148,7 +163,8 @@ bun run deploy
 The active `wrangler.jsonc` contains:
 
 ```json
-"MAC_MINI_ORIGIN": "https://spotify-origin.fightingentropy.org"
+"workers_dev": true,
+"MAC_MINI_ORIGIN": "https://spotify.fightingentropy.org"
 ```
 
 Set or rotate the Worker secret:
@@ -169,7 +185,7 @@ SPOTIFY_CACHE_DIR=/Users/hermes/Developer/spotify/cache
 SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
-SPOTIFY_PROXY_HOSTNAMES=spotify-origin.fightingentropy.org
+SPOTIFY_PROXY_HOSTNAMES=spotify.fightingentropy.org
 ```
 
 ## Verification
@@ -181,16 +197,18 @@ bun --bun tsc --noEmit
 bun run lint
 bun run build
 bun run mini:check
+bun run mini:install-caddy
 curl -I https://spotify.fightingentropy.org
-curl -sS -o /dev/null -w "%{http_code}\n" https://spotify-origin.fightingentropy.org/api/music/source
+curl -sS -o /dev/null -w "%{http_code}\n" https://spotify.erlinhoxha.workers.dev/api/auth/session
 ```
 
 Expected behavior:
 
-- Cloudflare app returns `200`.
-- Worker `/api/home` returns the Mac mini song library.
-- Audio range requests through the Worker return `206`.
-- Direct origin without the proxy token returns `401`.
+- Direct Caddy app returns `200`.
+- Worker backend is reachable on `workers.dev`.
+- Audio range requests through Caddy return `206`.
+- Direct Mac mini API requests without the proxy token return `401` on public
+  hostnames.
 - Mac mini LAN health check returns `200`.
 
 ## API Surface

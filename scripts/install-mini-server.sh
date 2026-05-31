@@ -8,7 +8,7 @@ REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
 PORT="${PORT:-5174}"
 HOST="${HOST:-0.0.0.0}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
-PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify-origin.fightingentropy.org}"
+PROXY_HOSTNAMES="${PROXY_HOSTNAMES:-spotify.fightingentropy.org}"
 SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-app}"
 
 usage() {
@@ -32,7 +32,7 @@ Environment:
   REMOTE_APP             Default: /Users/hermes/Developer/spotify
   REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
   BUN_BIN                Default: /opt/homebrew/bin/bun
-  PROXY_HOSTNAMES        Default: spotify-origin.fightingentropy.org
+  PROXY_HOSTNAMES        Default: spotify.fightingentropy.org
   SERVICE_LABEL          Default: com.fightingentropy.spotify-app
 USAGE
 }
