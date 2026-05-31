@@ -64,12 +64,10 @@ media path.
 - `m4mini.local` only works on the LAN. Public traffic should reach the Mac mini
   through the router's 80/443 port forwards and the direct DNS-only record for
   `spotify.fightingentropy.org`.
-- The old `com.fightingentropy.spotify-tunnel` service is no longer part of the
-  target production path once DNS is switched to direct Caddy.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
-- The Mac mini DNS watcher uses the `hermes` user's wrangler login state. It
-  does not store a Cloudflare API token.
+- The Mac mini DNS watcher compares public DNS against the current home IP and
+  logs drift. It does not store a Cloudflare API token or mutate DNS.
 - The Settings page intentionally only shows user-facing playback/download
   settings now. Source status, edit-mode toggles, and Spotify cookie UI were
   removed from normal app chrome.
@@ -94,8 +92,8 @@ media path.
   service.
 - `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
   `spotify.fightingentropy.org`.
-- `scripts/install-mini-dns-watch.sh` - installs/updates the wrangler-backed
-  DNS drift watcher for the direct home Caddy hostname.
+- `scripts/install-mini-dns-watch.sh` - installs/updates the DNS drift watcher
+  for the direct home Caddy hostname.
 - `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
   `/Users/hermes/Music`.
 - `scripts/check-mini.sh` - health check for Mac mini server, launchd, library

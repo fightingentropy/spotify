@@ -5,7 +5,6 @@ MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.fightingentropy.org}"
 DNS_WATCH_INTERVAL="${DNS_WATCH_INTERVAL:-300}"
-BUNX_BIN="${BUNX_BIN:-/opt/homebrew/bin/bunx}"
 SERVICE_LABEL="${SERVICE_LABEL:-com.fightingentropy.spotify-dns-watch}"
 
 usage() {
@@ -25,14 +24,11 @@ Options:
 Environment:
   MINI_HOST              Default: hermes@m4mini.local
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
-  BUNX_BIN               Default: /opt/homebrew/bin/bunx
   DNS_WATCH_INTERVAL     Default: 300.
   SERVICE_LABEL          Default: com.fightingentropy.spotify-dns-watch
 
-This intentionally uses the Mac mini's wrangler login state instead of a
-Cloudflare API token. Wrangler OAuth currently has DNS read visibility but does
-not expose DNS write scope, so this service detects drift and logs it rather
-than mutating DNS.
+This service detects drift by comparing the public home IP with public DNS. It
+logs mismatches rather than mutating DNS.
 USAGE
 }
 
@@ -61,7 +57,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
-  "SPOTIFY_DOMAIN='$SPOTIFY_DOMAIN' DNS_WATCH_INTERVAL='$DNS_WATCH_INTERVAL' BUNX_BIN='$BUNX_BIN' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'
+  "SPOTIFY_DOMAIN='$SPOTIFY_DOMAIN' DNS_WATCH_INTERVAL='$DNS_WATCH_INTERVAL' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 
 state_dir="$HOME/.local/state/spotify"
@@ -100,8 +96,6 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/Users/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 ENV_FILE="${SPOTIFY_ENV_FILE:-/Users/hermes/.config/spotify/env}"
 STATE_DIR="/Users/hermes/.local/state/spotify"
-APP_DIR="/Users/hermes/Developer/spotify"
-BUNX_BIN="${BUNX_BIN:-/opt/homebrew/bin/bunx}"
 mkdir -p "$STATE_DIR"
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -177,17 +171,6 @@ validate_origin_ip() {
 
 name="${SPOTIFY_DNS_WATCH_NAME:-spotify.fightingentropy.org}"
 
-if ! (cd "$APP_DIR" && "$BUNX_BIN" wrangler whoami >/dev/null 2>&1); then
-  log "wrangler_login_missing name=$name"
-  exit 1
-fi
-
-tunnels="$((cd "$APP_DIR" && "$BUNX_BIN" wrangler tunnel list 2>/dev/null) || true)"
-if printf '%s\n' "$tunnels" | grep -Eiq 'spotify|spotify-mini'; then
-  log "unexpected_spotify_tunnel name=$name"
-  exit 2
-fi
-
 candidate_ip="$(detect_public_ip || true)"
 if [[ -z "$candidate_ip" ]]; then
   log "public_ip_detect_failed name=$name"
@@ -210,11 +193,6 @@ exit 2
 SCRIPT
 chmod 700 "$bin_dir/spotify-dns-watch"
 bash -n "$bin_dir/spotify-dns-watch"
-
-if ! (cd /Users/hermes/Developer/spotify && "$BUNX_BIN" wrangler whoami >/dev/null 2>&1); then
-  echo "Mac mini wrangler is not logged in. Run or copy a wrangler login before enabling DNS watch." >&2
-  exit 1
-fi
 
 tmp_plist="$(mktemp)"
 cat > "$tmp_plist" <<PLIST

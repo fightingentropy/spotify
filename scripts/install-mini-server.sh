@@ -76,7 +76,6 @@ config_dir="$HOME/.config/spotify"
 env_file="$config_dir/env"
 service_label="$SERVICE_LABEL"
 app_plist="/Library/LaunchDaemons/$service_label.plist"
-legacy_service_labels="com.streamthatshit.spotify-app"
 
 mkdir -p "$state_dir" "$bin_dir" "$config_dir" "$REMOTE_MUSIC_DIR" "$REMOTE_APP/cache"
 chmod 700 "$state_dir" "$bin_dir" "$config_dir"
@@ -196,13 +195,6 @@ PLIST
 
 sudo install -m 644 "$tmp_plist" "$app_plist"
 rm -f "$tmp_plist"
-
-for legacy_label in $legacy_service_labels; do
-  [[ "$legacy_label" == "$service_label" ]] && continue
-  legacy_plist="/Library/LaunchDaemons/$legacy_label.plist"
-  sudo launchctl bootout system "$legacy_plist" 2>/dev/null || true
-  sudo rm -f "$legacy_plist"
-done
 
 sudo launchctl bootout system "$app_plist" 2>/dev/null || true
 listener_pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)

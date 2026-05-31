@@ -9,7 +9,6 @@ SPOTIFY_UPSTREAM="${SPOTIFY_UPSTREAM:-127.0.0.1:5174}"
 CADDYFILE="${CADDYFILE:-/Users/hermes/.config/caddy/Caddyfile}"
 CADDY_BIN="${CADDY_BIN:-/usr/local/bin/caddy}"
 CADDY_SERVICE_LABEL="${CADDY_SERVICE_LABEL:-com.fightingentropy.netflix-caddy}"
-LEGACY_CADDY_LABELS="${LEGACY_CADDY_LABELS:-com.streamthatshit.caddy}"
 
 usage() {
   cat <<'USAGE'
@@ -29,7 +28,6 @@ Environment:
   CADDYFILE              Default: /Users/hermes/.config/caddy/Caddyfile
   CADDY_BIN              Default: /usr/local/bin/caddy
   CADDY_SERVICE_LABEL    Default: com.fightingentropy.netflix-caddy
-  LEGACY_CADDY_LABELS    Default: com.streamthatshit.caddy
 
 The script reads SPOTIFY_PROXY_TOKEN from /Users/hermes/.config/spotify/env on
 the Mac mini and injects it only into the remote Caddyfile.
@@ -66,7 +64,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
-  "SPOTIFY_DOMAIN='$SPOTIFY_DOMAIN' SPOTIFY_WORKER_HOST='$SPOTIFY_WORKER_HOST' SPOTIFY_UPSTREAM='$SPOTIFY_UPSTREAM' CADDYFILE='$CADDYFILE' CADDY_BIN='$CADDY_BIN' CADDY_SERVICE_LABEL='$CADDY_SERVICE_LABEL' LEGACY_CADDY_LABELS='$LEGACY_CADDY_LABELS' bash -s" <<'REMOTE'
+  "SPOTIFY_DOMAIN='$SPOTIFY_DOMAIN' SPOTIFY_WORKER_HOST='$SPOTIFY_WORKER_HOST' SPOTIFY_UPSTREAM='$SPOTIFY_UPSTREAM' CADDYFILE='$CADDYFILE' CADDY_BIN='$CADDY_BIN' CADDY_SERVICE_LABEL='$CADDY_SERVICE_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 
 env_file="/Users/hermes/.config/spotify/env"
@@ -247,13 +245,6 @@ backup="$CADDYFILE.$(date -u +%Y%m%dT%H%M%SZ).bak"
 sudo cp "$CADDYFILE" "$backup"
 sudo install -m 600 "$tmp" "$CADDYFILE"
 rm -f "$tmp"
-
-for legacy_label in $LEGACY_CADDY_LABELS; do
-  [[ "$legacy_label" == "$CADDY_SERVICE_LABEL" ]] && continue
-  legacy_plist="/Library/LaunchDaemons/$legacy_label.plist"
-  sudo launchctl bootout system "$legacy_plist" 2>/dev/null || true
-  sudo rm -f "$legacy_plist"
-done
 
 sudo launchctl kickstart -k "system/$CADDY_SERVICE_LABEL" 2>/dev/null || {
   plist="/Library/LaunchDaemons/$CADDY_SERVICE_LABEL.plist"
