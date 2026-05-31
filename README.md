@@ -14,6 +14,7 @@ Caddy path.
 - Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
 - Music server launchd service: `com.fightingentropy.spotify-app`
 - Shared Caddy launchd service: `com.fightingentropy.netflix-caddy`
+- DNS drift watcher launchd service: `com.fightingentropy.spotify-dns-watch`
 
 `spotify.fightingentropy.org` should be a DNS-only record pointing at the home
 public IP. Caddy terminates TLS, routes static assets and media directly to the
@@ -58,6 +59,8 @@ media path.
   - `com.fightingentropy.spotify-app`
 - Keep the shared Caddy launchd service running:
   - `com.fightingentropy.netflix-caddy`
+- Keep the Cloudflare DNS drift watcher launchd service running:
+  - `com.fightingentropy.spotify-dns-watch`
 - `m4mini.local` only works on the LAN. Public traffic should reach the Mac mini
   through the router's 80/443 port forwards and the direct DNS-only record for
   `spotify.fightingentropy.org`.
@@ -65,6 +68,8 @@ media path.
   target production path once DNS is switched to direct Caddy.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
+- The Mac mini DNS watcher uses the `hermes` user's wrangler login state. It
+  does not store a Cloudflare API token.
 - The Settings page intentionally only shows user-facing playback/download
   settings now. Source status, edit-mode toggles, and Spotify cookie UI were
   removed from normal app chrome.
@@ -89,6 +94,8 @@ media path.
   service.
 - `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
   `spotify.fightingentropy.org`.
+- `scripts/install-mini-dns-watch.sh` - installs/updates the wrangler-backed
+  DNS drift watcher for the direct home Caddy hostname.
 - `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
   `/Users/hermes/Music`.
 - `scripts/check-mini.sh` - health check for Mac mini server, launchd, library
@@ -135,6 +142,12 @@ Install/update the direct Caddy route:
 
 ```bash
 bun run mini:install-caddy
+```
+
+Install/update the Cloudflare DNS drift watcher:
+
+```bash
+bun run mini:install-dns-watch
 ```
 
 Sync music to the Mac mini:
@@ -186,6 +199,7 @@ SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
 SPOTIFY_PROXY_HOSTNAMES=spotify.fightingentropy.org
+SPOTIFY_DNS_WATCH_NAME=spotify.fightingentropy.org
 ```
 
 ## Verification
@@ -198,6 +212,7 @@ bun run lint
 bun run build
 bun run mini:check
 bun run mini:install-caddy
+bun run mini:install-dns-watch
 curl -I https://spotify.fightingentropy.org
 curl -sS -o /dev/null -w "%{http_code}\n" https://spotify.erlinhoxha.workers.dev/api/auth/session
 ```
@@ -209,6 +224,8 @@ Expected behavior:
 - Audio range requests through Caddy return `206`.
 - Direct Mac mini API requests without the proxy token return `401` on public
   hostnames.
+- DNS watch logs show `dns_ok` in
+  `/Users/hermes/.local/state/spotify/dns-watch.log`.
 - Mac mini LAN health check returns `200`.
 
 ## API Surface
@@ -245,6 +262,7 @@ Expected behavior:
 - `bun run local:music` - run the Bun local music server.
 - `bun run mini:deploy` - deploy build/server to Mac mini.
 - `bun run mini:install-server` - install Mac mini launchd app service.
+- `bun run mini:install-dns-watch` - install DNS drift watcher launchd service.
 - `bun run mini:sync-music` - sync music files to Mac mini.
 - `bun run mini:check` - verify Mac mini health.
 - `bun run cf-typegen` - regenerate Cloudflare binding types.
