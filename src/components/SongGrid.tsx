@@ -233,11 +233,12 @@ export function SongGrid({
       }
 
       const rect = el.getBoundingClientRect();
-      const containerTop = rect.top + window.scrollY;
-      const viewportTop = window.scrollY;
-      const viewportBottom = viewportTop + window.innerHeight;
-      const localViewportTop = Math.max(0, viewportTop - containerTop);
-      const localViewportBottom = Math.max(0, viewportBottom - containerTop);
+      const scrollContainer = el.closest(".wf-main") as HTMLElement | null;
+      const scrollRect = scrollContainer?.getBoundingClientRect();
+      const viewportTop = scrollRect?.top ?? 0;
+      const viewportBottom = scrollRect?.bottom ?? window.innerHeight;
+      const localViewportTop = Math.max(0, viewportTop - rect.top);
+      const localViewportBottom = Math.max(0, viewportBottom - rect.top);
 
       const nextStart = Math.max(
         0,
@@ -260,7 +261,9 @@ export function SongGrid({
       frameId = window.requestAnimationFrame(updateRange);
     };
 
+    const scrollContainer = listContainerRef.current?.closest(".wf-main") as HTMLElement | null;
     updateRange();
+    scrollContainer?.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
     window.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
     window.addEventListener("resize", scheduleRangeUpdate);
 
@@ -268,6 +271,7 @@ export function SongGrid({
       if (frameId) {
         window.cancelAnimationFrame(frameId);
       }
+      scrollContainer?.removeEventListener("scroll", scheduleRangeUpdate);
       window.removeEventListener("scroll", scheduleRangeUpdate);
       window.removeEventListener("resize", scheduleRangeUpdate);
     };

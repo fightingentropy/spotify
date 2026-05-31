@@ -57,6 +57,11 @@ type LocalSidecar = {
   updatedAt?: string;
 };
 
+type KnownFileStat = {
+  size: number;
+  mtimeMs: number;
+};
+
 type OutputFormat = "flac" | "mp3" | "aac" | "ogg" | "opus" | "wav";
 
 const AUDIO_EXTENSIONS = new Set([
@@ -167,11 +172,27 @@ function notFound(message = "Not found"): Response {
   return json({ error: message }, { status: 404 });
 }
 
+function requestHostname(request: Request): string {
+  try {
+    return new URL(request.url).hostname.toLowerCase();
+  } catch {
+    return (request.headers.get("host") || "").split(":")[0]?.toLowerCase() || "";
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
+function hasValidProxyToken(request: Request): boolean {
+  return Boolean(proxyToken && request.headers.get("x-spotify-proxy-token") === proxyToken);
+}
+
 function requestNeedsProxyToken(request: Request): boolean {
   if (!proxyToken) return false;
-  const host = (request.headers.get("host") || "").split(":")[0]?.toLowerCase() || "";
+  const host = requestHostname(request);
   if (proxyHostnames.has(host)) return true;
-  if (host === "localhost" || host === "m4mini.local" || host.endsWith(".local")) return false;
+  if (isLoopbackHost(host) || host === "m4mini.local" || host.endsWith(".local")) return false;
   if (host === "127.0.0.1" || host === "::1" || host === "[::1]") return false;
   if (/^10\./.test(host) || /^192\.168\./.test(host)) return false;
   const private172Match = host.match(/^172\.(\d+)\./);
@@ -180,6 +201,21 @@ function requestNeedsProxyToken(request: Request): boolean {
     if (secondOctet >= 16 && secondOctet <= 31) return false;
   }
   return true;
+}
+
+function allowsImplicitLocalUser(request: Request): boolean {
+  return !requestNeedsProxyToken(request) && isLoopbackHost(requestHostname(request));
+}
+
+function isMutationRequest(request: Request): boolean {
+  const method = request.method.toUpperCase();
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function authorizeMutationRequest(request: Request): Response | null {
+  if (!isMutationRequest(request)) return null;
+  if (hasValidProxyToken(request) || allowsImplicitLocalUser(request)) return null;
+  return json({ error: "Unauthorized" }, { status: 401 });
 }
 
 function methodNotAllowed(): Response {
@@ -294,29 +330,47 @@ function parseRangeHeader(rangeHeader: string | null, size: number): { start: nu
   return { start, end };
 }
 
-async function serveFile(path: string, request: Request, cacheControl = "public, max-age=3600"): Promise<Response> {
-  let fileStat;
-  try {
-    fileStat = await stat(path);
-  } catch {
-    return notFound();
+async function serveFile(
+  path: string,
+  request: Request,
+  cacheControl = "public, max-age=3600",
+  knownFileStat?: KnownFileStat,
+): Promise<Response> {
+  let size: number;
+  let mtimeMs: number;
+  let mtime: Date;
+
+  if (knownFileStat) {
+    size = knownFileStat.size;
+    mtimeMs = knownFileStat.mtimeMs;
+    mtime = new Date(mtimeMs);
+  } else {
+    let fileStat;
+    try {
+      fileStat = await stat(path);
+    } catch {
+      return notFound();
+    }
+    if (!fileStat.isFile()) return notFound();
+    size = fileStat.size;
+    mtimeMs = fileStat.mtimeMs;
+    mtime = fileStat.mtime;
   }
-  if (!fileStat.isFile()) return notFound();
 
   const headers = new Headers();
   headers.set("accept-ranges", "bytes");
   headers.set("cache-control", cacheControl);
   headers.set("content-type", contentTypeForPath(path));
-  headers.set("last-modified", fileStat.mtime.toUTCString());
-  headers.set("etag", `W/"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`);
+  headers.set("last-modified", mtime.toUTCString());
+  headers.set("etag", `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`);
 
-  const range = parseRangeHeader(request.headers.get("range"), fileStat.size);
+  const range = parseRangeHeader(request.headers.get("range"), size);
   if (!range && ifNoneMatchMatches(request.headers.get("if-none-match"), headers.get("etag") || "")) {
     return new Response(null, { status: 304, headers });
   }
 
   if (range) {
-    headers.set("content-range", `bytes ${range.start}-${range.end}/${fileStat.size}`);
+    headers.set("content-range", `bytes ${range.start}-${range.end}/${size}`);
     headers.set("content-length", String(range.end - range.start + 1));
     return new Response(request.method === "HEAD" ? null : Bun.file(path).slice(range.start, range.end + 1), {
       status: 206,
@@ -324,7 +378,7 @@ async function serveFile(path: string, request: Request, cacheControl = "public,
     });
   }
 
-  headers.set("content-length", String(fileStat.size));
+  headers.set("content-length", String(size));
   return new Response(request.method === "HEAD" ? null : Bun.file(path), { headers });
 }
 
@@ -761,9 +815,10 @@ async function getLibrary(force = false): Promise<LibrarySnapshot> {
 }
 
 function currentUserIdForRequest(request: Request): string | null {
-  const proxiedUserId = request.headers.get(PROXY_USER_ID_HEADER)?.trim();
-  if (proxiedUserId) return proxiedUserId;
-  return requestNeedsProxyToken(request) ? null : LOCAL_USER.id;
+  if (hasValidProxyToken(request)) {
+    return request.headers.get(PROXY_USER_ID_HEADER)?.trim() || null;
+  }
+  return allowsImplicitLocalUser(request) ? LOCAL_USER.id : null;
 }
 
 function likesPathForUser(userId: string): string {
@@ -1304,12 +1359,14 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   if (requestNeedsProxyToken(request) && request.headers.get("x-spotify-proxy-token") !== proxyToken) {
     return json({ error: "Unauthorized" }, { status: 401 });
   }
+  const unauthorizedMutation = authorizeMutationRequest(request);
+  if (unauthorizedMutation) return unauthorizedMutation;
 
   if (pathname === "/api/auth/session" && request.method === "GET") {
-    return json({ user: LOCAL_USER });
+    return json({ user: currentUserIdForRequest(request) ? LOCAL_USER : null });
   }
   if (pathname === "/api/auth/me" && request.method === "GET") {
-    return json({ user: LOCAL_USER });
+    return json({ user: currentUserIdForRequest(request) ? LOCAL_USER : null });
   }
   if (pathname === "/api/auth/signout" && request.method === "POST") {
     return new Response(null, { status: 204 });
@@ -1401,7 +1458,11 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   if (pathname.startsWith("/api/files/local/")) {
     const relativePath = relativeFromUrlPath(pathname, "/api/files/local/");
     const absolutePath = resolveInside(musicRoot, relativePath);
-    return absolutePath ? serveFile(absolutePath, request, "public, max-age=3600") : notFound();
+    const knownEntry = librarySnapshot?.entriesByPath.get(relativePath);
+    const knownFileStat = knownEntry
+      ? { size: knownEntry.size, mtimeMs: knownEntry.mtimeMs }
+      : undefined;
+    return absolutePath ? serveFile(absolutePath, request, "public, max-age=3600", knownFileStat) : notFound();
   }
 
   if (pathname.startsWith("/api/artwork/local/")) {

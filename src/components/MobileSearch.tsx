@@ -36,7 +36,7 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return dedupedSongs.slice(0, 30);
+    if (!q) return [];
     return dedupedSongs
       .filter((song) => {
         const title = song.title.toLowerCase();
@@ -68,7 +68,9 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
       </div>
 
       <div className="space-y-1">
-        {results.length === 0 ? (
+        {query.trim().length === 0 ? (
+          <div className="py-12 text-center text-sm opacity-70">Start typing to search songs</div>
+        ) : results.length === 0 ? (
           <div className="py-12 text-center text-sm opacity-70">No songs found</div>
         ) : (
           results.map((song) => (

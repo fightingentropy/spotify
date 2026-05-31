@@ -16,13 +16,7 @@ export default function SearchPage() {
 
   return (
     <>
-      <div className="lg:hidden">
-        <MobileSearch songs={songs} />
-      </div>
-      <div className="hidden lg:block px-6 py-8 max-w-7xl mx-auto">
-        <h1 className="text-2xl font-semibold mb-6">Search</h1>
-        <MobileSearch songs={songs} />
-      </div>
+      <MobileSearch songs={songs} />
       <div className="h-24 lg:hidden" />
     </>
   );

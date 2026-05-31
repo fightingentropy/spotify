@@ -174,6 +174,16 @@ async function cachedRangeResponse(request) {
   });
 }
 
+async function rangeResponse(request) {
+  try {
+    return await fetch(request);
+  } catch {
+    const cached = await cachedRangeResponse(request);
+    if (cached) return cached;
+    throw new Error("network and cached media miss");
+  }
+}
+
 async function cacheMediaUrls(urls, cacheName = PLAYBACK_CACHE) {
   if (!Array.isArray(urls) || urls.length === 0) return;
   const cache = await caches.open(cacheName);
@@ -219,14 +229,13 @@ async function clearRuntimeCaches() {
 }
 
 async function mediaResponse(request) {
-  const cached = await matchCachedMedia(request.url);
-  if (cached) return cached;
-  const response = await fetch(request);
-  if (request.headers.get("x-spotify-offline-download") === "1") {
-    return response;
+  try {
+    return await fetch(request);
+  } catch {
+    const cached = await matchCachedMedia(request.url);
+    if (cached) return cached;
+    throw new Error("network and cached media miss");
   }
-  await putCache(PLAYBACK_CACHE, request, response.clone());
-  return response;
 }
 
 async function navigationResponse(event, request) {
@@ -295,7 +304,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (request.headers.has("range")) {
-    event.respondWith(cachedRangeResponse(request).then((response) => response || fetch(request)));
+    event.respondWith(rangeResponse(request));
     return;
   }
 
