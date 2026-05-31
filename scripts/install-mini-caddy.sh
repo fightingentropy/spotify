@@ -145,7 +145,6 @@ block = f"""
 {begin}
 (spotify_local_public) {{
 \treverse_proxy {upstream} {{
-\t\theader_up -x-spotify-proxy-token
 \t\theader_up -x-spotify-user-id
 \t\theader_up x-spotify-proxy-token {quoted_token}
 \t\tlb_try_duration 30s
