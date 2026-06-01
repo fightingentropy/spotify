@@ -68,7 +68,10 @@ the music files live on the Mac mini at `/Users/hermes/Music`.
 ## Production Architecture
 
 - Public app: `https://spotify.fightingentropy.org`
-- Mac mini app/server: `http://m4mini.local:5174`
+- Mac mini Tailscale app/server: `http://100.121.144.60:5174`
+- Mac mini LAN app/server: `http://192.168.1.240:5174`
+- Operational scripts try the Tailscale SSH alias/IP first, then fall back to
+  the LAN SSH alias/IP.
 - Worker backend: `https://spotify.erlinhoxha.workers.dev`
 - Music server launchd service: `com.fightingentropy.spotify-app`
 - Shared Caddy launchd service: `com.fightingentropy.netflix-caddy`
@@ -81,7 +84,7 @@ Worker-to-Mac-mini requests use `MAC_MINI_PROXY_TOKEN` and `SPOTIFY_PROXY_TOKEN`
 ## Operational Checks
 
 - `bun run mini:check` verifies the Mac mini server, launchd state, scan count,
-  and LAN reachability.
+  and direct Mini reachability.
 - `bun run mini:install-caddy` installs or refreshes the direct Caddy route.
 - `bun run mini:install-dns-watch` installs or refreshes the DNS drift watcher.
 - Live media health should include a `206` response for FLAC range requests.

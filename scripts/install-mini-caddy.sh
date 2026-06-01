@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MINI_HOST="${MINI_HOST:-}"
+MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 SPOTIFY_DOMAIN="${SPOTIFY_DOMAIN:-spotify.fightingentropy.org}"
 SPOTIFY_WORKER_HOST="${SPOTIFY_WORKER_HOST:-spotify.erlinhoxha.workers.dev}"
@@ -23,7 +26,8 @@ Options:
   -h, --help             Show this help.
 
 Environment:
-  MINI_HOST              Default: hermes@m4mini.local
+  MINI_HOST              Explicit Mac mini SSH host.
+  MINI_HOSTS             Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   CADDYFILE              Default: /Users/hermes/.config/caddy/Caddyfile
   CADDY_BIN              Default: /usr/local/bin/caddy
@@ -62,6 +66,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+source "$SCRIPT_DIR/mini-host.sh"
+resolve_mini_host
 
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
   "SPOTIFY_DOMAIN='$SPOTIFY_DOMAIN' SPOTIFY_WORKER_HOST='$SPOTIFY_WORKER_HOST' SPOTIFY_UPSTREAM='$SPOTIFY_UPSTREAM' CADDYFILE='$CADDYFILE' CADDY_BIN='$CADDY_BIN' CADDY_SERVICE_LABEL='$CADDY_SERVICE_LABEL' bash -s" <<'REMOTE'

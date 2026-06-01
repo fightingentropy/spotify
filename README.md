@@ -8,7 +8,8 @@ Caddy path.
 ## Current Production Setup
 
 - Public app: `https://spotify.fightingentropy.org`
-- Mac mini LAN app/server: `http://m4mini.local:5174`
+- Mac mini Tailscale app/server: `http://100.121.144.60:5174`
+- Mac mini LAN app/server: `http://192.168.1.240:5174`
 - Worker backend for auth/import APIs: `https://spotify.erlinhoxha.workers.dev`
 - Mac mini music folder: `/Users/hermes/Music`
 - Remote app folder on Mac mini: `/Users/hermes/Developer/spotify`
@@ -61,9 +62,13 @@ media path.
   - `com.fightingentropy.netflix-caddy`
 - Keep the DNS drift watcher launchd service running:
   - `com.fightingentropy.spotify-dns-watch`
-- `m4mini.local` only works on the LAN. Public traffic should reach the Mac mini
-  through the router's 80/443 port forwards and the direct DNS-only record for
-  `spotify.fightingentropy.org`.
+- Operational scripts try the Mac mini Tailscale SSH alias `m4mini-ts` first,
+  then the raw Tailscale target `hermes@100.121.144.60`, then the LAN alias
+  `m4mini.local`, then the raw Ethernet target `hermes@192.168.1.240`. Set
+  `MINI_HOST` to force a single host, or `MINI_HOSTS` to override the fallback
+  list.
+- Public traffic should reach the Mac mini through the router's 80/443 port
+  forwards and the direct DNS-only record for `spotify.fightingentropy.org`.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
 - The Mac mini DNS watcher compares public DNS against the current home IP and
@@ -88,6 +93,8 @@ media path.
   scans the music folder, serves media with range support, accepts uploads, and
   writes `.spotify.json` sidecars.
 - `scripts/deploy-mini.sh` - builds/syncs the app and local server to Mac mini.
+- `scripts/mini-host.sh` - shared Mac mini SSH host resolver with Tailscale then
+  LAN fallback.
 - `scripts/install-mini-server.sh` - installs/restarts the Mac mini launchd app
   service.
 - `scripts/install-mini-caddy.sh` - installs/updates the direct Caddy route for
@@ -97,7 +104,7 @@ media path.
 - `scripts/sync-mini-music.sh` - syncs audio/artwork/lyrics/sidecars to
   `/Users/hermes/Music`.
 - `scripts/check-mini.sh` - health check for Mac mini server, launchd, library
-  scan count, and LAN reachability.
+  scan count, and direct Mini reachability.
 - `wrangler.jsonc` - Cloudflare Worker bindings, `workers.dev` backend, and
   `MAC_MINI_ORIGIN`.
 - `FEATURES.md` - current user-facing features and production capabilities.
@@ -164,6 +171,10 @@ bash scripts/sync-mini-music.sh --source /Users/erlinhoxha/Movies
 The sync copies audio, cover, lyrics, and `.spotify.json` sidecar files. It does
 not delete remote files.
 
+The `mini:*` scripts try `m4mini-ts`, `hermes@100.121.144.60`,
+`m4mini.local`, then `hermes@192.168.1.240`. Override with `MINI_HOST=...` for
+one host or `MINI_HOSTS="host1 host2"` for a custom ordered list.
+
 ## Cloudflare Worker Deployment
 
 Deploy the Worker backend:
@@ -225,7 +236,7 @@ Expected behavior:
   hostnames.
 - DNS watch logs show `dns_ok` in
   `/Users/hermes/.local/state/spotify/dns-watch.log`.
-- Mac mini LAN health check returns `200`.
+- Mac mini direct health check returns `200`.
 
 ## API Surface
 

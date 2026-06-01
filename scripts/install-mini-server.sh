@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MINI_HOST="${MINI_HOST:-}"
+MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
@@ -27,7 +30,8 @@ Options:
   -h, --help             Show this help.
 
 Environment:
-  MINI_HOST              Default: hermes@m4mini.local
+  MINI_HOST              Explicit Mac mini SSH host.
+  MINI_HOSTS             Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   REMOTE_APP             Default: /Users/hermes/Developer/spotify
   REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
@@ -65,6 +69,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+source "$SCRIPT_DIR/mini-host.sh"
+resolve_mini_host
 
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$MINI_HOST" \
   "REMOTE_APP='$REMOTE_APP' REMOTE_MUSIC_DIR='$REMOTE_MUSIC_DIR' PORT='$PORT' HOST='$HOST' BUN_BIN='$BUN_BIN' PROXY_HOSTNAMES='$PROXY_HOSTNAMES' SERVICE_LABEL='$SERVICE_LABEL' bash -s" <<'REMOTE'

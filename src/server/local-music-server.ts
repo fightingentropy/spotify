@@ -190,11 +190,17 @@ function isLoopbackHost(host: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
 }
 
-function isPrivateIpv4Host(host: string): boolean {
+function parseIpv4Host(host: string): number[] | null {
   const octets = host.split(".").map((part) => Number(part));
   if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
+    return null;
   }
+  return octets;
+}
+
+function isPrivateIpv4Host(host: string): boolean {
+  const octets = parseIpv4Host(host);
+  if (!octets) return false;
   return (
     octets[0] === 10 ||
     (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
@@ -202,8 +208,19 @@ function isPrivateIpv4Host(host: string): boolean {
   );
 }
 
+function isTailscaleIpv4Host(host: string): boolean {
+  const octets = parseIpv4Host(host);
+  return Boolean(octets && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127);
+}
+
 function isLocalNetworkHost(host: string): boolean {
-  return isLoopbackHost(host) || host === "m4mini.local" || host.endsWith(".local") || isPrivateIpv4Host(host);
+  return (
+    isLoopbackHost(host) ||
+    host === "m4mini.local" ||
+    host.endsWith(".local") ||
+    isPrivateIpv4Host(host) ||
+    isTailscaleIpv4Host(host)
+  );
 }
 
 function hasValidProxyToken(request: Request): boolean {
@@ -214,14 +231,7 @@ function requestNeedsProxyToken(request: Request): boolean {
   if (!proxyToken) return false;
   const host = requestHostname(request);
   if (proxyHostnames.has(host)) return true;
-  if (isLoopbackHost(host) || host === "m4mini.local" || host.endsWith(".local")) return false;
-  if (host === "127.0.0.1" || host === "::1" || host === "[::1]") return false;
-  if (/^10\./.test(host) || /^192\.168\./.test(host)) return false;
-  const private172Match = host.match(/^172\.(\d+)\./);
-  if (private172Match) {
-    const secondOctet = Number(private172Match[1]);
-    if (secondOctet >= 16 && secondOctet <= 31) return false;
-  }
+  if (isLocalNetworkHost(host)) return false;
   return true;
 }
 

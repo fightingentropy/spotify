@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MINI_HOST="${MINI_HOST:-}"
+MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 SOURCE_DIR="${SOURCE_DIR:-$HOME/Music}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
@@ -19,7 +22,8 @@ Options:
   -h, --help             Show this help.
 
 Environment:
-  MINI_HOST              Default: hermes@m4mini.local
+  MINI_HOST              Explicit Mac mini SSH host.
+  MINI_HOSTS             Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   SOURCE_DIR             Default: ~/Music
   REMOTE_MUSIC_DIR       Default: /Users/hermes/Music
@@ -52,10 +56,13 @@ done
 
 [[ -d "$SOURCE_DIR" ]] || { echo "Source directory not found: $SOURCE_DIR" >&2; exit 1; }
 
-ssh -i "$SSH_KEY" -o BatchMode=yes "$MINI_HOST" "mkdir -p '$REMOTE_MUSIC_DIR'"
+source "$SCRIPT_DIR/mini-host.sh"
+resolve_mini_host
+
+ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout="${MINI_CONNECT_TIMEOUT:-10}" "$MINI_HOST" "mkdir -p '$REMOTE_MUSIC_DIR'"
 
 rsync -a --human-readable --progress --stats --prune-empty-dirs \
-  -e "ssh -i $SSH_KEY -o BatchMode=yes" \
+  -e "ssh -i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=${MINI_CONNECT_TIMEOUT:-10}" \
   --include='*/' \
   --include='*.[aA][aA][cC]' \
   --include='*.[aA][iI][fF]' \
@@ -79,5 +86,5 @@ rsync -a --human-readable --progress --stats --prune-empty-dirs \
   "$SOURCE_DIR/" \
   "$MINI_HOST:$REMOTE_MUSIC_DIR/"
 
-ssh -i "$SSH_KEY" -o BatchMode=yes "$MINI_HOST" \
+ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout="${MINI_CONNECT_TIMEOUT:-10}" "$MINI_HOST" \
   "find '$REMOTE_MUSIC_DIR' -type f \\( -iname '*.aac' -o -iname '*.aif' -o -iname '*.aiff' -o -iname '*.flac' -o -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.oga' -o -iname '*.ogg' -o -iname '*.opus' -o -iname '*.wav' \\) | wc -l | tr -d ' ' | awk '{print \"remote_audio_files=\" \$1}'"

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+MINI_HOST="${MINI_HOST:-}"
+MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 PORT="${PORT:-5174}"
@@ -13,6 +16,9 @@ SSH_OPTS=(
   -o BatchMode=yes
   -o ConnectTimeout=10
 )
+
+source "$SCRIPT_DIR/mini-host.sh"
+resolve_mini_host
 
 fail=0
 
@@ -94,9 +100,9 @@ fi
 [[ "$audio_files" =~ ^[0-9]+$ && "$audio_files" -gt 0 ]] && pass "remote music has $audio_files audio files" || bad "remote music has no audio files yet"
 [[ "$songs_count" =~ ^[0-9]+$ && "$songs_count" -gt 0 ]] && pass "server scanned $songs_count songs" || bad "server scanned $songs_count songs"
 
-LAN_HOST="${MINI_HOST#*@}"
-lan_status="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://$LAN_HOST:$PORT/api/music/source" || true)"
-[[ "$lan_status" == "200" ]] && pass "LAN URL http://$LAN_HOST:$PORT is reachable" || bad "LAN URL returned HTTP $lan_status"
+DIRECT_HOST="${MINI_HOST_ADDRESS:-${MINI_HOST#*@}}"
+direct_status="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://$DIRECT_HOST:$PORT/api/music/source" || true)"
+[[ "$direct_status" == "200" ]] && pass "direct URL http://$DIRECT_HOST:$PORT is reachable" || bad "direct URL returned HTTP $direct_status"
 
 if [[ "$lan_ip" != "missing" && -n "$lan_ip" ]]; then
   pass "mini LAN IP is $lan_ip"

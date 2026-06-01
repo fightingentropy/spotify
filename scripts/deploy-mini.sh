@@ -2,9 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$ROOT_DIR/scripts"
 cd "$ROOT_DIR"
 
-MINI_HOST="${MINI_HOST:-hermes@m4mini.local}"
+MINI_HOST="${MINI_HOST:-}"
+MINI_HOSTS="${MINI_HOSTS:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
@@ -24,7 +26,8 @@ Options:
   -h, --help            Show this help.
 
 Environment:
-  MINI_HOST             Default: hermes@m4mini.local
+  MINI_HOST             Explicit Mac mini SSH host.
+  MINI_HOSTS            Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY               Default: ~/.ssh/id_ed25519_codex_m4mini
   REMOTE_APP            Default: /Users/hermes/Developer/spotify
   BUN_BIN               Default: /opt/homebrew/bin/bun
@@ -53,8 +56,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SSH_BASE=(ssh -i "$SSH_KEY" -o BatchMode=yes)
-RSYNC_SSH="ssh -i $SSH_KEY -o BatchMode=yes"
+source "$SCRIPT_DIR/mini-host.sh"
+resolve_mini_host
+
+SSH_BASE=(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout="${MINI_CONNECT_TIMEOUT:-10}")
+RSYNC_SSH="ssh -i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=${MINI_CONNECT_TIMEOUT:-10}"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   bun run build
