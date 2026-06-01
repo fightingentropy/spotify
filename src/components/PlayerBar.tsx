@@ -959,7 +959,7 @@ function PlayerBar(): React.ReactElement | null {
           {!currentSongIsRadio ? (
             <button
               type="button"
-              aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+              aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending || !currentSongId}
               className={cn(
@@ -1000,8 +1000,8 @@ function PlayerBar(): React.ReactElement | null {
           {!currentSongIsRadio ? (
             <button
               type="button"
-              aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
-              title={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+              aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
+              title={songIsLiked ? "In liked songs" : "Save to liked songs"}
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending || !currentSongId}
               className={cn(

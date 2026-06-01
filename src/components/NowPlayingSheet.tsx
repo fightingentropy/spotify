@@ -231,7 +231,7 @@ export default function NowPlayingSheet({
                     <OfflineSongDownloadButton song={song} className="h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
                     <button
                       type="button"
-                      aria-label={songIsLiked ? "Remove from liked songs" : "Save to liked songs"}
+                      aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
                       onClick={handleToggleLike}
                       disabled={!likesHydrated || likePending}
                       className={cn(

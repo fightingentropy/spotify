@@ -1320,16 +1320,10 @@ app.post("/api/register", async (c) => {
 app.get("/api/home", async (c) => {
   const db = c.get("db");
   const user = c.get("user");
-  const [songs, likes] = await Promise.all([
-    listSongs(db, user?.id ?? null),
-    user
-      ? db<{ songId: string }>`SELECT "songId" FROM "Like" WHERE "userId" = ${user.id}`
-      : Promise.resolve([] as Array<{ songId: string }>),
-  ]);
-  const visibleSongIds = new Set(songs.map((song) => song.id));
+  const songs = await listSongs(db, user?.id ?? null);
   return jsonCached(c, {
     songs: songs.map(songToPlayerSong),
-    likedSongIds: likes.map((like) => like.songId).filter((songId) => visibleSongIds.has(songId)),
+    likedSongIds: songs.map((song) => song.id),
   });
 });
 
@@ -1350,15 +1344,14 @@ app.get("/api/library", async (c) => {
 app.get("/api/liked", async (c) => {
   const user = requireUser(c.get("user"));
   await ensureSongColumns(c.get("db"));
-  const rows = await c.get("db")<SongRow & { songId: string }>`
-    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", l."songId"
-    FROM "Like" l
-    INNER JOIN "Song" s ON s."id" = l."songId"
-    WHERE l."userId" = ${user.id}
-      AND s."userId" = ${user.id}
-    ORDER BY l."createdAt" DESC
+  const rows = await c.get("db")<SongRow>`
+    SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
+    FROM "Song"
+    WHERE "userId" = ${user.id}
+    ORDER BY "createdAt" DESC
+    LIMIT 5000
   `;
-  return jsonCached(c, { songs: rows.map(songToPlayerSong), likedSongIds: rows.map((row) => row.songId) });
+  return jsonCached(c, { songs: rows.map(songToPlayerSong), likedSongIds: rows.map((row) => row.id) });
 });
 
 app.get("/api/playlist/:id", async (c) => {
@@ -1376,18 +1369,17 @@ app.get("/api/playlist/:id", async (c) => {
   const playlist = playlists[0];
   if (!playlist) return jsonError("Playlist not found", 404);
   if (playlist.userId !== user.id) return jsonError("Forbidden", 403);
-  const songRows = await db<SongRow & { order: number; likedSongId: string | null }>`
-    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", ps."order", l."songId" AS "likedSongId"
+  const songRows = await db<SongRow & { order: number }>`
+    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", ps."order"
     FROM "PlaylistSong" ps
     INNER JOIN "Song" s ON s."id" = ps."songId"
-    LEFT JOIN "Like" l ON l."songId" = s."id" AND l."userId" = ${user.id}
     WHERE ps."playlistId" = ${id}
     ORDER BY ps."order" ASC
   `;
   return jsonCached(c, {
     playlist,
     songs: songRows.map(songToPlayerSong),
-    likedSongIds: user ? songRows.filter((row) => !!row.likedSongId).map((row) => row.id) : [],
+    likedSongIds: songRows.map((row) => row.id),
   });
 });
 
@@ -1833,15 +1825,10 @@ app.post("/api/songs/:id/assets", async (c) => {
 
 app.get("/api/likes", async (c) => {
   const user = c.get("user");
-  if (!user) return jsonCached(c, { likes: [] });
-  const likes = await c.get("db")<{ songId: string }>`
-    SELECT l."songId"
-    FROM "Like" l
-    INNER JOIN "Song" s ON s."id" = l."songId"
-    WHERE l."userId" = ${user.id}
-      AND s."userId" = ${user.id}
-  `;
-  return jsonCached(c, { likes: likes.map((like) => like.songId) });
+  if (!user) return jsonCached(c, { likes: [], likedSongIds: [] });
+  const songs = await listSongs(c.get("db"), user.id);
+  const likedSongIds = songs.map((song) => song.id);
+  return jsonCached(c, { likes: likedSongIds, likedSongIds });
 });
 
 app.post("/api/likes", async (c) => {
@@ -1866,7 +1853,10 @@ app.delete("/api/likes", async (c) => {
   const payload = await readJson<{ songId?: unknown }>(c.req.raw);
   const songId = toStringValue(payload?.songId);
   if (!songId) return jsonError("Missing songId", 400);
-  await c.get("db")`DELETE FROM "Like" WHERE "userId" = ${user.id} AND "songId" = ${songId}`;
+  const song = await c.get("db")<{ id: string }>`
+    SELECT "id" FROM "Song" WHERE "id" = ${songId} AND "userId" = ${user.id} LIMIT 1
+  `;
+  if (!song[0]) return jsonError("Song not found", 404);
   return c.json({ ok: true });
 });
 

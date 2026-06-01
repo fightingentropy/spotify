@@ -155,8 +155,8 @@ const SongListItemComponent = function SongListItem({
       {showLike ? (
         <button
           type="button"
-          aria-label={liked ? "Remove from liked songs" : "Save to liked songs"}
-          title={!canLike ? "Sign in to like songs" : liked ? "Remove from liked songs" : "Save to liked songs"}
+          aria-label={liked ? "In liked songs" : "Save to liked songs"}
+          title={!canLike ? "Sign in to like songs" : liked ? "In liked songs" : "Save to liked songs"}
           disabled={likePending}
           onClick={handleToggleLike}
           className={cn(
