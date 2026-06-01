@@ -12,7 +12,7 @@ import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
 import ProfilePage from "@/client/pages/ProfilePage";
-import { useApiData, type LibraryPayload } from "@/client/api";
+import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
@@ -123,14 +123,17 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
 function Shell() {
   const { user, status } = useAuth();
   const { data: library } = useApiData<LibraryPayload>(
-    `/api/library?auth=${encodeURIComponent(user?.id ?? status)}`,
+    withAccountScope("/api/library", user?.id ?? status),
     {
       playlists: [],
       userId: null,
     },
-    { keepPreviousData: true },
   );
   useIdleRoutePrefetch(status);
+  const visibleLibrary =
+    library.userId && library.userId === user?.id
+      ? library
+      : { playlists: [], userId: user?.id ?? null };
 
   return (
     <>
@@ -160,8 +163,8 @@ function Shell() {
         </div>
       </header>
       <LibrarySidebarClient
-        userId={status === "loading" ? library.userId : user?.id ?? null}
-        playlists={library.playlists}
+        userId={status === "loading" ? visibleLibrary.userId : user?.id ?? null}
+        playlists={visibleLibrary.playlists}
         initialCollapsed={localStorage.getItem("spotify_left_sidebar_collapsed") === "1"}
       />
       <NowPlayingSidebar />

@@ -16,6 +16,7 @@ type LikesState = {
   pending: Record<string, true>;
   hydrated: boolean;
   mergeInitial: (ids: string[]) => void;
+  resetRemote: () => void;
   toggleLike: (songId: string, nextLiked: boolean, song?: PlayerSong) => Promise<LikeToggleResult>;
 };
 
@@ -85,6 +86,15 @@ export const useLikesStore = create<LikesState>((set, get) => ({
 
     if (changed) set({ likedSongIds: next, hydrated: true });
     else if (!get().hydrated) set({ hydrated: true });
+  },
+  resetRemote: () => {
+    const current = get().likedSongIds;
+    const next: Record<string, true> = {};
+    for (const id of Object.keys(current)) {
+      if (isLocalSongId(id)) next[id] = true;
+    }
+    writeLocalLikedSongIds(next);
+    set({ likedSongIds: next, pending: {}, hydrated: true });
   },
   toggleLike: async (songId, nextLiked, song) => {
     if (typeof songId !== "string" || songId.length === 0) {

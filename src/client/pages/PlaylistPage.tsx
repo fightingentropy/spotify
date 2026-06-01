@@ -1,17 +1,20 @@
 import { useParams } from "react-router-dom";
-import { useApiData, type PlaylistPayload } from "@/client/api";
+import { useApiData, withAccountScope, type PlaylistPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { SongGrid } from "@/components/SongGrid";
 import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
 
 export default function PlaylistPage() {
   const { id = "" } = useParams();
-  const { user } = useAuth();
-  const { data, loading, error } = useApiData<PlaylistPayload>(`/api/playlist/${encodeURIComponent(id)}`, {
-    playlist: null,
-    songs: [],
-    likedSongIds: [],
-  });
+  const { user, status } = useAuth();
+  const { data, loading, error } = useApiData<PlaylistPayload>(
+    withAccountScope(`/api/playlist/${encodeURIComponent(id)}`, user?.id ?? status),
+    {
+      playlist: null,
+      songs: [],
+      likedSongIds: [],
+    },
+  );
 
   if (loading) return <div className="px-6 py-8 max-w-7xl mx-auto opacity-70">Loading playlist...</div>;
   if (error) return <div className="px-6 py-8 max-w-7xl mx-auto text-red-500">{error}</div>;

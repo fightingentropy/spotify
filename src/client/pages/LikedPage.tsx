@@ -1,14 +1,17 @@
 import { Link } from "react-router-dom";
-import { useApiData, type LikedPayload } from "@/client/api";
+import { useApiData, withAccountScope, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { SongGrid } from "@/components/SongGrid";
 
 export default function LikedPage() {
   const { user, status } = useAuth();
-  const { data, loading, error } = useApiData<LikedPayload>(user ? "/api/liked" : "/api/likes", {
-    songs: [],
-    likedSongIds: [],
-  });
+  const { data, loading, error } = useApiData<LikedPayload>(
+    withAccountScope(user ? "/api/liked" : "/api/likes", user?.id ?? status),
+    {
+      songs: [],
+      likedSongIds: [],
+    },
+  );
 
   if (status !== "loading" && !user) {
     return (

@@ -34,6 +34,21 @@ function getApiPath(url: string): string {
   }
 }
 
+export function withAccountScope(url: string, scope: string | null | undefined): string {
+  const value = scope?.trim() || "anonymous";
+  try {
+    const parsed = new URL(url, "http://spotify.local");
+    parsed.searchParams.set("auth", value);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    const [path, query = ""] = url.split("?");
+    const params = new URLSearchParams(query);
+    params.set("auth", value);
+    const serialized = params.toString();
+    return serialized ? `${path}?${serialized}` : path;
+  }
+}
+
 function isPersistableApiUrl(url: string): boolean {
   const path = getApiPath(url);
   return (
@@ -245,14 +260,14 @@ export function invalidateApiCache(match?: string | RegExp | ((url: string) => b
 
 export function invalidateLibraryApiCache(): void {
   invalidateApiCache((url) =>
-    url === "/api/home" ||
-    url === "/api/search-index" ||
-    url === "/api/songs" ||
-    url === "/api/liked" ||
-    url === "/api/likes" ||
-    url.startsWith("/api/music/source") ||
-    url.startsWith("/api/library") ||
-    url.startsWith("/api/playlist/"),
+    getApiPath(url) === "/api/home" ||
+    getApiPath(url) === "/api/search-index" ||
+    getApiPath(url) === "/api/songs" ||
+    getApiPath(url) === "/api/liked" ||
+    getApiPath(url) === "/api/likes" ||
+    getApiPath(url).startsWith("/api/music/source") ||
+    getApiPath(url).startsWith("/api/library") ||
+    getApiPath(url).startsWith("/api/playlist/"),
   );
 }
 

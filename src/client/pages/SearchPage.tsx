@@ -1,10 +1,15 @@
 import MobileSearch from "@/components/MobileSearch";
-import { useApiData, type SearchIndexPayload } from "@/client/api";
+import { useApiData, withAccountScope, type SearchIndexPayload } from "@/client/api";
+import { useAuth } from "@/client/auth";
 
 export default function SearchPage() {
-  const { data, loading, error } = useApiData<SearchIndexPayload>("/api/search-index", {
-    songs: [],
-  });
+  const { user, status } = useAuth();
+  const { data, loading, error } = useApiData<SearchIndexPayload>(
+    withAccountScope("/api/search-index", user?.id ?? status),
+    {
+      songs: [],
+    },
+  );
   const songs = data.songs;
 
   if (loading) {

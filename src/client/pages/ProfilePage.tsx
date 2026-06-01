@@ -1,7 +1,7 @@
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { LogOut, Settings } from "lucide-react";
 import { useAuth } from "@/client/auth";
-import { PROFILE_IMAGE_URL } from "@/components/AuthButtons";
+import { AccountAvatar } from "@/components/AuthButtons";
 
 export default function ProfilePage() {
   const { user, status, signOut } = useAuth();
@@ -23,10 +23,11 @@ export default function ProfilePage() {
     <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-10">
       <div className="mx-auto max-w-3xl">
         <div className="flex items-center gap-5 border-b border-white/[0.1] pb-7">
-          <img
-            src={user.image || PROFILE_IMAGE_URL}
+          <AccountAvatar
+            src={user.image}
             alt={displayName}
             className="h-24 w-24 rounded-full border border-white/[0.14] object-cover shadow-[0_16px_36px_rgba(0,0,0,0.35)]"
+            iconSize={42}
           />
           <div className="min-w-0">
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-white/[0.48]">Profile</p>

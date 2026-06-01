@@ -5,7 +5,30 @@ import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, LogIn, LogOut, Settings, UserRound } from "lucide-react";
 import { useAuth } from "@/client/auth";
 
-export const PROFILE_IMAGE_URL = "/profile.jpg";
+export function AccountAvatar({
+  src,
+  alt,
+  className,
+  iconSize = 17,
+}: {
+  src?: string | null;
+  alt: string;
+  className: string;
+  iconSize?: number;
+}) {
+  if (src) {
+    return <img src={src} alt={alt} className={className} />;
+  }
+
+  return (
+    <span
+      aria-label={alt}
+      className={`grid place-items-center bg-white/[0.12] text-white/[0.72] ${className}`}
+    >
+      <UserRound size={iconSize} strokeWidth={2.2} />
+    </span>
+  );
+}
 
 export function AuthButtons({ compact = false }: { compact?: boolean }) {
   const { user, status, signOut } = useAuth();
@@ -42,10 +65,11 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
         aria-label="Open profile"
         title="Profile"
       >
-        <img
-          src={user?.image || PROFILE_IMAGE_URL}
+        <AccountAvatar
+          src={user.image}
           alt={user?.name || "Profile"}
           className="h-full w-full rounded-full object-cover"
+          iconSize={20}
         />
       </Link>
     );
@@ -72,7 +96,7 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
   return (
     <UserMenu
       name={user.name ?? user.email ?? "Account"}
-      imageUrl={user.image || PROFILE_IMAGE_URL}
+      imageUrl={user.image}
       onSignOut={async () => {
         await signOut();
         navigate("/");
@@ -87,7 +111,7 @@ function UserMenu({
   onSignOut,
 }: {
   name: string;
-  imageUrl: string;
+  imageUrl?: string | null;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -120,7 +144,7 @@ function UserMenu({
         aria-expanded={open}
         aria-label="Account menu"
      >
-        <img src={imageUrl} alt="" className="h-6 w-6 rounded-full object-cover" />
+        <AccountAvatar src={imageUrl} alt="" className="h-6 w-6 rounded-full object-cover" iconSize={15} />
         <span className="max-w-[180px] truncate text-[15px]">{name}</span>
         <ChevronDown size={16} className="text-white/[0.62]" />
       </button>

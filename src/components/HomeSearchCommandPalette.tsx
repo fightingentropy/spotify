@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { warmPlaybackSong } from "@/client/playback-warm";
-import { useApiData, type SearchIndexPayload } from "@/client/api";
+import { useApiData, withAccountScope, type SearchIndexPayload } from "@/client/api";
+import { useAuth } from "@/client/auth";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
@@ -20,6 +21,7 @@ function normalizeSongPart(value: string): string {
 }
 
 export function HomeSearchCommandPalette({ className }: HomeSearchCommandPaletteProps) {
+  const { user, status } = useAuth();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -27,7 +29,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   const setQueue = usePlayerStore((state) => state.setQueue);
   const offlineRecords = useOfflineStore((state) => state.records);
   const { data, loading, error } = useApiData<SearchIndexPayload>(
-    "/api/search-index",
+    withAccountScope("/api/search-index", user?.id ?? status),
     { songs: [] },
     { enabled: open },
   );

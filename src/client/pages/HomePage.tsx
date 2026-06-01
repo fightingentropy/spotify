@@ -11,7 +11,7 @@ import {
   Shuffle,
 } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
-import { useApiData, type HomePayload } from "@/client/api";
+import { useApiData, withAccountScope, type HomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
@@ -170,7 +170,7 @@ function SaveToLikedButton({
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, status } = useAuth();
   const [viewMode, setViewMode] = useState<HomeViewMode>("list");
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
@@ -179,10 +179,13 @@ export default function HomePage() {
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const warmVisibleSongsRef = useRef<Map<Element, HomeSong>>(new Map());
   const warmObserverRef = useRef<IntersectionObserver | null>(null);
-  const { data, loading, error } = useApiData<HomePayload>("/api/home", {
-    songs: [],
-    likedSongIds: [],
-  });
+  const { data, loading, error } = useApiData<HomePayload>(
+    withAccountScope("/api/home", user?.id ?? status),
+    {
+      songs: [],
+      likedSongIds: [],
+    },
+  );
 
   const setQueue = usePlayerStore((state) => state.setQueue);
   const play = usePlayerStore((state) => state.play);

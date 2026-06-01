@@ -1,19 +1,22 @@
 import { useEffect, useMemo } from "react";
 import { Download } from "lucide-react";
-import { useApiData, type LikedPayload } from "@/client/api";
+import { useApiData, withAccountScope, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { SongGrid } from "@/components/SongGrid";
 
 export default function DownloadedPage() {
-  const { user } = useAuth();
+  const { user, status } = useAuth();
   const hydrate = useOfflineStore((state) => state.hydrate);
   const hydrated = useOfflineStore((state) => state.hydrated);
   const records = useOfflineStore((state) => state.records);
-  const { data } = useApiData<LikedPayload>(user ? "/api/liked" : "/api/likes", {
-    songs: [],
-    likedSongIds: [],
-  });
+  const { data } = useApiData<LikedPayload>(
+    withAccountScope(user ? "/api/liked" : "/api/likes", user?.id ?? status),
+    {
+      songs: [],
+      likedSongIds: [],
+    },
+  );
 
   useEffect(() => {
     void hydrate();

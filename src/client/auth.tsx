@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { invalidateApiCache } from "@/client/api";
+import { useLikesStore } from "@/store/likes";
 
 export type AuthUser = {
   id: string;
@@ -65,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthContextValue["status"]>(
     initialUser ? "authenticated" : "unauthenticated",
   );
+  const userIdRef = useRef<string | null>(initialUser?.id ?? null);
 
   const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
     if (options?.showLoading) setStatus("loading");
@@ -89,6 +91,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const nextUserId = user?.id ?? null;
+    if (userIdRef.current === nextUserId) return;
+    userIdRef.current = nextUserId;
+    useLikesStore.getState().resetRemote();
+  }, [user?.id]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const response = await fetch("/api/auth/signin", {

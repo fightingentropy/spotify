@@ -71,6 +71,10 @@ media path.
   forwards and the direct DNS-only record for `spotify.fightingentropy.org`.
 - `MAC_MINI_PROXY_TOKEN` is a Worker secret. Do not commit the real value.
 - `SPOTIFY_PROXY_TOKEN` on the Mac mini must match the Worker secret.
+- `SPOTIFY_LIBRARY_OWNER_EMAILS`, `SPOTIFY_LIBRARY_OWNER_USER_IDS`, or
+  `SPOTIFY_LIBRARY_OWNER_NAMES` controls which app accounts can see and mutate
+  the Mac mini music folder. This private deployment defaults owner names to
+  `Erlin`; prefer setting the owner email or user id once known.
 - The Mac mini DNS watcher compares public DNS against the current home IP and
   logs drift. It does not store a Cloudflare API token or mutate DNS.
 - The Settings page intentionally only shows user-facing playback/download
@@ -209,6 +213,9 @@ SPOTIFY_ARTWORK_LOOKUP=1
 SPOTIFY_ARTWORK_COUNTRY=GB
 SPOTIFY_PROXY_TOKEN=...
 SPOTIFY_PROXY_HOSTNAMES=spotify.fightingentropy.org
+SPOTIFY_LIBRARY_OWNER_EMAILS=
+SPOTIFY_LIBRARY_OWNER_USER_IDS=
+SPOTIFY_LIBRARY_OWNER_NAMES=Erlin
 SPOTIFY_DNS_WATCH_NAME=spotify.fightingentropy.org
 ```
 

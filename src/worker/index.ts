@@ -46,6 +46,8 @@ type AuthUser = {
   image: string | null;
 };
 
+const SAVANNAH_PROFILE_IMAGE_URL = "/savannah.jpg";
+
 type ActionPayload = {
   action?: unknown;
   spotifyUrl?: unknown;
@@ -405,8 +407,16 @@ function publicUser(user: AuthUser) {
     id: user.id,
     email: user.email,
     name: user.name,
-    image: user.image,
+    image: user.image || defaultUserImage(user.email, user.name),
   };
+}
+
+function defaultUserImage(email: string, name: string | null): string | null {
+  const normalizedName = name?.trim().toLowerCase() || "";
+  const emailLocalPart = email.split("@")[0]?.trim().toLowerCase() || "";
+  if (normalizedName === "savannah" || normalizedName === "savanna") return SAVANNAH_PROFILE_IMAGE_URL;
+  if (emailLocalPart === "savannah" || emailLocalPart === "savanna") return SAVANNAH_PROFILE_IMAGE_URL;
+  return null;
 }
 
 function requireUser(user: AuthUser | null): AuthUser {
@@ -1160,9 +1170,15 @@ function macMiniProxyHeaders(c: Context<AppEnv>, user: AuthUser | null): Headers
   headers.delete("authorization");
   headers.delete("x-spotify-proxy-token");
   headers.delete("x-spotify-user-id");
+  headers.delete("x-spotify-user-email");
+  headers.delete("x-spotify-user-name");
   const token = getMacMiniProxyToken(c.env);
   if (token) headers.set("x-spotify-proxy-token", token);
-  if (user) headers.set("x-spotify-user-id", user.id);
+  if (user) {
+    headers.set("x-spotify-user-id", user.id);
+    headers.set("x-spotify-user-email", user.email);
+    if (user.name) headers.set("x-spotify-user-name", user.name);
+  }
   return headers;
 }
 
@@ -1184,7 +1200,7 @@ function authorizeMacMiniMutation(c: Context<AppEnv>, user: AuthUser | null): Re
   return null;
 }
 
-async function postJsonToMacMini(c: Context<AppEnv>, payload: Record<string, unknown>): Promise<Response> {
+async function postJsonToMacMini(c: Context<AppEnv>, user: AuthUser, payload: Record<string, unknown>): Promise<Response> {
   const targetUrl = new URL("/api/songs", getMacMiniOrigin(c.env));
   const headers = new Headers({
     accept: "application/json",
@@ -1192,6 +1208,9 @@ async function postJsonToMacMini(c: Context<AppEnv>, payload: Record<string, unk
   });
   const token = getMacMiniProxyToken(c.env);
   if (token) headers.set("x-spotify-proxy-token", token);
+  headers.set("x-spotify-user-id", user.id);
+  headers.set("x-spotify-user-email", user.email);
+  if (user.name) headers.set("x-spotify-user-name", user.name);
   return fetch(targetUrl.toString(), {
     method: "POST",
     headers,
@@ -1290,9 +1309,10 @@ app.post("/api/register", async (c) => {
     LIMIT 1
   `;
   if (existing[0]) return jsonError("Email already in use", 409);
+  const image = defaultUserImage(email, name);
   await db`
     INSERT INTO "User" ("id", "email", "name", "passwordHash", "image", "emailVerified", "createdAt", "updatedAt")
-    VALUES (${crypto.randomUUID()}, ${email}, ${name || null}, ${await hash(password, 10)}, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    VALUES (${crypto.randomUUID()}, ${email}, ${name || null}, ${await hash(password, 10)}, ${image}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `;
   return c.json({ ok: true }, 201);
 });
@@ -1624,7 +1644,7 @@ app.post("/api/songs", async (c) => {
       const remoteAudioUrl = toStringValue(payload.audioUrl);
       const resolvedAudioUrl = isSpotifyImport ? (await resolveStreamUrl(payload)).streamUrl : remoteAudioUrl;
       if (!resolvedAudioUrl) return jsonError("Audio URL is required", 400);
-      return postJsonToMacMini(c, {
+      return postJsonToMacMini(c, user, {
         title,
         artist,
         album,

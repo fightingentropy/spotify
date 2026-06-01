@@ -1,12 +1,17 @@
 import { Link } from "react-router-dom";
 import { Download, Heart, ListMusic, RadioTower } from "lucide-react";
-import { useApiData, type LibraryPayload } from "@/client/api";
+import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
+import { useAuth } from "@/client/auth";
 
 export default function LibraryPage() {
-  const { data, loading } = useApiData<LibraryPayload>("/api/library", {
-    playlists: [],
-    userId: null,
-  });
+  const { user, status } = useAuth();
+  const { data, loading } = useApiData<LibraryPayload>(
+    withAccountScope("/api/library", user?.id ?? status),
+    {
+      playlists: [],
+      userId: null,
+    },
+  );
 
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">

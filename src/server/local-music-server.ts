@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createWriteStream, existsSync } from "node:fs";
 import type { Stats } from "node:fs";
@@ -34,6 +34,21 @@ type LibrarySnapshot = {
   entriesById: Map<string, LocalSongEntry>;
   entriesByPath: Map<string, LocalSongEntry>;
   scannedAt: number;
+};
+
+type LibrarySource = {
+  key: string;
+  root: string;
+  cachePath: string;
+  artworkDir: string;
+  shared: boolean;
+};
+
+type RequestUserIdentity = {
+  id: string;
+  email: string | null;
+  name: string | null;
+  local: boolean;
 };
 
 type PersistentSongCache = {
@@ -90,6 +105,11 @@ const LOCAL_USER = {
   image: null,
 };
 const PROXY_USER_ID_HEADER = "x-spotify-user-id";
+const PROXY_USER_EMAIL_HEADER = "x-spotify-user-email";
+const PROXY_USER_NAME_HEADER = "x-spotify-user-name";
+const MEDIA_USER_SEARCH_PARAM = "spotify_user";
+const MEDIA_SCOPE_SEARCH_PARAM = "spotify_scope";
+const MEDIA_SIGNATURE_SEARCH_PARAM = "spotify_sig";
 
 const cwd = process.cwd();
 const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
@@ -98,6 +118,7 @@ const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
 const distDir = resolve(process.env.SPOTIFY_DIST_DIR || defaultDistDir);
 const musicRoot = resolve(process.env.SPOTIFY_MUSIC_DIR || resolve(homedir(), "Music"));
 const cacheDir = resolve(process.env.SPOTIFY_CACHE_DIR || resolve(cwd, "cache"));
+const userMusicRoot = resolve(process.env.SPOTIFY_USER_MUSIC_DIR || resolve(cacheDir, "user-music"));
 const libraryCachePath = resolve(
   process.env.SPOTIFY_LIBRARY_CACHE || resolve(cacheDir, "local-music-library.json"),
 );
@@ -119,6 +140,9 @@ const proxyHostnames = new Set(
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean),
 );
+const libraryOwnerUserIds = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_USER_IDS || "");
+const libraryOwnerEmails = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_EMAILS || "");
+const libraryOwnerNames = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_NAMES || "Erlin");
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
 const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -128,6 +152,8 @@ const MAX_REMOTE_REDIRECTS = 5;
 
 let librarySnapshot: LibrarySnapshot | null = null;
 let scanPromise: Promise<LibrarySnapshot> | null = null;
+const userLibrarySnapshots = new Map<string, LibrarySnapshot>();
+const userScanPromises = new Map<string, Promise<LibrarySnapshot>>();
 
 function json(payload: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -172,6 +198,51 @@ function text(value: string, status = 200): Response {
       "cache-control": "no-store",
     },
   });
+}
+
+function normalizeIdentityValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function parseEnvList(value: string): Set<string> {
+  return new Set(
+    value
+      .split(",")
+      .map(normalizeIdentityValue)
+      .filter(Boolean),
+  );
+}
+
+function listMatchesValue(list: Set<string>, value: string | null | undefined): boolean {
+  if (list.has("*")) return true;
+  if (!value) return false;
+  return list.has(normalizeIdentityValue(value));
+}
+
+function stableUserDigest(userId: string): string {
+  return createHash("sha256").update(userId).digest("hex").slice(0, 32);
+}
+
+function sharedLibrarySource(): LibrarySource {
+  return {
+    key: "shared",
+    root: musicRoot,
+    cachePath: libraryCachePath,
+    artworkDir: artworkCacheDir,
+    shared: true,
+  };
+}
+
+function userLibrarySource(userId: string): LibrarySource {
+  const digest = stableUserDigest(userId);
+  const base = resolve(userMusicRoot, digest);
+  return {
+    key: `user:${digest}`,
+    root: resolve(base, "music"),
+    cachePath: resolve(base, "local-music-library.json"),
+    artworkDir: resolve(base, "artwork"),
+    shared: false,
+  };
 }
 
 function notFound(message = "Not found"): Response {
@@ -642,6 +713,7 @@ async function directoryNames(path: string, cache: Map<string, Promise<string[]>
 }
 
 async function findSidecarByExtensions(
+  source: LibrarySource,
   audioPath: string,
   extensions: Set<string>,
   candidates: string[],
@@ -651,19 +723,20 @@ async function findSidecarByExtensions(
   const wanted = new Set(candidates.map((item) => item.toLowerCase()));
   const exact = names.find((name) => wanted.has(name.toLowerCase()) && extensions.has(extname(name).toLowerCase()));
   if (!exact) return "";
-  const rel = relative(musicRoot, resolve(dirname(audioPath), exact)).split(sep).join("/");
+  const rel = relative(source.root, resolve(dirname(audioPath), exact)).split(sep).join("/");
   return rel && !rel.startsWith("..") ? rel : "";
 }
 
-async function findCoverPath(audioPath: string, stem: string, sidecar: LocalSidecar, cache: Map<string, Promise<string[]>>): Promise<string> {
+async function findCoverPath(source: LibrarySource, audioPath: string, stem: string, sidecar: LocalSidecar, cache: Map<string, Promise<string[]>>): Promise<string> {
   if (sidecar.coverFile) {
     const candidate = resolve(dirname(audioPath), sidecar.coverFile);
-    if (isPathInside(musicRoot, candidate) && existsSync(candidate)) {
-      return relative(musicRoot, candidate).split(sep).join("/");
+    if (isPathInside(source.root, candidate) && existsSync(candidate)) {
+      return relative(source.root, candidate).split(sep).join("/");
     }
   }
 
   return findSidecarByExtensions(
+    source,
     audioPath,
     IMAGE_EXTENSIONS,
     [
@@ -692,15 +765,16 @@ async function findCoverPath(audioPath: string, stem: string, sidecar: LocalSide
   );
 }
 
-async function findLyricsPath(audioPath: string, stem: string, sidecar: LocalSidecar, cache: Map<string, Promise<string[]>>): Promise<string> {
+async function findLyricsPath(source: LibrarySource, audioPath: string, stem: string, sidecar: LocalSidecar, cache: Map<string, Promise<string[]>>): Promise<string> {
   if (sidecar.lyricsFile) {
     const candidate = resolve(dirname(audioPath), sidecar.lyricsFile);
-    if (isPathInside(musicRoot, candidate) && existsSync(candidate)) {
-      return relative(musicRoot, candidate).split(sep).join("/");
+    if (isPathInside(source.root, candidate) && existsSync(candidate)) {
+      return relative(source.root, candidate).split(sep).join("/");
     }
   }
 
   return findSidecarByExtensions(
+    source,
     audioPath,
     LYRICS_EXTENSIONS,
     [`${stem}.lrc`, `${stem}.lyrics.lrc`, `${stem}.txt`, `${stem}.lyrics.txt`],
@@ -709,12 +783,13 @@ async function findLyricsPath(audioPath: string, stem: string, sidecar: LocalSid
 }
 
 async function songFromFile(
+  source: LibrarySource,
   relativePath: string,
   absolutePath: string,
   fileStat: Stats,
   directoryCache: Map<string, Promise<string[]>>,
 ): Promise<PlayerSong> {
-  const id = stableSongId(relativePath);
+  const id = stableSongId(source.shared ? relativePath : `${source.key}/${relativePath}`);
   const fileName = basename(absolutePath);
   const stem = fileName.replace(/\.[^.]+$/, "");
   const fallback = titleFromFileName(fileName);
@@ -736,8 +811,8 @@ async function songFromFile(
     fallback.artist;
   const title = firstString(sidecar.title) || firstString(common?.title) || fallback.title;
   const album = firstString(sidecar.album) || firstString(common?.album);
-  const coverPath = await findCoverPath(absolutePath, stem, sidecar, directoryCache);
-  const lyricsPath = await findLyricsPath(absolutePath, stem, sidecar, directoryCache);
+  const coverPath = await findCoverPath(source, absolutePath, stem, sidecar, directoryCache);
+  const lyricsPath = await findLyricsPath(source, absolutePath, stem, sidecar, directoryCache);
 
   return {
     id,
@@ -811,20 +886,20 @@ async function mapWithConcurrency<T, R>(
   return output;
 }
 
-async function readPersistentCache(): Promise<PersistentSongCache> {
+async function readPersistentCache(source: LibrarySource): Promise<PersistentSongCache> {
   try {
-    const raw = await readFile(libraryCachePath, "utf8");
+    const raw = await readFile(source.cachePath, "utf8");
     const parsed = JSON.parse(raw) as PersistentSongCache;
-    if (parsed?.version === SCAN_CACHE_VERSION && parsed.root === musicRoot) return parsed;
+    if (parsed?.version === SCAN_CACHE_VERSION && parsed.root === source.root) return parsed;
   } catch {}
-  return { version: SCAN_CACHE_VERSION, root: musicRoot, entries: {} };
+  return { version: SCAN_CACHE_VERSION, root: source.root, entries: {} };
 }
 
-async function writePersistentCache(cache: PersistentSongCache): Promise<void> {
-  await mkdir(dirname(libraryCachePath), { recursive: true });
-  const tempPath = `${libraryCachePath}.${process.pid}.${Date.now()}.tmp`;
+async function writePersistentCache(source: LibrarySource, cache: PersistentSongCache): Promise<void> {
+  await mkdir(dirname(source.cachePath), { recursive: true });
+  const tempPath = `${source.cachePath}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(cache)}\n`, "utf8");
-  await rename(tempPath, libraryCachePath);
+  await rename(tempPath, source.cachePath);
 }
 
 function buildLibrarySnapshot(entries: LocalSongEntry[], scannedAt = Date.now()): LibrarySnapshot {
@@ -846,13 +921,13 @@ function buildLibrarySnapshot(entries: LocalSongEntry[], scannedAt = Date.now())
   };
 }
 
-async function readCachedLibrarySnapshot(): Promise<LibrarySnapshot | null> {
-  const cache = await readPersistentCache();
+async function readCachedLibrarySnapshot(source: LibrarySource): Promise<LibrarySnapshot | null> {
+  const cache = await readPersistentCache(source);
   const entries: LocalSongEntry[] = [];
 
   for (const [relativePath, cached] of Object.entries(cache.entries)) {
     if (!cached?.song || typeof cached.size !== "number" || typeof cached.mtimeMs !== "number") continue;
-    const absolutePath = resolveInside(musicRoot, relativePath);
+    const absolutePath = resolveInside(source.root, relativePath);
     if (!absolutePath) continue;
     entries.push({
       song: cached.song,
@@ -874,18 +949,18 @@ function cachedStatMatches(
   return Math.trunc(cached.mtimeMs) === Math.trunc(fileStat.mtimeMs);
 }
 
-async function scanLibrary(usePersistentCache = true): Promise<LibrarySnapshot> {
-  await mkdir(musicRoot, { recursive: true });
+async function scanLibrary(source: LibrarySource, usePersistentCache = true): Promise<LibrarySnapshot> {
+  await mkdir(source.root, { recursive: true });
   await mkdir(cacheDir, { recursive: true });
 
   const previous: PersistentSongCache = usePersistentCache
-    ? await readPersistentCache()
-    : { version: SCAN_CACHE_VERSION, root: musicRoot, entries: {} };
-  const files = await collectAudioFiles(musicRoot);
+    ? await readPersistentCache(source)
+    : { version: SCAN_CACHE_VERSION, root: source.root, entries: {} };
+  const files = await collectAudioFiles(source.root);
   const directoryCache = new Map<string, Promise<string[]>>();
   const nextCache: PersistentSongCache = {
     version: SCAN_CACHE_VERSION,
-    root: musicRoot,
+    root: source.root,
     entries: {},
   };
 
@@ -895,7 +970,7 @@ async function scanLibrary(usePersistentCache = true): Promise<LibrarySnapshot> 
     const song =
       cachedStatMatches(cached, fileStat)
         ? cached.song
-        : await songFromFile(file.relativePath, file.absolutePath, fileStat, directoryCache);
+        : await songFromFile(source, file.relativePath, file.absolutePath, fileStat, directoryCache);
 
     nextCache.entries[file.relativePath] = {
       size: fileStat.size,
@@ -912,13 +987,28 @@ async function scanLibrary(usePersistentCache = true): Promise<LibrarySnapshot> 
     };
   });
 
-  await writePersistentCache(nextCache).catch(() => {});
+  await writePersistentCache(source, nextCache).catch(() => {});
 
   return buildLibrarySnapshot(entries);
 }
 
-function refreshLibrary(usePersistentCache = true): Promise<LibrarySnapshot> {
-  scanPromise ??= scanLibrary(usePersistentCache)
+function refreshLibrary(source: LibrarySource, usePersistentCache = true): Promise<LibrarySnapshot> {
+  if (!source.shared) {
+    const existing = userScanPromises.get(source.key);
+    if (existing) return existing;
+    const promise = scanLibrary(source, usePersistentCache)
+      .then((snapshot) => {
+        userLibrarySnapshots.set(source.key, snapshot);
+        return snapshot;
+      })
+      .finally(() => {
+        userScanPromises.delete(source.key);
+      });
+    userScanPromises.set(source.key, promise);
+    return promise;
+  }
+
+  scanPromise ??= scanLibrary(source, usePersistentCache)
     .then((snapshot) => {
       librarySnapshot = snapshot;
       return snapshot;
@@ -929,24 +1019,141 @@ function refreshLibrary(usePersistentCache = true): Promise<LibrarySnapshot> {
   return scanPromise;
 }
 
-async function getLibrary(force = false): Promise<LibrarySnapshot> {
+async function getLibrary(source: LibrarySource, force = false): Promise<LibrarySnapshot> {
   const now = Date.now();
-  if (!force && librarySnapshot) {
-    if (now - librarySnapshot.scannedAt >= scanTtlMs && !scanPromise) {
-      void refreshLibrary(true).catch((error) => {
-        console.error(`Spotify local music library refresh failed: ${error}`);
+  const snapshot = source.shared ? librarySnapshot : userLibrarySnapshots.get(source.key) ?? null;
+  const activePromise = source.shared ? scanPromise : userScanPromises.get(source.key) ?? null;
+  if (!force && snapshot) {
+    if (now - snapshot.scannedAt >= scanTtlMs && !activePromise) {
+      void refreshLibrary(source, true).catch((error) => {
+        console.error(`Spotify local music library refresh failed for ${source.key}: ${error}`);
       });
     }
-    return librarySnapshot;
+    return snapshot;
   }
-  return refreshLibrary(!force);
+  return refreshLibrary(source, !force);
+}
+
+function currentUserIdentityForRequest(request: Request): RequestUserIdentity | null {
+  if (hasValidProxyToken(request)) {
+    const id = request.headers.get(PROXY_USER_ID_HEADER)?.trim() || "";
+    if (!id) return null;
+    return {
+      id,
+      email: request.headers.get(PROXY_USER_EMAIL_HEADER)?.trim() || null,
+      name: request.headers.get(PROXY_USER_NAME_HEADER)?.trim() || null,
+      local: false,
+    };
+  }
+  return allowsImplicitLocalUser(request)
+    ? {
+        id: LOCAL_USER.id,
+        email: LOCAL_USER.email,
+        name: LOCAL_USER.name,
+        local: true,
+      }
+    : null;
 }
 
 function currentUserIdForRequest(request: Request): string | null {
-  if (hasValidProxyToken(request)) {
-    return request.headers.get(PROXY_USER_ID_HEADER)?.trim() || null;
+  return currentUserIdentityForRequest(request)?.id ?? null;
+}
+
+function isLocalLibraryOwner(identity: RequestUserIdentity | null): boolean {
+  if (!identity) return false;
+  if (identity.local || identity.id === LOCAL_USER.id) return true;
+  return (
+    listMatchesValue(libraryOwnerUserIds, identity.id) ||
+    listMatchesValue(libraryOwnerEmails, identity.email) ||
+    listMatchesValue(libraryOwnerNames, identity.name)
+  );
+}
+
+function librarySourceForIdentity(identity: RequestUserIdentity | null): LibrarySource | null {
+  if (!identity) return null;
+  return isLocalLibraryOwner(identity) ? sharedLibrarySource() : userLibrarySource(identity.id);
+}
+
+function librarySourceForRequest(request: Request): LibrarySource | null {
+  return librarySourceForIdentity(currentUserIdentityForRequest(request));
+}
+
+function canAccessLocalLibrary(request: Request): boolean {
+  return Boolean(librarySourceForRequest(request));
+}
+
+function forbiddenLibraryResponse(): Response {
+  return json({ error: "This account does not have access to the local music library" }, { status: 403 });
+}
+
+function mediaScopeForIdentity(identity: RequestUserIdentity): "shared" | "user" {
+  return isLocalLibraryOwner(identity) ? "shared" : "user";
+}
+
+function mediaSignature(userId: string, scope: string, pathname: string): string {
+  return createHmac("sha256", proxyToken)
+    .update(userId)
+    .update("\0")
+    .update(scope)
+    .update("\0")
+    .update(pathname)
+    .digest("hex")
+    .slice(0, 40);
+}
+
+function appendMediaSignature(mediaUrl: string | undefined, identity: RequestUserIdentity | null): string | undefined {
+  if (!mediaUrl || !proxyToken || !identity || identity.local) return mediaUrl;
+  let parsed: URL;
+  try {
+    parsed = new URL(mediaUrl, "http://spotify.local");
+  } catch {
+    return mediaUrl;
   }
-  return allowsImplicitLocalUser(request) ? LOCAL_USER.id : null;
+  if (!parsed.pathname.startsWith("/api/files/local/") && !parsed.pathname.startsWith("/api/artwork/local/")) {
+    return mediaUrl;
+  }
+  const scope = mediaScopeForIdentity(identity);
+  parsed.searchParams.set(MEDIA_USER_SEARCH_PARAM, identity.id);
+  parsed.searchParams.set(MEDIA_SCOPE_SEARCH_PARAM, scope);
+  parsed.searchParams.set(MEDIA_SIGNATURE_SEARCH_PARAM, mediaSignature(identity.id, scope, parsed.pathname));
+  return `${parsed.pathname}${parsed.search}`;
+}
+
+function songForRequest(song: PlayerSong, request: Request): PlayerSong {
+  const identity = currentUserIdentityForRequest(request);
+  return {
+    ...song,
+    imageUrl: appendMediaSignature(song.imageUrl, identity) || song.imageUrl,
+    audioUrl: appendMediaSignature(song.audioUrl, identity) || song.audioUrl,
+    lyricsUrl: appendMediaSignature(song.lyricsUrl, identity),
+  };
+}
+
+function songsForRequest(songs: PlayerSong[], request: Request): PlayerSong[] {
+  if (!canAccessLocalLibrary(request)) return [];
+  return songs.map((song) => songForRequest(song, request));
+}
+
+function hasValidMediaSignature(url: URL): boolean {
+  if (!proxyToken) return false;
+  const userId = url.searchParams.get(MEDIA_USER_SEARCH_PARAM)?.trim() || "";
+  const scope = url.searchParams.get(MEDIA_SCOPE_SEARCH_PARAM)?.trim() || "";
+  const signature = url.searchParams.get(MEDIA_SIGNATURE_SEARCH_PARAM)?.trim() || "";
+  return Boolean(
+    userId &&
+    (scope === "shared" || scope === "user") &&
+    signature &&
+    signature === mediaSignature(userId, scope, url.pathname),
+  );
+}
+
+function librarySourceForMediaRequest(request: Request, url: URL): LibrarySource | null {
+  const requestSource = librarySourceForRequest(request);
+  if (requestSource) return requestSource;
+  if (!hasValidMediaSignature(url)) return null;
+  const userId = url.searchParams.get(MEDIA_USER_SEARCH_PARAM)?.trim() || "";
+  const scope = url.searchParams.get(MEDIA_SCOPE_SEARCH_PARAM)?.trim() || "";
+  return scope === "shared" ? sharedLibrarySource() : userLibrarySource(userId);
 }
 
 function likesPathForUser(userId: string): string {
@@ -966,6 +1173,7 @@ async function readLikesFile(path: string): Promise<string[]> {
 }
 
 async function readLikes(request: Request): Promise<string[]> {
+  if (!canAccessLocalLibrary(request)) return [];
   const userId = currentUserIdForRequest(request);
   return userId ? readLikesFile(likesPathForUser(userId)) : [];
 }
@@ -973,6 +1181,7 @@ async function readLikes(request: Request): Promise<string[]> {
 async function writeLikes(request: Request, ids: string[]): Promise<void> {
   const userId = currentUserIdForRequest(request);
   if (!userId) throw new Error("Unauthorized");
+  if (!canAccessLocalLibrary(request)) throw new Error("Forbidden");
   const target = likesPathForUser(userId);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, `${JSON.stringify(Array.from(new Set(ids)), null, 2)}\n`, "utf8");
@@ -993,6 +1202,7 @@ async function handleLikes(request: Request): Promise<Response> {
 
   if (request.method !== "POST" && request.method !== "DELETE") return methodNotAllowed();
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  if (!canAccessLocalLibrary(request)) return forbiddenLibraryResponse();
 
   const payload = await readJsonBody<{ songId?: unknown }>(request);
   const songId = typeof payload?.songId === "string" ? payload.songId : "";
@@ -1093,7 +1303,7 @@ async function saveResponseBody(response: Response, path: string, maxBytes?: num
   }
 }
 
-async function deleteSongEntryFiles(entry: LocalSongEntry): Promise<void> {
+async function deleteSongEntryFiles(source: LibrarySource, entry: LocalSongEntry): Promise<void> {
   const sidecar = await readSidecar(entry.absolutePath);
   await Promise.all([
     rm(entry.absolutePath, { force: true }).catch(() => undefined),
@@ -1103,7 +1313,7 @@ async function deleteSongEntryFiles(entry: LocalSongEntry): Promise<void> {
   for (const fileName of [sidecar.coverFile, sidecar.lyricsFile]) {
     if (!fileName) continue;
     const candidate = resolve(dirname(entry.absolutePath), fileName);
-    if (isPathInside(musicRoot, candidate)) {
+    if (isPathInside(source.root, candidate)) {
       await rm(candidate, { force: true }).catch(() => undefined);
     }
   }
@@ -1138,6 +1348,7 @@ async function saveRemoteImage(imageUrl: string, stem: string, audioPath: string
 }
 
 async function handleRemoteSongUpload(payload: {
+  source: LibrarySource;
   title?: unknown;
   artist?: unknown;
   album?: unknown;
@@ -1147,6 +1358,7 @@ async function handleRemoteSongUpload(payload: {
   replaceExisting?: unknown;
   outputFormat?: unknown;
 }): Promise<Response> {
+  const { source } = payload;
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const artist = typeof payload.artist === "string" ? payload.artist.trim() : "";
   const album = typeof payload.album === "string" ? payload.album.trim() : "";
@@ -1185,7 +1397,7 @@ async function handleRemoteSongUpload(payload: {
     throw error;
   }
 
-  const snapshot = await getLibrary();
+  const snapshot = await getLibrary(source);
   const existingEntry = snapshot.songs
     .map((song) => snapshot.entriesById.get(song.id))
     .find((entry): entry is LocalSongEntry =>
@@ -1228,7 +1440,7 @@ async function handleRemoteSongUpload(payload: {
   const stem = sanitizeFileName(`${artist} - ${title}`);
   const preferredAudioPath = existingEntry && replaceExisting
     ? resolve(dirname(existingEntry.absolutePath), `${stem}${audioExt}`)
-    : resolve(musicRoot, `${stem}${audioExt}`);
+    : resolve(source.root, `${stem}${audioExt}`);
   const audioPath =
     existingEntry &&
     replaceExisting &&
@@ -1254,7 +1466,7 @@ async function handleRemoteSongUpload(payload: {
     throw error;
   }
   if (existingEntry && replaceExisting) {
-    await deleteSongEntryFiles(existingEntry);
+    await deleteSongEntryFiles(source, existingEntry);
     await mkdir(dirname(audioPath), { recursive: true });
     await rename(tempAudioPath, audioPath);
   }
@@ -1280,14 +1492,14 @@ async function handleRemoteSongUpload(payload: {
   }
 
   await writeSidecar(audioPath, sidecar);
-  const nextSnapshot = await getLibrary(true);
-  const relativePath = relative(musicRoot, audioPath).split(sep).join("/");
+  const nextSnapshot = await getLibrary(source, true);
+  const relativePath = relative(source.root, audioPath).split(sep).join("/");
   const entry = nextSnapshot.entriesByPath.get(relativePath);
   if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
   return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
-async function handleSongUpload(request: Request): Promise<Response> {
+async function handleSongUpload(source: LibrarySource, request: Request): Promise<Response> {
   const contentType = request.headers.get("content-type") || "";
   if (contentType.toLowerCase().startsWith("application/json")) {
     const payload = await readJsonBody<{
@@ -1301,7 +1513,7 @@ async function handleSongUpload(request: Request): Promise<Response> {
       outputFormat?: unknown;
     }>(request);
     if (!payload) return json({ error: "Invalid JSON body" }, { status: 400 });
-    return handleRemoteSongUpload(payload);
+    return handleRemoteSongUpload({ ...payload, source });
   }
 
   const form = await request.formData().catch(() => null);
@@ -1328,7 +1540,7 @@ async function handleSongUpload(request: Request): Promise<Response> {
     ? extname(audio.name).toLowerCase()
     : ".mp3";
   const stem = sanitizeFileName(`${artist} - ${title}`);
-  const audioPath = await uniquePath(resolve(musicRoot, `${stem}${audioExt}`));
+  const audioPath = await uniquePath(resolve(source.root, `${stem}${audioExt}`));
   await saveFile(audio, audioPath);
 
   const sidecar: LocalSidecar = {
@@ -1354,20 +1566,20 @@ async function handleSongUpload(request: Request): Promise<Response> {
   }
 
   await writeSidecar(audioPath, sidecar);
-  const snapshot = await getLibrary(true);
-  const relativePath = relative(musicRoot, audioPath).split(sep).join("/");
+  const snapshot = await getLibrary(source, true);
+  const relativePath = relative(source.root, audioPath).split(sep).join("/");
   const entry = snapshot.entriesByPath.get(relativePath);
   if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
   return json(entry.song, { status: 201 });
 }
 
-async function handlePatchSong(id: string, request: Request): Promise<Response> {
+async function handlePatchSong(source: LibrarySource, id: string, request: Request): Promise<Response> {
   const payload = await readJsonBody<{ title?: unknown; artist?: unknown }>(request);
   const title = typeof payload?.title === "string" ? payload.title.trim() : "";
   const artist = typeof payload?.artist === "string" ? payload.artist.trim() : "";
   if (!title || !artist) return json({ error: "Title and artist are required" }, { status: 400 });
 
-  const snapshot = await getLibrary();
+  const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
   if (!entry) return notFound("Song not found");
   const currentSidecar = await readSidecar(entry.absolutePath);
@@ -1378,13 +1590,13 @@ async function handlePatchSong(id: string, request: Request): Promise<Response> 
     artist,
     updatedAt: new Date().toISOString(),
   });
-  const nextSnapshot = await getLibrary(true);
+  const nextSnapshot = await getLibrary(source, true);
   const updated = nextSnapshot.entriesById.get(id);
   return updated ? json(updated.song) : notFound("Song not found");
 }
 
-async function handleSongAssets(id: string, request: Request): Promise<Response> {
-  const snapshot = await getLibrary();
+async function handleSongAssets(source: LibrarySource, id: string, request: Request): Promise<Response> {
+  const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
   if (!entry) return notFound("Song not found");
 
@@ -1431,7 +1643,7 @@ async function handleSongAssets(id: string, request: Request): Promise<Response>
 
   sidecar.updatedAt = new Date().toISOString();
   await writeSidecar(entry.absolutePath, sidecar);
-  const nextSnapshot = await getLibrary(true);
+  const nextSnapshot = await getLibrary(source, true);
   const updated = nextSnapshot.entriesById.get(id);
   return updated ? json(updated.song) : notFound("Song not found");
 }
@@ -1513,12 +1725,13 @@ async function lookupRemoteArtwork(song: PlayerSong): Promise<DownloadedArtwork 
   return { data, contentType, sourceUrl: artworkUrl };
 }
 
-async function handleArtwork(id: string, request: Request): Promise<Response> {
-  const snapshot = await getLibrary();
+async function handleArtwork(source: LibrarySource, id: string, request: Request): Promise<Response> {
+  const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
   if (!entry) return Response.redirect("/apple-icon.png", 302);
 
-  const cacheMetaPath = resolve(artworkCacheDir, `${id.replace(/[^a-zA-Z0-9:_-]/g, "_")}.json`);
+  const safeId = id.replace(/[^a-zA-Z0-9:_-]/g, "_");
+  const cacheMetaPath = resolve(source.artworkDir, `${safeId}.json`);
   const signature = `${entry.relativePath}:${entry.size}:${entry.mtimeMs}`;
 
   try {
@@ -1533,13 +1746,13 @@ async function handleArtwork(id: string, request: Request): Promise<Response> {
     if (meta.version === ARTWORK_CACHE_VERSION && meta.signature === signature) {
       if (meta.empty) return Response.redirect("/apple-icon.png", 302);
       if (meta.fileName) {
-        const cachedArtwork = resolve(artworkCacheDir, meta.fileName);
+        const cachedArtwork = resolve(source.artworkDir, meta.fileName);
         return serveFile(cachedArtwork, request, "public, max-age=86400");
       }
     }
   } catch {}
 
-  await mkdir(artworkCacheDir, { recursive: true });
+  await mkdir(source.artworkDir, { recursive: true });
   try {
     const metadata = await parseFile(entry.absolutePath, { skipCovers: false });
     const picture = metadata.common.picture?.[0];
@@ -1553,8 +1766,8 @@ async function handleArtwork(id: string, request: Request): Promise<Response> {
     const artwork = embeddedArtwork || (await lookupRemoteArtwork(entry.song));
 
     if (artwork) {
-      const fileName = `${id.replace(/[^a-zA-Z0-9:_-]/g, "_")}${contentTypeExtension(artwork.contentType)}`;
-      await writeFile(resolve(artworkCacheDir, fileName), artwork.data);
+      const fileName = `${safeId}${contentTypeExtension(artwork.contentType)}`;
+      await writeFile(resolve(source.artworkDir, fileName), artwork.data);
       await writeFile(
         cacheMetaPath,
         `${JSON.stringify({
@@ -1566,7 +1779,7 @@ async function handleArtwork(id: string, request: Request): Promise<Response> {
         })}\n`,
         "utf8",
       );
-      return serveFile(resolve(artworkCacheDir, fileName), request, "public, max-age=86400");
+      return serveFile(resolve(source.artworkDir, fileName), request, "public, max-age=86400");
     }
 
     await writeFile(
@@ -1611,23 +1824,48 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/music/source" && request.method === "GET") {
-    const snapshot = await getLibrary(url.searchParams.get("refresh") === "1");
+    const source = librarySourceForRequest(request);
+    if (!source) {
+      return jsonCached(request, {
+        root: null,
+        songsCount: 0,
+        scannedAt: null,
+      }, { cacheControl: "private, max-age=15, stale-while-revalidate=120" });
+    }
+    const snapshot = await getLibrary(source, url.searchParams.get("refresh") === "1");
     return jsonCached(request, {
-      root: musicRoot,
+      root: source.root,
       songsCount: snapshot.songs.length,
       scannedAt: new Date(snapshot.scannedAt).toISOString(),
     }, { cacheControl: "private, max-age=15, stale-while-revalidate=120" });
   }
 
   if (pathname === "/api/home" && request.method === "GET") {
-    const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes(request)]);
-    return jsonCached(request, { songs: snapshot.songs, likedSongIds });
+    const source = librarySourceForRequest(request);
+    if (!source) {
+      return jsonCached(request, {
+        songs: [],
+        likedSongIds: [],
+      });
+    }
+    const [snapshot, likedSongIds] = await Promise.all([getLibrary(source), readLikes(request)]);
+    const songs = songsForRequest(snapshot.songs, request);
+    const visibleSongIds = new Set(songs.map((song) => song.id));
+    return jsonCached(request, {
+      songs,
+      likedSongIds: likedSongIds.filter((songId) => visibleSongIds.has(songId)),
+    });
   }
 
   if (pathname === "/api/search-index" && request.method === "GET") {
-    const snapshot = await getLibrary();
+    const source = librarySourceForRequest(request);
+    if (!source) {
+      return jsonCached(request, { songs: [] }, { cacheControl: "private, max-age=300, stale-while-revalidate=600" });
+    }
+    const snapshot = await getLibrary(source);
+    const songs = songsForRequest(snapshot.songs, request);
     return jsonCached(request, {
-      songs: snapshot.songs.map((song) => ({
+      songs: songs.map((song) => ({
         id: song.id,
         title: song.title,
         artist: song.artist,
@@ -1648,11 +1886,15 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/liked" && request.method === "GET") {
     if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
-    const [snapshot, likedSongIds] = await Promise.all([getLibrary(), readLikes(request)]);
+    const source = librarySourceForRequest(request);
+    if (!source) return forbiddenLibraryResponse();
+    const [snapshot, likedSongIds] = await Promise.all([getLibrary(source), readLikes(request)]);
+    const songs = songsForRequest(snapshot.songs, request);
     const liked = new Set(likedSongIds);
+    const visibleSongIds = new Set(songs.map((song) => song.id));
     return jsonCached(request, {
-      songs: snapshot.songs.filter((song) => liked.has(song.id)),
-      likedSongIds,
+      songs: songs.filter((song) => liked.has(song.id)),
+      likedSongIds: likedSongIds.filter((songId) => visibleSongIds.has(songId)),
     });
   }
 
@@ -1661,36 +1903,49 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/songs" && request.method === "GET") {
-    const snapshot = await getLibrary();
-    return jsonCached(request, snapshot.songs);
+    const source = librarySourceForRequest(request);
+    if (!source) return jsonCached(request, []);
+    const snapshot = await getLibrary(source);
+    return jsonCached(request, songsForRequest(snapshot.songs, request));
   }
 
   if (pathname === "/api/songs" && request.method === "POST") {
-    return handleSongUpload(request);
+    const source = librarySourceForRequest(request);
+    if (!source) return forbiddenLibraryResponse();
+    return handleSongUpload(source, request);
   }
 
   if (pathname.startsWith("/api/songs/")) {
     const rest = pathname.slice("/api/songs/".length);
     if (rest.endsWith("/assets")) {
       const id = safeDecode(rest.slice(0, -"/assets".length));
-      return request.method === "POST" ? handleSongAssets(id, request) : methodNotAllowed();
+      const source = librarySourceForRequest(request);
+      if (!source) return forbiddenLibraryResponse();
+      return request.method === "POST" ? handleSongAssets(source, id, request) : methodNotAllowed();
     }
     const id = safeDecode(rest);
     if (request.method === "GET") {
-      const snapshot = await getLibrary();
+      const source = librarySourceForRequest(request);
+      if (!source) return notFound("Song not found");
+      const snapshot = await getLibrary(source);
       const entry = snapshot.entriesById.get(id);
-      return entry ? jsonCached(request, entry.song) : notFound("Song not found");
+      return entry ? jsonCached(request, songForRequest(entry.song, request)) : notFound("Song not found");
     }
     if (request.method === "PATCH") {
-      return handlePatchSong(id, request);
+      const source = librarySourceForRequest(request);
+      if (!source) return forbiddenLibraryResponse();
+      return handlePatchSong(source, id, request);
     }
     return methodNotAllowed();
   }
 
   if (pathname.startsWith("/api/files/local/")) {
+    const source = librarySourceForMediaRequest(request, url);
+    if (!source) return forbiddenLibraryResponse();
     const relativePath = relativeFromUrlPath(pathname, "/api/files/local/");
-    const absolutePath = resolveInside(musicRoot, relativePath);
-    const knownEntry = librarySnapshot?.entriesByPath.get(relativePath);
+    const absolutePath = resolveInside(source.root, relativePath);
+    const snapshot = source.shared ? librarySnapshot : userLibrarySnapshots.get(source.key) ?? null;
+    const knownEntry = snapshot?.entriesByPath.get(relativePath);
     const knownFileStat = knownEntry
       ? { size: knownEntry.size, mtimeMs: knownEntry.mtimeMs }
       : undefined;
@@ -1698,8 +1953,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
 
   if (pathname.startsWith("/api/artwork/local/")) {
+    const source = librarySourceForMediaRequest(request, url);
+    if (!source) return forbiddenLibraryResponse();
     const id = safeDecode(pathname.slice("/api/artwork/local/".length));
-    return handleArtwork(id, request);
+    return handleArtwork(source, id, request);
   }
 
   if (pathname.startsWith("/api/songs/spotify")) {
@@ -1765,15 +2022,16 @@ Bun.serve({
 });
 
 async function initializeLibrary(): Promise<void> {
-  const cachedSnapshot = await readCachedLibrarySnapshot();
+  const source = sharedLibrarySource();
+  const cachedSnapshot = await readCachedLibrarySnapshot(source);
   if (cachedSnapshot) {
     librarySnapshot = cachedSnapshot;
     console.log(
-      `Spotify local music server listening on http://${host}:${port} with ${cachedSnapshot.songs.length} cached tracks from ${musicRoot}`,
+      `Spotify local music server listening on http://${host}:${port} with ${cachedSnapshot.songs.length} cached tracks from ${source.root}`,
     );
-    void refreshLibrary(true)
+    void refreshLibrary(source, true)
       .then((snapshot) => {
-        console.log(`Spotify local music server refreshed ${snapshot.songs.length} tracks from ${musicRoot}`);
+        console.log(`Spotify local music server refreshed ${snapshot.songs.length} tracks from ${source.root}`);
       })
       .catch((error) => {
         console.error(`Spotify local music server started, but background refresh failed: ${error}`);
@@ -1781,9 +2039,9 @@ async function initializeLibrary(): Promise<void> {
     return;
   }
 
-  const snapshot = await refreshLibrary(true);
+  const snapshot = await refreshLibrary(source, true);
   console.log(
-    `Spotify local music server listening on http://${host}:${port} with ${snapshot.songs.length} tracks from ${musicRoot}`,
+    `Spotify local music server listening on http://${host}:${port} with ${snapshot.songs.length} tracks from ${source.root}`,
   );
 }
 

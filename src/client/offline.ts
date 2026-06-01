@@ -765,6 +765,14 @@ function cloneJsonLike<T>(value: T): T {
   }
 }
 
+function snapshotPath(url: string): string {
+  try {
+    return new URL(url, "http://spotify.local").pathname;
+  } catch {
+    return url.split("?")[0] || url;
+  }
+}
+
 function updateLikedIds(data: unknown, songId: string, nextLiked: boolean): boolean {
   if (!data || typeof data !== "object") return false;
   const target = data as { likedSongIds?: unknown; likes?: unknown };
@@ -842,16 +850,17 @@ async function updateSnapshotsForMutation(mutation: OfflineMutation): Promise<vo
   const snapshots = await idbGetAll<OfflineApiSnapshot>(API_SNAPSHOT_STORE).catch(() => []);
   await Promise.all(
     snapshots.map(async (snapshot) => {
+      const path = snapshotPath(snapshot.url);
       const next = cloneJsonLike(snapshot.data);
       let changed = false;
       if (mutation.type === "like") {
         changed = updateLikedIds(next, mutation.payload.songId, mutation.payload.nextLiked);
-        if (snapshot.url === "/api/liked") {
+        if (path === "/api/liked") {
           changed = updateLikedSongs(next, mutation.payload) || changed;
         }
       } else if (
         mutation.type === "playlist-reorder" &&
-        snapshot.url === `/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}`
+        path === `/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}`
       ) {
         changed = reorderPlaylistPayload(next, mutation.payload.songIds);
       } else if (mutation.type === "song-edit") {
