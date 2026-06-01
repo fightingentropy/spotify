@@ -429,8 +429,8 @@ export default function HomePage() {
       return;
     }
     if (sortedSongs.length > 0) {
-      requestImmediatePlayback(sortedSongs[0]);
-      setQueue(sortedSongs, 0);
+      const startedSong = setQueue(sortedSongs, 0, { respectShuffle: true });
+      requestImmediatePlayback(startedSong);
     }
   };
 
@@ -569,7 +569,8 @@ export default function HomePage() {
             type="button"
             aria-label={listIsPlaying ? "Pause library" : "Play library"}
             onClick={handlePlayAll}
-            className="grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]"
+            disabled={sortedSongs.length === 0}
+            className="grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
           >
             {listIsPlaying ? (
               <Pause size={31} fill="currentColor" />
@@ -584,11 +585,17 @@ export default function HomePage() {
             title={shuffle ? "Disable shuffle" : "Enable shuffle"}
             onClick={toggleShuffle}
             className={cn(
-              "grid h-11 w-11 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:h-12 sm:w-12",
+              "relative grid h-11 w-11 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:h-12 sm:w-12",
               shuffle && "text-[#1ed760]",
             )}
           >
             <Shuffle size={30} className="sm:h-[34px] sm:w-[34px]" />
+            <span
+              className={cn(
+                "absolute bottom-0.5 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
+                shuffle ? "opacity-100" : "opacity-0",
+              )}
+            />
           </button>
 
           <Suspense fallback={null}>

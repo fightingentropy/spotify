@@ -299,14 +299,21 @@ export default function NowPlayingSheet({
               <div className="flex items-center justify-between px-2">
                 <button
                   type="button"
-                  aria-label="Shuffle"
+                  aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
+                  title={shuffle ? "Disable shuffle" : "Enable shuffle"}
                   onClick={toggleShuffle}
                   className={cn(
-                    "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                    "relative h-11 w-11 rounded-full grid place-items-center touch-manipulation",
                     shuffle ? "text-emerald-500" : "text-foreground/70",
                   )}
                 >
                   <Shuffle size={20} />
+                  <span
+                    className={cn(
+                      "absolute bottom-1.5 h-1 w-1 rounded-full bg-emerald-500 transition-opacity",
+                      shuffle ? "opacity-100" : "opacity-0",
+                    )}
+                  />
                 </button>
                 <button
                   type="button"

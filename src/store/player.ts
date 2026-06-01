@@ -11,6 +11,7 @@ type PlayerState = {
   currentSong: PlayerSong | null;
   playHistory: number[];
   playFuture: number[];
+  shuffleRemaining: number[];
   isPlaying: boolean;
   volume: number; // 0..1
   isMuted: boolean;
@@ -18,7 +19,7 @@ type PlayerState = {
   repeatMode: "off" | "one" | "all";
   crossfadeEnabled: boolean;
   crossfadeSeconds: number; // 0..12
-  setQueue: (songs: PlayerSong[], startIndex: number) => void;
+  setQueue: (songs: PlayerSong[], startIndex: number, options?: SetQueueOptions) => PlayerSong | null;
   setSong: (song: PlayerSong | null) => void;
   advanceToIndex: (index: number) => void;
   replaceSong: (song: PlayerSong) => void;
@@ -33,6 +34,10 @@ type PlayerState = {
   cycleRepeatMode: () => void;
   setCrossfadeEnabled: (enabled: boolean) => void;
   setCrossfadeSeconds: (seconds: number) => void;
+};
+
+type SetQueueOptions = {
+  respectShuffle?: boolean;
 };
 
 const MAX_PLAY_HISTORY = 200;
@@ -59,8 +64,15 @@ function pushHistory(history: number[], index: number): number[] {
   return [...history, index].slice(-MAX_PLAY_HISTORY);
 }
 
+function clampQueueIndex(queueLength: number, index: number): number {
+  if (queueLength <= 0) return -1;
+  if (!Number.isInteger(index)) return 0;
+  return Math.max(0, Math.min(queueLength - 1, index));
+}
+
 function randomQueueIndex(queueLength: number, currentIndex: number): number {
-  if (queueLength <= 1) return currentIndex;
+  if (queueLength <= 0) return -1;
+  if (queueLength <= 1) return 0;
   let index = currentIndex;
   while (index === currentIndex) {
     index = Math.floor(Math.random() * queueLength);
@@ -68,12 +80,54 @@ function randomQueueIndex(queueLength: number, currentIndex: number): number {
   return index;
 }
 
-export const usePlayerStore = create<PlayerState>((set) => ({
+function resolveQueueStartIndex(queueLength: number, startIndex: number, useShuffleStart: boolean): number {
+  if (queueLength <= 0) return -1;
+  return useShuffleStart ? randomQueueIndex(queueLength, -1) : clampQueueIndex(queueLength, startIndex);
+}
+
+function createShuffleRemaining(queueLength: number, currentIndex: number): number[] {
+  if (queueLength <= 1) return [];
+  const current = clampQueueIndex(queueLength, currentIndex);
+  const remaining: number[] = [];
+  for (let index = 0; index < queueLength; index += 1) {
+    if (index !== current) remaining.push(index);
+  }
+  return remaining;
+}
+
+function validShuffleRemaining(queueLength: number, currentIndex: number, remaining: number[]): number[] {
+  if (queueLength <= 1) return [];
+  const seen = new Set<number>();
+  return remaining.filter((index) => {
+    if (!Number.isInteger(index) || index < 0 || index >= queueLength || index === currentIndex) return false;
+    if (seen.has(index)) return false;
+    seen.add(index);
+    return true;
+  });
+}
+
+function removeQueueIndex(indices: number[], indexToRemove: number): number[] {
+  return indices.filter((index) => index !== indexToRemove);
+}
+
+export function getNextShufflePool(queueLength: number, currentIndex: number, remaining: number[]): number[] {
+  const validRemaining = validShuffleRemaining(queueLength, currentIndex, remaining);
+  return validRemaining.length > 0 ? validRemaining : createShuffleRemaining(queueLength, currentIndex);
+}
+
+export function chooseNextShuffleIndex(queueLength: number, currentIndex: number, remaining: number[]): number {
+  const pool = getNextShufflePool(queueLength, currentIndex, remaining);
+  if (pool.length === 0) return clampQueueIndex(queueLength, currentIndex);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+export const usePlayerStore = create<PlayerState>((set, get) => ({
   queue: [],
   currentIndex: -1,
   currentSong: null,
   playHistory: [],
   playFuture: [],
+  shuffleRemaining: [],
   isPlaying: false,
   volume: 0.9,
   isMuted: false,
@@ -82,16 +136,25 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   // Initialize deterministic values to avoid SSR/CSR hydration mismatch; rehydrate from localStorage on client mount
   crossfadeEnabled: true,
   crossfadeSeconds: 4,
-  setQueue: (songs, startIndex) =>
+  setQueue: (songs, startIndex, options) => {
+    const start = resolveQueueStartIndex(
+      songs.length,
+      startIndex,
+      options?.respectShuffle === true && get().shuffle,
+    );
+    const currentSong = start >= 0 ? songs[start] ?? null : null;
     set(() => ({
       queue: songs,
-      currentIndex: startIndex,
-      currentSong: songs[startIndex] ?? null,
+      currentIndex: start,
+      currentSong,
       playHistory: [],
       playFuture: [],
-      isPlaying: true,
-    })),
-  setSong: (song) => set({ currentSong: song, playHistory: [], playFuture: [] }),
+      shuffleRemaining: get().shuffle ? createShuffleRemaining(songs.length, start) : [],
+      isPlaying: currentSong != null,
+    }));
+    return currentSong;
+  },
+  setSong: (song) => set({ currentSong: song, playHistory: [], playFuture: [], shuffleRemaining: [] }),
   advanceToIndex: (index) =>
     set((s) => {
       if (index < 0 || index >= s.queue.length || index === s.currentIndex) return s;
@@ -101,6 +164,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         currentSong: s.queue[index],
         playHistory: s.shuffle ? pushHistory(s.playHistory, s.currentIndex) : s.playHistory,
         playFuture: s.shuffle ? [] : s.playFuture,
+        shuffleRemaining: s.shuffle ? removeQueueIndex(s.shuffleRemaining, index) : s.shuffleRemaining,
         isPlaying: true,
       };
     }),
@@ -125,7 +189,16 @@ export const usePlayerStore = create<PlayerState>((set) => ({
             : { ...s, isPlaying: false };
         }
         const future = s.playFuture.slice();
-        const idx = future.length > 0 ? future.pop() ?? s.currentIndex : randomQueueIndex(s.queue.length, s.currentIndex);
+        const idxFromFuture = future.pop();
+        const shufflePool =
+          idxFromFuture === undefined
+            ? getNextShufflePool(s.queue.length, s.currentIndex, s.shuffleRemaining)
+            : s.shuffleRemaining;
+        const idx =
+          idxFromFuture === undefined
+            ? shufflePool[Math.floor(Math.random() * shufflePool.length)]
+            : idxFromFuture;
+        if (idx === undefined || idx < 0 || idx >= s.queue.length) return s;
         if (idx === s.currentIndex) return s;
         return {
           ...s,
@@ -133,6 +206,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
           currentSong: s.queue[idx],
           playHistory: pushHistory(s.playHistory, s.currentIndex),
           playFuture: future,
+          shuffleRemaining: idxFromFuture === undefined ? removeQueueIndex(shufflePool, idx) : s.shuffleRemaining,
           isPlaying: true,
         };
       }
@@ -180,7 +254,12 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     set((s) => {
       const shuffle = !s.shuffle;
       writeStoredShuffle(shuffle);
-      return { shuffle, playHistory: [], playFuture: [] };
+      return {
+        shuffle,
+        playHistory: [],
+        playFuture: [],
+        shuffleRemaining: shuffle ? createShuffleRemaining(s.queue.length, s.currentIndex) : [],
+      };
     }),
   cycleRepeatMode: () =>
     set((s) => ({ repeatMode: s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off" })),

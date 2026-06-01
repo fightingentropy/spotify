@@ -2,7 +2,7 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { usePlayerStore } from "@/store/player";
+import { chooseNextShuffleIndex, usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
@@ -93,6 +93,7 @@ function PlayerBar(): React.ReactElement | null {
   const volume = usePlayerStore((s) => s.volume);
   const isMuted = usePlayerStore((s) => s.isMuted);
   const shuffle = usePlayerStore((s) => s.shuffle);
+  const shuffleRemaining = usePlayerStore((s) => s.shuffleRemaining);
   const repeatMode = usePlayerStore((s) => s.repeatMode);
   const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
   const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
@@ -596,9 +597,10 @@ function PlayerBar(): React.ReactElement | null {
               crossfadingRef.current = false;
               return;
             }
-            let idx = currentIndex;
-            while (idx === currentIndex) {
-              idx = Math.floor(Math.random() * queue.length);
+            const idx = chooseNextShuffleIndex(queue.length, currentIndex, shuffleRemaining);
+            if (idx === currentIndex || idx < 0 || idx >= queue.length) {
+              crossfadingRef.current = false;
+              return;
             }
             nextIdx = idx;
           } else {
@@ -698,7 +700,7 @@ function PlayerBar(): React.ReactElement | null {
         cancelFade();
       }
     };
-  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, resolvePlaybackSong, shuffle]);
+  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, resolvePlaybackSong, shuffle, shuffleRemaining]);
 
   // Save queue/song and playback position right before page unload
   useEffect(() => {
@@ -1015,8 +1017,22 @@ function PlayerBar(): React.ReactElement | null {
 
         <div className="flex min-w-0 flex-col items-center gap-2">
           <div className="flex items-center justify-center gap-4">
-            <button aria-label="Shuffle" onClick={toggleShuffle} className={cn("p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", shuffle && "text-[#1ed760]")}>
+            <button
+              aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
+              title={shuffle ? "Disable shuffle" : "Enable shuffle"}
+              onClick={toggleShuffle}
+              className={cn(
+                "relative p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white",
+                shuffle && "text-[#1ed760]",
+              )}
+            >
               <Shuffle size={18} />
+              <span
+                className={cn(
+                  "absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[#1ed760] transition-opacity",
+                  shuffle ? "opacity-100" : "opacity-0",
+                )}
+              />
             </button>
             <button aria-label="Previous" onClick={previous} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipBack size={18} />

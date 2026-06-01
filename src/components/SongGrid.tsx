@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { LayoutGrid, Loader2, Rows3, X } from "lucide-react";
+import { LayoutGrid, Loader2, Pause, Play, Rows3, Shuffle, X } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { SongCard } from "@/components/SongCard";
 import { SongListItem } from "@/components/SongListItem";
 import { EDIT_MODE_EVENT, EDIT_MODE_KEY } from "@/lib/edit-mode";
@@ -80,6 +81,12 @@ export function SongGrid({
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const setQueue = usePlayerStore((state) => state.setQueue);
+  const currentSong = usePlayerStore((state) => state.currentSong);
+  const isPlaying = usePlayerStore((state) => state.isPlaying);
+  const play = usePlayerStore((state) => state.play);
+  const pause = usePlayerStore((state) => state.pause);
+  const shuffle = usePlayerStore((state) => state.shuffle);
+  const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
   const mergeInitial = useLikesStore((state) => state.mergeInitial);
   const toggleLike = useLikesStore((state) => state.toggleLike);
   const likedLookup = useLikesStore((state) => state.likedSongIds);
@@ -201,6 +208,12 @@ export function SongGrid({
     return sortedDedupedSongs.filter((song) => !!likedMap[song.id]);
   }, [hideIfUnliked, likedMap, sortedDedupedSongs]);
 
+  const currentSongId = currentSong?.id ?? null;
+  const currentSongIsInList = useMemo(() => {
+    return currentSongId ? visibleSongs.some((song) => song.id === currentSongId) : false;
+  }, [currentSongId, visibleSongs]);
+  const listIsPlaying = currentSongIsInList && isPlaying;
+
   const visibleSongsRef = useRef<PlayerSong[]>([]);
   useEffect(() => {
     visibleSongsRef.current = visibleSongs;
@@ -280,6 +293,23 @@ export function SongGrid({
   const onPlayAt = useCallback((index: number) => {
     setQueue(visibleSongsRef.current, index);
   }, [setQueue]);
+
+  const handlePlayVisibleSongs = useCallback(() => {
+    const songsToPlay = visibleSongsRef.current;
+    if (songsToPlay.length === 0) return;
+
+    if (currentSongIsInList) {
+      if (isPlaying) pause();
+      else {
+        requestImmediatePlayback(currentSong);
+        play();
+      }
+      return;
+    }
+
+    const startedSong = setQueue(songsToPlay, 0, { respectShuffle: true });
+    requestImmediatePlayback(startedSong);
+  }, [currentSong, currentSongIsInList, isPlaying, pause, play, setQueue]);
 
   const reorderVisibleSongs = useCallback(async (fromIndex: number, toIndex: number) => {
     if (!canReorder) return;
@@ -491,7 +521,35 @@ export function SongGrid({
             Drag songs to reorder
           </div>
         ) : null}
-        <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
+        <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+          <button
+            type="button"
+            aria-label={listIsPlaying ? "Pause songs" : "Play songs"}
+            title={listIsPlaying ? "Pause songs" : "Play songs"}
+            onClick={handlePlayVisibleSongs}
+            disabled={visibleSongs.length === 0}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_8px_18px_rgba(0,0,0,0.22)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
+          >
+            {listIsPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="translate-x-0.5" />}
+          </button>
+          <button
+            type="button"
+            aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
+            title={shuffle ? "Disable shuffle" : "Enable shuffle"}
+            onClick={toggleShuffle}
+            className={cn(
+              "relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/10 bg-black/5 text-foreground/70 transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/70 dark:border-white/10 dark:bg-white/5 dark:text-white/70 dark:hover:text-white",
+              shuffle && "text-[#1ed760] dark:text-[#1ed760]",
+            )}
+          >
+            <Shuffle size={19} />
+            <span
+              className={cn(
+                "absolute bottom-1 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
+                shuffle ? "opacity-100" : "opacity-0",
+              )}
+            />
+          </button>
           <select
             value={sortMode}
             onChange={(event) => setNextSortMode(event.target.value as SongSortMode)}
