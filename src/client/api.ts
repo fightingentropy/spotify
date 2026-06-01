@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlayerSong } from "@/types/player";
 import {
   readOfflineApiSnapshot,
@@ -256,13 +256,20 @@ export function invalidateLibraryApiCache(): void {
   );
 }
 
-export function useApiData<T>(url: string, initialValue: T, options?: { enabled?: boolean }) {
+export function useApiData<T>(
+  url: string,
+  initialValue: T,
+  options?: { enabled?: boolean; keepPreviousData?: boolean; refreshOnReconnect?: boolean },
+) {
   const enabled = options?.enabled ?? true;
+  const keepPreviousData = options?.keepPreviousData ?? false;
+  const refreshOnReconnect = options?.refreshOnReconnect ?? true;
   const cachedInitial = getCachedData<T>(url);
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
   const [loading, setLoading] = useState(enabled && !cachedInitial);
   const [error, setError] = useState<string | null>(null);
-  const [syncRevision, setSyncRevision] = useState(0);
+  const dataUrlRef = useRef(cachedInitial !== undefined ? url : "");
+  const initialValueRef = useRef(initialValue);
 
   function setData(nextData: T | ((current: T) => T)) {
     setDataState((current) => {
@@ -271,64 +278,95 @@ export function useApiData<T>(url: string, initialValue: T, options?: { enabled?
           ? (nextData as (current: T) => T)(current)
           : nextData;
       writeApiCache(url, resolved);
+      dataUrlRef.current = url;
       return resolved;
     });
   }
 
   useEffect(() => {
-    if (!enabled || typeof window === "undefined") return;
-    const handleOnline = () => setSyncRevision((current) => current + 1);
-    window.addEventListener("online", handleOnline);
-    return () => window.removeEventListener("online", handleOnline);
-  }, [enabled]);
+    initialValueRef.current = initialValue;
+  }, [initialValue]);
 
-  useEffect(() => {
+  const startLoad = useCallback((background = false) => {
     if (!enabled) {
       setLoading(false);
-      return;
+      return undefined;
     }
 
     let cancelled = false;
 
-    async function load() {
+    async function run() {
       const cached = await getCacheEntryAsync<T>(url);
       const cachedData = cached?.data;
+      const canReuseCurrentData = dataUrlRef.current === url || keepPreviousData;
 
       if (cancelled) return;
       if (cachedData !== undefined) {
         setDataState(cachedData);
+        dataUrlRef.current = url;
         setLoading(false);
         setError(null);
-      } else {
-        setDataState(initialValue);
+      } else if (!background && !canReuseCurrentData) {
+        setDataState(initialValueRef.current);
+        dataUrlRef.current = "";
         setLoading(true);
+      } else {
+        setLoading(false);
       }
 
       if (!canSyncApiData()) {
-        if (cachedData === undefined) {
+        if (cachedData === undefined && !canReuseCurrentData) {
           setError("You're offline and this data has not been cached yet.");
         }
         setLoading(false);
         return;
       }
 
-      setError(null);
+      if (!background || cachedData !== undefined) setError(null);
       try {
         const payload = await fetchApiData<T>(url);
-        if (!cancelled) setDataState(payload);
+        if (!cancelled) {
+          setDataState(payload);
+          dataUrlRef.current = url;
+          setError(null);
+        }
       } catch (err) {
         if (!cancelled) {
-          setError(cachedData === undefined ? (err instanceof Error ? err.message : "Request failed") : null);
+          setError(
+            cachedData === undefined && !canReuseCurrentData
+              ? err instanceof Error
+                ? err.message
+                : "Request failed"
+              : null,
+          );
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
-    void load();
+    void run();
     return () => {
       cancelled = true;
     };
-  }, [enabled, syncRevision, url]);
+  }, [enabled, keepPreviousData, url]);
+
+  useEffect(() => {
+    return startLoad(false);
+  }, [startLoad]);
+
+  useEffect(() => {
+    if (!enabled || !refreshOnReconnect || typeof window === "undefined") return;
+    let cancelReconnectLoad: (() => void) | undefined;
+    const handleOnline = () => {
+      cancelReconnectLoad?.();
+      cancelReconnectLoad = startLoad(true);
+    };
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      cancelReconnectLoad?.();
+    };
+  }, [enabled, startLoad, refreshOnReconnect]);
 
   return { data, loading, error, setData };
 }

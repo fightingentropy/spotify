@@ -86,6 +86,7 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
       void load().catch(() => undefined);
     };
     const prefetch = () => {
+      if (navigator.onLine === false) return;
       if (status === "unauthenticated") {
         prefetchRoute(loadSignInPage);
         prefetchRoute(loadRegisterPage);
@@ -104,12 +105,10 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
-    window.addEventListener("online", prefetch);
 
     if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
       const id = idleWindow.requestIdleCallback(prefetch, { timeout: 8_000 });
       return () => {
-        window.removeEventListener("online", prefetch);
         idleWindow.cancelIdleCallback?.(id);
       };
     }
@@ -117,7 +116,6 @@ function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthentic
     const id = window.setTimeout(prefetch, 4_000);
     return () => {
       window.clearTimeout(id);
-      window.removeEventListener("online", prefetch);
     };
   }, [status]);
 }
@@ -130,6 +128,7 @@ function Shell() {
       playlists: [],
       userId: null,
     },
+    { keepPreviousData: true },
   );
   useIdleRoutePrefetch(status);
 

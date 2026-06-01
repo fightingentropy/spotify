@@ -2,34 +2,13 @@
 
 import { useEffect } from "react";
 
-function hasActiveAudio(): boolean {
-  return Array.from(document.querySelectorAll("audio")).some(
-    (audio) => !audio.paused && !audio.ended,
-  );
-}
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 export default function PwaRegister() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
-    let reloading = false;
-    const reloadOnControllerChange = () => {
-      if (reloading) return;
-      reloading = true;
-      if (!hasActiveAudio()) {
-        window.location.reload();
-        return;
-      }
-
-      const reloadWhenPlaybackStops = () => {
-        if (hasActiveAudio()) return;
-        window.location.reload();
-      };
-      for (const audio of Array.from(document.querySelectorAll("audio"))) {
-        audio.addEventListener("pause", reloadWhenPlaybackStops, { once: true });
-        audio.addEventListener("ended", reloadWhenPlaybackStops, { once: true });
-      }
-    };
+    let lastUpdateCheck = 0;
 
     const register = async () => {
       try {
@@ -37,6 +16,11 @@ export default function PwaRegister() {
           scope: "/",
           updateViaCache: "none",
         });
+
+        if (navigator.onLine === false) return;
+        const timestamp = Date.now();
+        if (timestamp - lastUpdateCheck < UPDATE_CHECK_INTERVAL_MS) return;
+        lastUpdateCheck = timestamp;
         await registration.update();
       } catch {
         // Service worker registration is optional for core app functionality.
@@ -45,12 +29,13 @@ export default function PwaRegister() {
 
     const refreshServiceWorker = () => {
       if (document.visibilityState !== "visible") return;
+      if (navigator.onLine === false) return;
       void register();
     };
 
-    navigator.serviceWorker.addEventListener("controllerchange", reloadOnControllerChange);
     document.addEventListener("visibilitychange", refreshServiceWorker);
     window.addEventListener("pageshow", refreshServiceWorker);
+    window.addEventListener("online", refreshServiceWorker);
 
     if (document.readyState === "complete") {
       void register();
@@ -60,9 +45,9 @@ export default function PwaRegister() {
 
     return () => {
       window.removeEventListener("load", register);
-      navigator.serviceWorker.removeEventListener("controllerchange", reloadOnControllerChange);
       document.removeEventListener("visibilitychange", refreshServiceWorker);
       window.removeEventListener("pageshow", refreshServiceWorker);
+      window.removeEventListener("online", refreshServiceWorker);
     };
   }, []);
 

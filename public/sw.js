@@ -282,7 +282,6 @@ self.addEventListener("install", (event) => {
       .then((cache) => Promise.all(SHELL_URLS.map((url) => cache.add(url).catch(() => undefined))))
       .catch(() => undefined),
   );
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
