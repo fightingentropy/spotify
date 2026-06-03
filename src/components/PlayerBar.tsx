@@ -12,7 +12,11 @@ import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, isRadioSong } from "@/lib/player-song";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
-import { prefetchUpcomingPlayback } from "@/client/playback-warm";
+import {
+  notePlaybackNetworkFailure,
+  notePlaybackNetworkSuccess,
+  prefetchUpcomingPlayback,
+} from "@/client/playback-warm";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 function resolvePlayableSrc(src: string): string {
@@ -170,11 +174,12 @@ function PlayerBar(): React.ReactElement | null {
   const mutedRef = useRef<boolean>(isMuted);
 
   const savedSeekRef = useRef<number | null>(null);
+  const lockedPlaybackSourceRef = useRef<{ songId: string; src: string } | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
-  const src = playbackSong?.audioUrl || null;
+  const desiredSrc = playbackSong?.audioUrl || null;
 
   useEffect(() => {
     void hydrateOffline();
@@ -534,14 +539,23 @@ function PlayerBar(): React.ReactElement | null {
     const audio = getActiveAudio();
     const other = getInactiveAudio();
     if (!audio) return;
-    if (!src) {
+    if (!playbackSong?.id || !desiredSrc) {
+      lockedPlaybackSourceRef.current = null;
       unloadAudioSource(audio);
       if (other) unloadAudioSource(other);
       resetPlaybackClock();
       return;
     }
+    const lockedSource = lockedPlaybackSourceRef.current;
+    const src =
+      lockedSource?.songId === playbackSong.id
+        ? lockedSource.src
+        : desiredSrc;
     const sourceChanged = audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(src);
     if (sourceChanged) resetPlaybackClock(playbackSong?.duration ?? 0);
+    if (sourceChanged || lockedSource?.songId !== playbackSong.id) {
+      lockedPlaybackSourceRef.current = { songId: playbackSong.id, src };
+    }
     loadAudioSource(audio, src);
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
@@ -555,7 +569,7 @@ function PlayerBar(): React.ReactElement | null {
       playRequestIdRef.current += 1;
       audio.pause();
     }
-  }, [src, isPlaying, playbackSong?.duration, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio, resetPlaybackClock]);
+  }, [desiredSrc, isPlaying, playbackSong?.duration, playbackSong?.id, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio, resetPlaybackClock]);
 
   // Crossfade: if enabled, monitor active element time and overlap next track
   useEffect(() => {
@@ -747,8 +761,15 @@ function PlayerBar(): React.ReactElement | null {
   const handleActiveAudioPlaying = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     if (event.currentTarget === getActiveAudio()) {
       resumeAfterSeekRef.current = false;
+      notePlaybackNetworkSuccess();
     }
   }, [getActiveAudio]);
+
+  const handleActiveAudioError = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
+    if (event.currentTarget !== getActiveAudio()) return;
+    if (currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsOffline) return;
+    notePlaybackNetworkFailure();
+  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsRadio, getActiveAudio]);
 
   const handleTogglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -847,6 +868,7 @@ function PlayerBar(): React.ReactElement | null {
         onSeeked={handleActiveAudioResumePoint}
         onCanPlay={handleActiveAudioResumePoint}
         onPlaying={handleActiveAudioPlaying}
+        onError={handleActiveAudioError}
         onEnded={(e) => {
           if (e.currentTarget !== getActiveAudio()) return;
           if (crossfadingRef.current) return;
@@ -886,6 +908,7 @@ function PlayerBar(): React.ReactElement | null {
         onSeeked={handleActiveAudioResumePoint}
         onCanPlay={handleActiveAudioResumePoint}
         onPlaying={handleActiveAudioPlaying}
+        onError={handleActiveAudioError}
         onEnded={(e) => {
           if (e.currentTarget !== getActiveAudio()) return;
           if (crossfadingRef.current) return;
@@ -948,6 +971,7 @@ function PlayerBar(): React.ReactElement | null {
               alt="cover"
               width={48}
               height={48}
+              loading="eager"
               className="w-12 h-12 rounded-md object-cover shrink-0"
               sizes="48px"
             />
@@ -990,6 +1014,7 @@ function PlayerBar(): React.ReactElement | null {
             alt="cover"
             width={48}
             height={48}
+            loading="eager"
             className="h-12 w-12 shrink-0 rounded-[5px] object-cover"
             sizes="48px"
           />

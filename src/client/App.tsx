@@ -24,6 +24,24 @@ const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
 const loadSignInPage = () => import("@/client/pages/SignInPage");
 const loadRegisterPage = () => import("@/client/pages/RegisterPage");
+const loadOfflineStatusIndicator = () => import("@/components/OfflineStatusIndicator");
+type RoutePrefetcher = () => Promise<unknown>;
+const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
+  loadSearchPage,
+  loadLibraryPage,
+  loadLikedPage,
+  loadDownloadedPage,
+  loadRadioPage,
+  loadPlaylistPage,
+  loadUploadPage,
+  loadSettingsPage,
+  loadSignInPage,
+  loadRegisterPage,
+  loadOfflineStatusIndicator,
+];
+const prefetchedRouteModules = new Set<RoutePrefetcher>();
+const ROUTE_PREFETCH_IDLE_TIMEOUT_MS = 2_000;
+const ROUTE_PREFETCH_FALLBACK_DELAY_MS = 1_000;
 
 const SearchPage = lazy(loadSearchPage);
 const LibraryPage = lazy(loadLibraryPage);
@@ -35,7 +53,7 @@ const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
 const SignInPage = lazy(loadSignInPage);
 const RegisterPage = lazy(loadRegisterPage);
-const OfflineStatusIndicator = lazy(() => import("@/components/OfflineStatusIndicator"));
+const OfflineStatusIndicator = lazy(loadOfflineStatusIndicator);
 
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
   return (
@@ -66,6 +84,10 @@ class RouteErrorBoundary extends Component<
     return { hasError: true };
   }
 
+  componentDidCatch(error: unknown) {
+    console.error("Route failed to render", error);
+  }
+
   render() {
     if (this.state.hasError) return this.props.fallback;
     return this.props.children;
@@ -80,44 +102,83 @@ function lazyRoute(element: ReactNode, label?: string) {
   );
 }
 
-function useIdleRoutePrefetch(status: "loading" | "authenticated" | "unauthenticated") {
+async function waitForServiceWorkerControl(): Promise<void> {
+  if (!("serviceWorker" in navigator)) return;
+  await navigator.serviceWorker.ready.catch(() => undefined);
+  if (navigator.serviceWorker.controller) return;
+
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timeoutId);
+      navigator.serviceWorker.removeEventListener("controllerchange", cleanup);
+      resolve();
+    };
+    const timeoutId = window.setTimeout(cleanup, 2_000);
+    navigator.serviceWorker.addEventListener("controllerchange", cleanup, { once: true });
+  });
+}
+
+async function prefetchRouteModules(): Promise<void> {
+  await waitForServiceWorkerControl();
+  await Promise.all(
+    ROUTE_PREFETCHERS.map(async (load) => {
+      if (prefetchedRouteModules.has(load)) return;
+      try {
+        await load();
+        prefetchedRouteModules.add(load);
+      } catch {}
+    }),
+  );
+}
+
+function useIdleRoutePrefetch() {
   useEffect(() => {
-    const prefetchRoute = (load: () => Promise<unknown>) => {
-      void load().catch(() => undefined);
-    };
+    let idleHandle: number | undefined;
+    let timeoutHandle: number | undefined;
+    let cancelled = false;
     const prefetch = () => {
+      if (cancelled) return;
       if (navigator.onLine === false) return;
-      if (status === "unauthenticated") {
-        prefetchRoute(loadSignInPage);
-        prefetchRoute(loadRegisterPage);
-        prefetchRoute(loadSearchPage);
-        return;
-      }
-      prefetchRoute(loadSearchPage);
-      prefetchRoute(loadLibraryPage);
-      prefetchRoute(loadLikedPage);
-      prefetchRoute(loadDownloadedPage);
-      prefetchRoute(loadRadioPage);
-      prefetchRoute(loadPlaylistPage);
-      prefetchRoute(loadSettingsPage);
+      void prefetchRouteModules();
     };
-    const idleWindow = window as Window & {
+    const idleWindow = window as unknown as {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
 
-    if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
-      const id = idleWindow.requestIdleCallback(prefetch, { timeout: 8_000 });
-      return () => {
-        idleWindow.cancelIdleCallback?.(id);
-      };
-    }
-
-    const id = window.setTimeout(prefetch, 4_000);
-    return () => {
-      window.clearTimeout(id);
+    const clearScheduledPrefetch = () => {
+      if (idleHandle !== undefined) {
+        idleWindow.cancelIdleCallback?.(idleHandle);
+        idleHandle = undefined;
+      }
+      if (timeoutHandle !== undefined) {
+        window.clearTimeout(timeoutHandle);
+        timeoutHandle = undefined;
+      }
     };
-  }, [status]);
+
+    const schedulePrefetch = () => {
+      clearScheduledPrefetch();
+      if (navigator.onLine === false) return;
+      if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
+        idleHandle = idleWindow.requestIdleCallback(prefetch, { timeout: ROUTE_PREFETCH_IDLE_TIMEOUT_MS });
+      } else {
+        timeoutHandle = window.setTimeout(prefetch, ROUTE_PREFETCH_FALLBACK_DELAY_MS);
+      }
+    };
+
+    window.addEventListener("online", schedulePrefetch);
+    schedulePrefetch();
+
+    return () => {
+      cancelled = true;
+      clearScheduledPrefetch();
+      window.removeEventListener("online", schedulePrefetch);
+    };
+  }, []);
 }
 
 function Shell() {
@@ -128,8 +189,12 @@ function Shell() {
       playlists: [],
       userId: null,
     },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
+    },
   );
-  useIdleRoutePrefetch(status);
+  useIdleRoutePrefetch();
   const visibleLibrary =
     library.userId && library.userId === user?.id
       ? library

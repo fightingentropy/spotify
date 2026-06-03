@@ -16,8 +16,18 @@ export function AccountAvatar({
   className: string;
   iconSize?: number;
 }) {
-  if (src) {
-    return <img src={src} alt={alt} className={className} />;
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const displaySrc = src && src !== failedSrc ? src : null;
+
+  if (displaySrc) {
+    return (
+      <img
+        src={displaySrc}
+        alt={alt}
+        className={className}
+        onError={() => setFailedSrc(displaySrc)}
+      />
+    );
   }
 
   return (

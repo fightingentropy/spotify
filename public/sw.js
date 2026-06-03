@@ -1,13 +1,16 @@
-const CACHE_VERSION = "spotify-v24";
+const CACHE_VERSION = "spotify-v46";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
+const APP_ASSETS_CACHE = "spotify-app-assets-v1";
 const MEDIA_CACHE = "spotify-media-v1";
 const PLAYBACK_CACHE = "spotify-playback-v1";
-const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
+const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, APP_ASSETS_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
+const CURRENT_CACHE_VERSION_NUMBER = Number(CACHE_VERSION.match(/spotify-v(\d+)/)?.[1] || 0);
 const MAX_CACHED_RANGE_BLOB_BYTES = 64 * 1024 * 1024;
-const OFFLINE_PLAYBACK_SEARCH_PARAM = "spotify_offline";
 const API_REFRESH_HEADER = "x-spotify-api-refresh";
+const APP_CACHE_RETENTION_COUNT = 3;
+const OFFLINE_ASSETS_MANIFEST_URL = "/offline-assets.json";
 
 const SHELL_URLS = [
   "/",
@@ -20,6 +23,7 @@ const SHELL_URLS = [
   "/icon.svg",
   "/icon-512.png",
   "/apple-icon.png",
+  "/profile.jpg",
   "/savannah.jpg",
   "/favicon.ico",
   "/manifest.webmanifest",
@@ -39,6 +43,21 @@ function isCacheableResponse(response) {
   return response && response.ok && response.type !== "opaqueredirect";
 }
 
+function offlineJsonResponse(message = "You're offline and this data has not been cached yet.") {
+  return new Response(JSON.stringify({ error: message, offline: true }), {
+    status: 503,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+function isRetainedVersionedAppCache(key) {
+  const match = key.match(/^spotify-v(\d+)-(shell|static|runtime)$/);
+  if (!match) return false;
+  const version = Number(match[1]);
+  if (!Number.isFinite(version) || !Number.isFinite(CURRENT_CACHE_VERSION_NUMBER)) return false;
+  return version >= CURRENT_CACHE_VERSION_NUMBER - APP_CACHE_RETENTION_COUNT + 1;
+}
+
 async function putCache(cacheName, request, response) {
   if (!isCacheableResponse(response)) return;
   try {
@@ -56,18 +75,23 @@ function refreshCache(cacheName, request) {
     .catch(() => undefined);
 }
 
-async function cacheFirst(request, cacheName) {
+async function cacheFirst(request, cacheName, fallbackResponse) {
   const cached = await caches.match(request);
   if (cached) {
     return cached;
   }
 
-  const response = await fetch(request);
-  await putCache(cacheName, request, response);
-  return response;
+  try {
+    const response = await fetch(request);
+    await putCache(cacheName, request, response);
+    return response;
+  } catch {
+    if (fallbackResponse) return fallbackResponse;
+    throw new Error("network and cache miss");
+  }
 }
 
-async function networkFirst(request, cacheName) {
+async function networkFirst(request, cacheName, fallbackResponse) {
   try {
     const response = await fetch(request);
     await putCache(cacheName, request, response);
@@ -75,11 +99,12 @@ async function networkFirst(request, cacheName) {
   } catch {
     const cached = await caches.match(request);
     if (cached) return cached;
+    if (fallbackResponse) return fallbackResponse;
     throw new Error("network and cache miss");
   }
 }
 
-async function staleWhileRevalidate(event, request, cacheName) {
+async function staleWhileRevalidate(event, request, cacheName, fallbackResponse) {
   const cached = await caches.match(request);
   const refreshed = refreshCache(cacheName, request);
   event.waitUntil(refreshed.then(() => undefined));
@@ -88,7 +113,93 @@ async function staleWhileRevalidate(event, request, cacheName) {
   }
 
   const response = await refreshed;
-  return response || fetch(request);
+  if (response) return response;
+  if (fallbackResponse) return fallbackResponse;
+  return fetch(request);
+}
+
+function precacheUrlsFromHtml(html) {
+  const urls = new Set();
+  const attributePattern = /\b(?:href|src)=["']([^"']+)["']/g;
+  let match;
+  while ((match = attributePattern.exec(html))) {
+    try {
+      const url = new URL(match[1], self.location.origin);
+      if (url.origin !== self.location.origin) continue;
+      if (url.pathname.startsWith("/assets/")) urls.add(url.toString());
+    } catch {}
+  }
+  return [...urls];
+}
+
+async function cacheStaticUrls(urls, options = {}) {
+  const uniqueUrls = [...new Set(urls)];
+  if (uniqueUrls.length === 0) return;
+
+  const results = await Promise.all(
+    uniqueUrls.map(async (url) => {
+      try {
+        const parsed = new URL(url, self.location.origin);
+        if (parsed.origin !== self.location.origin) return true;
+        const cached = await caches.match(parsed.toString());
+        if (cached) return true;
+        const response = await fetch(parsed.toString(), { cache: "reload" });
+        await putCache(STATIC_CACHE, parsed.toString(), response);
+        return isCacheableResponse(response);
+      } catch {
+        return false;
+      }
+    }),
+  );
+  if (options.required && results.some((cached) => !cached)) {
+    throw new Error("Failed to cache app shell assets");
+  }
+}
+
+async function cacheHtmlAssets(response, options = {}) {
+  if (!response?.ok) return;
+  const contentType = response.headers.get("content-type") || "";
+  const html = await response.clone().text().catch(() => "");
+  if (!contentType.includes("text/html") && !html.includes("/assets/")) return;
+  const urls = precacheUrlsFromHtml(html);
+  await cacheStaticUrls(urls, options);
+}
+
+async function cacheOfflineAssetsManifest(options = {}) {
+  const response = await fetch(OFFLINE_ASSETS_MANIFEST_URL, { cache: "reload" });
+  if (!response.ok) return false;
+  await putCache(STATIC_CACHE, OFFLINE_ASSETS_MANIFEST_URL, response.clone());
+  const payload = await response.json().catch(() => null);
+  const files = Array.isArray(payload?.files)
+    ? payload.files.filter((value) => typeof value === "string" && value.startsWith("/"))
+    : [];
+  if (files.length === 0) return false;
+  await cacheStaticUrls(files, { required: options.required });
+  return true;
+}
+
+async function cacheBuildAssets(response, options = {}) {
+  const cachedManifest = await cacheOfflineAssetsManifest({ required: options.required }).catch((error) => {
+    if (options.required) throw error;
+    return false;
+  });
+  if (cachedManifest) {
+    await cacheHtmlAssets(response).catch(() => undefined);
+  } else {
+    await cacheHtmlAssets(response, { required: options.required });
+  }
+}
+
+async function precacheShell() {
+  const cache = await caches.open(SHELL_CACHE);
+  const response = await fetch("/", { cache: "reload" });
+  await cacheBuildAssets(response.clone(), { required: true });
+  await putCache(SHELL_CACHE, "/", response.clone());
+  await Promise.all(
+    SHELL_URLS
+      .filter((url) => url !== "/")
+      .map((url) => cache.add(url).catch(() => undefined)),
+  );
 }
 
 async function matchCachedMedia(urlValue) {
@@ -181,17 +292,12 @@ async function cachedRangeResponse(request, options = {}) {
 }
 
 async function rangeResponse(request) {
-  const url = new URL(request.url);
-  if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
-    const cached = await cachedRangeResponse(request, { ignoreSizeLimit: true });
-    if (cached) return cached;
-  }
+  const cached = await cachedRangeResponse(request, { ignoreSizeLimit: true });
+  if (cached) return cached;
 
   try {
     return await fetch(request);
   } catch {
-    const cached = await cachedRangeResponse(request);
-    if (cached) return cached;
     throw new Error("network and cached media miss");
   }
 }
@@ -241,17 +347,12 @@ async function clearRuntimeCaches() {
 }
 
 async function mediaResponse(request) {
-  const url = new URL(request.url);
-  if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
-    const cached = await matchCachedMedia(request.url);
-    if (cached) return cached;
-  }
+  const cached = await matchCachedMedia(request.url);
+  if (cached) return cached;
 
   try {
     return await fetch(request);
   } catch {
-    const cached = await matchCachedMedia(request.url);
-    if (cached) return cached;
     throw new Error("network and cached media miss");
   }
 }
@@ -261,12 +362,15 @@ async function navigationResponse(request) {
 
   try {
     const response = await fetch(request, { cache: "reload" });
+    await cacheBuildAssets(response.clone(), { required: true });
     await putCache(SHELL_CACHE, request, response.clone());
     return response;
   } catch {
     const cached =
       (await cache.match(request, { ignoreSearch: true })) ||
-      (await cache.match("/", { ignoreSearch: true }));
+      (await cache.match("/", { ignoreSearch: true })) ||
+      (await caches.match(request, { ignoreSearch: true })) ||
+      (await caches.match("/", { ignoreSearch: true }));
     if (cached) return cached;
     return new Response("<!doctype html><title>Spotify</title><body>Spotify is offline.</body>", {
       headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -276,27 +380,22 @@ async function navigationResponse(request) {
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches
-      .open(SHELL_CACHE)
-      .then((cache) => Promise.all(SHELL_URLS.map((url) => cache.add(url).catch(() => undefined))))
-      .catch(() => undefined),
-  );
+  event.waitUntil(precacheShell().then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter(
-            (key) => !CURRENT_CACHES.has(key),
-          )
-          .map((key) => caches.delete(key)),
-      ),
-    ),
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => !CURRENT_CACHES.has(key) && !isRetainedVersionedAppCache(key))
+            .map((key) => caches.delete(key)),
+        ),
+      )
+      .then(() => self.clients.claim()),
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -328,10 +427,11 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isCacheableApiRequest(url)) {
+    const fallback = offlineJsonResponse();
     event.respondWith(
       request.headers.get(API_REFRESH_HEADER) === "1"
-        ? networkFirst(request, RUNTIME_CACHE)
-        : staleWhileRevalidate(event, request, RUNTIME_CACHE),
+        ? networkFirst(request, RUNTIME_CACHE, fallback)
+        : staleWhileRevalidate(event, request, RUNTIME_CACHE, fallback),
     );
     return;
   }
@@ -378,5 +478,9 @@ self.addEventListener("message", (event) => {
   }
   if (event.data?.type === "CLEAR_RUNTIME_CACHE") {
     event.waitUntil(clearRuntimeCaches());
+    return;
+  }
+  if (event.data?.type === "CACHE_APP_SHELL") {
+    event.waitUntil(precacheShell());
   }
 });

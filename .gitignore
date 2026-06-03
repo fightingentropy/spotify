@@ -38,6 +38,7 @@ yarn-error.log*
 *.tsbuildinfo
 
 # local media runtime data
+/cache/
 /local-media/
 /music/
 

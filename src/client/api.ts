@@ -20,10 +20,13 @@ type ApiCacheEntry<T = unknown> = {
   etag?: string | null;
   fetchedAt: number;
   promise?: Promise<T>;
+  promiseStartedAt?: number;
 };
 
-const API_CACHE_MAX_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 const API_REFRESH_HEADER = "x-spotify-api-refresh";
+export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
+const API_FETCH_TIMEOUT_MS = 5_000;
+const API_SNAPSHOT_READ_TIMEOUT_MS = 1_000;
 const apiCache = new Map<string, ApiCacheEntry>();
 
 function getApiPath(url: string): string {
@@ -58,25 +61,39 @@ function isPersistableApiUrl(url: string): boolean {
     path === "/api/liked" ||
     path === "/api/likes" ||
     path === "/api/music/source" ||
+    path === "/api/songs" ||
     path.startsWith("/api/playlist/")
   );
 }
 
 function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   const memory = apiCache.get(url) as ApiCacheEntry<T> | undefined;
-  if (memory?.data !== undefined || memory?.promise) return memory;
+  if (!memory) return undefined;
+  if (memory.promise) {
+    const startedAt = memory.promiseStartedAt ?? (memory.fetchedAt > 0 ? memory.fetchedAt : 0);
+    if (!startedAt || Date.now() - startedAt > API_FETCH_TIMEOUT_MS + API_SNAPSHOT_READ_TIMEOUT_MS + 1_000) {
+      apiCache.set(url, {
+        data: memory.data,
+        etag: memory.etag,
+        fetchedAt: memory.fetchedAt,
+      });
+      return memory.data === undefined ? undefined : getCacheEntry<T>(url);
+    }
+    return memory;
+  }
+  if (memory.data !== undefined) return memory;
   return undefined;
 }
 
 async function readStoredApiCache<T>(url: string): Promise<ApiCacheEntry<T> | undefined> {
   if (typeof window === "undefined" || !isPersistableApiUrl(url)) return undefined;
 
-  const snapshot = await readOfflineApiSnapshot<T>(url);
+  const snapshot = await withClientTimeout(
+    readOfflineApiSnapshot<T>(url),
+    API_SNAPSHOT_READ_TIMEOUT_MS,
+    "Offline snapshot read timed out",
+  ).catch(() => undefined);
   if (!snapshot || snapshot.data === undefined || typeof snapshot.fetchedAt !== "number") return undefined;
-  if (Date.now() - snapshot.fetchedAt > API_CACHE_MAX_STALE_MS) {
-    await removeOfflineApiSnapshots(url);
-    return undefined;
-  }
   return {
     data: snapshot.data,
     etag: snapshot.etag ?? null,
@@ -107,6 +124,45 @@ function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
 
 function canSyncApiData(): boolean {
   return typeof navigator === "undefined" || navigator.onLine !== false;
+}
+
+function dispatchApiAuthRequired(url: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(API_AUTH_REQUIRED_EVENT, { detail: { url } }));
+}
+
+async function withClientTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  if (typeof window === "undefined") return promise;
+  let timeoutId: number | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (typeof window === "undefined") return fetch(input, init);
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  let timeoutId: number | undefined;
+  try {
+    const request = fetch(input, {
+      ...init,
+      signal: controller?.signal ?? init?.signal,
+    });
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = window.setTimeout(() => {
+        controller?.abort();
+        reject(new Error("Request timed out"));
+      }, API_FETCH_TIMEOUT_MS);
+    });
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
 }
 
 function hasStringArray(value: unknown): value is string[] {
@@ -200,7 +256,7 @@ async function fetchApiData<T>(url: string): Promise<T> {
     headers.set(API_REFRESH_HEADER, "1");
     if (cached?.etag && cached.data !== undefined) headers.set("if-none-match", cached.etag);
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       credentials: "include",
       cache: "no-cache",
       headers,
@@ -210,6 +266,7 @@ async function fetchApiData<T>(url: string): Promise<T> {
     }
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (response.status === 401) dispatchApiAuthRequired(url);
       throw new Error(payload.error || `Request failed with ${response.status}`);
     }
     return writeApiCache(url, (await response.json()) as T, response.headers.get("etag"));
@@ -220,6 +277,7 @@ async function fetchApiData<T>(url: string): Promise<T> {
     etag: cached?.etag,
     fetchedAt: cached?.fetchedAt ?? 0,
     promise,
+    promiseStartedAt: Date.now(),
   });
 
   try {

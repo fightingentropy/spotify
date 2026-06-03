@@ -47,6 +47,13 @@ type AuthUser = {
 };
 
 const SAVANNAH_PROFILE_IMAGE_URL = "/savannah.jpg";
+const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
+const LOCAL_MAC_MINI_AUTH_USER: AuthUser = {
+  id: "local-mac-mini",
+  email: "erlin@spotify.local",
+  name: "Erlin",
+  image: ERLIN_PROFILE_IMAGE_URL,
+};
 
 type ActionPayload = {
   action?: unknown;
@@ -403,17 +410,62 @@ async function getCurrentUser(req: Request, db: SqlTag): Promise<AuthUser | null
 }
 
 function publicUser(user: AuthUser) {
+  const defaultImage = defaultUserImage(user.email, user.name);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
-    image: user.image || defaultUserImage(user.email, user.name),
+    image: user.image || defaultImage || null,
   };
+}
+
+async function ensureDefaultProfileImageStored(c: Context<AppEnv>, user: AuthUser): Promise<AuthUser> {
+  const defaultImage = defaultUserImage(user.email, user.name);
+  if (!defaultImage || user.id === LOCAL_MAC_MINI_AUTH_USER.id) return user;
+  if (user.image && user.image !== defaultImage) return user;
+
+  const response = await c.env.ASSETS.fetch(new Request(new URL(defaultImage, c.req.url)));
+  if (!response.ok) return user;
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
+  if (!IMAGE_MIME_TYPES.has(contentType)) return user;
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > MAX_IMAGE_BYTES) return user;
+  const ext =
+    contentType === "image/png"
+      ? ".png"
+      : contentType === "image/gif"
+        ? ".gif"
+        : contentType === "image/webp"
+          ? ".webp"
+          : ".jpg";
+  const key = `users/${sanitizePathSegment(user.id)}/profile/default${ext}`;
+  const imageUrl = toApiFileUrl(key);
+  const existing = await c.env.MEDIA.head(key);
+  if (!existing) await putBuffer(c.env, key, buffer, contentType);
+  await c.get("db")`
+    UPDATE "User"
+    SET "image" = ${imageUrl}, "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${user.id}
+      AND ("image" IS NULL OR "image" = ${defaultImage})
+  `;
+  return { ...user, image: imageUrl };
+}
+
+async function publicUserForResponse(c: Context<AppEnv>, user: AuthUser) {
+  return publicUser(await ensureDefaultProfileImageStored(c, user));
 }
 
 function defaultUserImage(email: string, name: string | null): string | null {
   const normalizedName = name?.trim().toLowerCase() || "";
   const emailLocalPart = email.split("@")[0]?.trim().toLowerCase() || "";
+  if (
+    normalizedName === "erlin" ||
+    normalizedName === "erlin hoxha" ||
+    emailLocalPart === "erlin" ||
+    emailLocalPart === "erlinhoxha"
+  ) {
+    return ERLIN_PROFILE_IMAGE_URL;
+  }
   if (normalizedName === "savannah" || normalizedName === "savanna") return SAVANNAH_PROFILE_IMAGE_URL;
   if (emailLocalPart === "savannah" || emailLocalPart === "savanna") return SAVANNAH_PROFILE_IMAGE_URL;
   return null;
@@ -480,6 +532,14 @@ function parseStorageKeyFromApiPath(pathname: string): string {
 async function storageKeyBelongsToUser(db: SqlTag, key: string, userId: string): Promise<boolean> {
   await ensureSongColumns(db);
   const fileUrl = toApiFileUrl(key);
+  const userRows = await db<{ id: string }>`
+    SELECT "id"
+    FROM "User"
+    WHERE "id" = ${userId}
+      AND "image" = ${fileUrl}
+    LIMIT 1
+  `;
+  if (userRows[0]) return true;
   const rows = await db<{ id: string }>`
     SELECT "id"
     FROM "Song"
@@ -1118,6 +1178,26 @@ function isMacMiniMusicConfigured(env: CloudflareEnv): boolean {
   }
 }
 
+function isLocalPreviewHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    normalized.endsWith(".local")
+  );
+}
+
+function getLocalMacMiniAuthUser(c: Context<AppEnv>): AuthUser | null {
+  if (!isMacMiniMusicConfigured(c.env)) return null;
+  try {
+    return isLocalPreviewHost(new URL(c.req.url).hostname) ? LOCAL_MAC_MINI_AUTH_USER : null;
+  } catch {
+    return null;
+  }
+}
+
 function macMiniProxyPathname(c: Context<AppEnv>): string {
   return new URL(c.req.url).pathname;
 }
@@ -1159,7 +1239,7 @@ function isMacMiniMutation(c: Context<AppEnv>): boolean {
 async function getMacMiniProxyUser(c: Context<AppEnv>): Promise<AuthUser | null> {
   await ensureSchema(c.env);
   const db = createD1SqlTag(c.env.DB);
-  return getCurrentUser(c.req.raw, db);
+  return (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
 }
 
 function macMiniProxyHeaders(c: Context<AppEnv>, user: AuthUser | null): Headers {
@@ -1239,9 +1319,9 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
-app.get("/api/auth/session", (c) => {
-  const user = c.get("user");
-  return c.json({ user: user ? publicUser(user) : null });
+app.get("/api/auth/session", async (c) => {
+  const user = c.get("user") ?? getLocalMacMiniAuthUser(c);
+  return c.json({ user: user ? await publicUserForResponse(c, user) : null });
 });
 
 app.post("/api/auth/signin", async (c) => {
@@ -1277,7 +1357,7 @@ app.post("/api/auth/signin", async (c) => {
     maxAge: SESSION_MAX_AGE_SECONDS,
     expires,
   });
-  return c.json({ user: publicUser(user) });
+  return c.json({ user: await publicUserForResponse(c, user) });
 });
 
 app.post("/api/auth/signout", async (c) => {
@@ -1290,6 +1370,28 @@ app.post("/api/auth/signout", async (c) => {
   }
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
   return new Response(null, { status: 204 });
+});
+
+app.post("/api/profile/image", async (c) => {
+  const user = requireUser(c.get("user"));
+  const form = await c.req.formData();
+  const image = form.get("image");
+  if (!(image instanceof File) || image.size <= 0) {
+    return jsonError("Image file is required", 400);
+  }
+  if (image.size > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
+  const imageExt = extensionForStoredFile("image", image.name || "profile.jpg", image.type || "image/jpeg");
+  const key = `users/${sanitizePathSegment(user.id)}/profile/${crypto.randomUUID()}${imageExt}`;
+  const contentType = image.type || inferContentTypeFromKey(key);
+  await putBuffer(c.env, key, await image.arrayBuffer(), contentType);
+  const imageUrl = toApiFileUrl(key);
+  const rows = await c.get("db")<UserRow>`
+    UPDATE "User"
+    SET "image" = ${imageUrl}, "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${user.id}
+    RETURNING "id", "email", "name", "image", "passwordHash", "emailVerified", "createdAt", "updatedAt"
+  `;
+  return c.json({ user: publicUser(rows[0] ?? { ...user, image: imageUrl }) });
 });
 
 app.post("/api/register", async (c) => {

@@ -10,10 +10,14 @@ const PLAYBACK_WARM_BYTES = 512 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
 const PLAYBACK_WARM_DEDUPE_MS = 2 * 60 * 1_000;
 const PLAYBACK_WARM_QUEUE_LIMIT = 12;
+const PLAYBACK_PREFETCH_FORWARD_TRACKS = 3;
+const PLAYBACK_NETWORK_BACKOFF_MS = 45_000;
 
 let warmPlaybackPumpRunning = false;
 const warmPlaybackQueue: string[] = [];
 const warmPlaybackSeen = new Map<string, number>();
+const playbackCacheRequestSeen = new Map<string, number>();
+let playbackNetworkBackoffUntil = 0;
 
 function now(): number {
   return Date.now();
@@ -33,12 +37,25 @@ function resolveUrl(value: string): string {
   return new URL(value, location.origin).toString();
 }
 
+export function isPlaybackNetworkTemporarilyPoor(): boolean {
+  return now() < playbackNetworkBackoffUntil;
+}
+
+export function notePlaybackNetworkFailure(): void {
+  playbackNetworkBackoffUntil = Math.max(playbackNetworkBackoffUntil, now() + PLAYBACK_NETWORK_BACKOFF_MS);
+}
+
+export function notePlaybackNetworkSuccess(): void {
+  playbackNetworkBackoffUntil = 0;
+}
+
 function shouldSkipSpeculativeMediaFetch(): boolean {
   if (typeof navigator === "undefined") return false;
   const connection = (navigator as Navigator & {
     connection?: { saveData?: boolean; effectiveType?: string };
   }).connection;
   return !!(
+    isPlaybackNetworkTemporarilyPoor() ||
     connection?.saveData ||
     connection?.effectiveType === "slow-2g" ||
     connection?.effectiveType === "2g"
@@ -65,10 +82,42 @@ async function warmPlaybackUrl(url: string): Promise<void> {
       signal: controller.signal,
     });
     await response.body?.cancel().catch(() => undefined);
+    notePlaybackNetworkSuccess();
   } catch {
+    notePlaybackNetworkFailure();
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+function shouldRequestPlaybackCache(url: string): boolean {
+  const timestamp = now();
+  const previous = playbackCacheRequestSeen.get(url);
+  if (previous && timestamp - previous < PLAYBACK_WARM_DEDUPE_MS) return false;
+  playbackCacheRequestSeen.set(url, timestamp);
+  return true;
+}
+
+function requestPlaybackCache(urls: string[]): void {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+  const cacheableUrls = uniqueStrings(urls)
+    .filter(sameOriginCacheableUrl)
+    .map(resolveUrl)
+    .filter(shouldRequestPlaybackCache);
+  if (cacheableUrls.length === 0) return;
+
+  const message = {
+    type: "CACHE_MEDIA",
+    cacheName: PLAYBACK_CACHE,
+    urls: cacheableUrls,
+  };
+  if (navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage(message);
+    return;
+  }
+  navigator.serviceWorker.ready
+    .then((registration) => registration.active?.postMessage(message))
+    .catch(() => undefined);
 }
 
 async function cacheSidecarUrl(url: string): Promise<void> {
@@ -137,16 +186,19 @@ export function warmPlaybackSong(song: PlayerSong, priority = false): void {
 
 export async function prefetchUpcomingPlayback(queue: PlayerSong[], currentIndex: number): Promise<void> {
   if (shouldSkipSpeculativeMediaFetch()) return;
-  const upcoming = queue
-    .slice(currentIndex + 1, currentIndex + 4)
+  if (!Number.isInteger(currentIndex) || currentIndex < 0) return;
+  const nearby = queue
+    .slice(currentIndex, currentIndex + PLAYBACK_PREFETCH_FORWARD_TRACKS + 1)
     .map((song) => resolveOfflinePlaybackSong(song))
     .filter((song) => !isBrowserLocalSong(song));
   const audioUrls = uniqueStrings(
-    upcoming.filter((song) => !isOfflinePlaybackSong(song)).map((song) => song.audioUrl),
+    nearby.filter((song) => !isOfflinePlaybackSong(song)).map((song) => song.audioUrl),
   ).filter(sameOriginCacheableUrl);
   const sidecarUrls = uniqueStrings(
-    upcoming.filter((song) => !isOfflinePlaybackSong(song)).flatMap((song) => [song.imageUrl, song.lyricsUrl]),
+    nearby.filter((song) => !isOfflinePlaybackSong(song)).flatMap((song) => [song.imageUrl, song.lyricsUrl]),
   ).filter(sameOriginCacheableUrl);
+
+  requestPlaybackCache([...audioUrls, ...sidecarUrls]);
 
   for (const url of audioUrls) {
     await warmPlaybackUrl(url);

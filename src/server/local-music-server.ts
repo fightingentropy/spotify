@@ -100,9 +100,9 @@ const SCAN_CACHE_VERSION = 1;
 const ARTWORK_CACHE_VERSION = 2;
 const LOCAL_USER = {
   id: "local-mac-mini",
-  email: "local@spotify.local",
-  name: "Mac mini",
-  image: null,
+  email: "erlin@spotify.local",
+  name: "Erlin",
+  image: "/profile.jpg",
 };
 const PROXY_USER_ID_HEADER = "x-spotify-user-id";
 const PROXY_USER_EMAIL_HEADER = "x-spotify-user-email";
@@ -118,6 +118,7 @@ const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
 const distDir = resolve(process.env.SPOTIFY_DIST_DIR || defaultDistDir);
 const musicRoot = resolve(process.env.SPOTIFY_MUSIC_DIR || resolve(homedir(), "Music"));
 const cacheDir = resolve(process.env.SPOTIFY_CACHE_DIR || resolve(cwd, "cache"));
+const profileImageDir = resolve(cacheDir, "profile");
 const userMusicRoot = resolve(process.env.SPOTIFY_USER_MUSIC_DIR || resolve(cacheDir, "user-music"));
 const libraryCachePath = resolve(
   process.env.SPOTIFY_LIBRARY_CACHE || resolve(cacheDir, "local-music-library.json"),
@@ -142,6 +143,21 @@ const proxyHostnames = new Set(
 const libraryOwnerUserIds = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_USER_IDS || "");
 const libraryOwnerEmails = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_EMAILS || "");
 const libraryOwnerNames = parseEnvList(process.env.SPOTIFY_LIBRARY_OWNER_NAMES || "Erlin");
+
+function localProfileImageUrl(): string {
+  for (const ext of [".jpg", ".jpeg", ".png", ".webp", ".gif"]) {
+    const fileName = `local-user-profile${ext}`;
+    if (existsSync(resolve(profileImageDir, fileName))) return `/api/profile/image/${fileName}`;
+  }
+  return LOCAL_USER.image;
+}
+
+function localUser() {
+  return {
+    ...LOCAL_USER,
+    image: localProfileImageUrl(),
+  };
+}
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
 const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -1781,19 +1797,56 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   if (unauthorizedMutation) return unauthorizedMutation;
 
   if (pathname === "/api/auth/session" && request.method === "GET") {
-    return json({ user: currentUserIdForRequest(request) ? LOCAL_USER : null });
+    return json({ user: currentUserIdForRequest(request) ? localUser() : null });
   }
   if (pathname === "/api/auth/me" && request.method === "GET") {
-    return json({ user: currentUserIdForRequest(request) ? LOCAL_USER : null });
+    return json({ user: currentUserIdForRequest(request) ? localUser() : null });
   }
   if (pathname === "/api/auth/signout" && request.method === "POST") {
     return new Response(null, { status: 204 });
   }
   if (pathname === "/api/auth/signin" && request.method === "POST") {
-    return json({ user: LOCAL_USER });
+    return json({ user: localUser() });
   }
   if (pathname === "/api/register" && request.method === "POST") {
     return json({ ok: true }, { status: 201 });
+  }
+
+  if (pathname.startsWith("/api/profile/image/") && request.method === "GET") {
+    const fileName = basename(decodeURIComponent(pathname.slice("/api/profile/image/".length)));
+    if (!/^local-user-profile\.(jpe?g|png|webp|gif)$/i.test(fileName)) return notFound("Image not found");
+    const imagePath = resolve(profileImageDir, fileName);
+    if (!existsSync(imagePath)) return notFound("Image not found");
+    const body = await readFile(imagePath);
+    return new Response(body, {
+      headers: {
+        "Content-Type": contentTypeForPath(imagePath),
+        "Content-Length": String(body.byteLength),
+        "Cache-Control": "private, max-age=31536000, immutable",
+      },
+    });
+  }
+
+  if (pathname === "/api/profile/image" && request.method === "POST") {
+    if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+    const form = await request.formData();
+    const image = form.get("image");
+    if (!(image instanceof File) || image.size <= 0) {
+      return json({ error: "Image file is required" }, { status: 400 });
+    }
+    const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
+    if (invalidImage) return invalidImage;
+    const imageExt = IMAGE_EXTENSIONS.has(extname(image.name).toLowerCase())
+      ? extname(image.name).toLowerCase()
+      : ".jpg";
+    await mkdir(profileImageDir, { recursive: true });
+    await Promise.all(
+      [".jpg", ".jpeg", ".png", ".webp", ".gif"].map((ext) =>
+        rm(resolve(profileImageDir, `local-user-profile${ext}`), { force: true }).catch(() => undefined),
+      ),
+    );
+    await saveFile(image, resolve(profileImageDir, `local-user-profile${imageExt}`));
+    return json({ user: localUser() });
   }
 
   if (pathname === "/api/music/source" && request.method === "GET") {
