@@ -16,7 +16,6 @@ const PLAYBACK_NETWORK_BACKOFF_MS = 45_000;
 let warmPlaybackPumpRunning = false;
 const warmPlaybackQueue: string[] = [];
 const warmPlaybackSeen = new Map<string, number>();
-const playbackCacheRequestSeen = new Map<string, number>();
 let playbackNetworkBackoffUntil = 0;
 
 function now(): number {
@@ -90,36 +89,6 @@ async function warmPlaybackUrl(url: string): Promise<void> {
   }
 }
 
-function shouldRequestPlaybackCache(url: string): boolean {
-  const timestamp = now();
-  const previous = playbackCacheRequestSeen.get(url);
-  if (previous && timestamp - previous < PLAYBACK_WARM_DEDUPE_MS) return false;
-  playbackCacheRequestSeen.set(url, timestamp);
-  return true;
-}
-
-function requestPlaybackCache(urls: string[]): void {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-  const cacheableUrls = uniqueStrings(urls)
-    .filter(sameOriginCacheableUrl)
-    .map(resolveUrl)
-    .filter(shouldRequestPlaybackCache);
-  if (cacheableUrls.length === 0) return;
-
-  const message = {
-    type: "CACHE_MEDIA",
-    cacheName: PLAYBACK_CACHE,
-    urls: cacheableUrls,
-  };
-  if (navigator.serviceWorker.controller) {
-    navigator.serviceWorker.controller.postMessage(message);
-    return;
-  }
-  navigator.serviceWorker.ready
-    .then((registration) => registration.active?.postMessage(message))
-    .catch(() => undefined);
-}
-
 async function cacheSidecarUrl(url: string): Promise<void> {
   if (typeof caches === "undefined") return;
   if (!sameOriginCacheableUrl(url)) return;
@@ -187,18 +156,16 @@ export function warmPlaybackSong(song: PlayerSong, priority = false): void {
 export async function prefetchUpcomingPlayback(queue: PlayerSong[], currentIndex: number): Promise<void> {
   if (shouldSkipSpeculativeMediaFetch()) return;
   if (!Number.isInteger(currentIndex) || currentIndex < 0) return;
-  const nearby = queue
-    .slice(currentIndex, currentIndex + PLAYBACK_PREFETCH_FORWARD_TRACKS + 1)
+  const upcoming = queue
+    .slice(currentIndex + 1, currentIndex + PLAYBACK_PREFETCH_FORWARD_TRACKS + 1)
     .map((song) => resolveOfflinePlaybackSong(song))
     .filter((song) => !isBrowserLocalSong(song));
   const audioUrls = uniqueStrings(
-    nearby.filter((song) => !isOfflinePlaybackSong(song)).map((song) => song.audioUrl),
+    upcoming.filter((song) => !isOfflinePlaybackSong(song)).map((song) => song.audioUrl),
   ).filter(sameOriginCacheableUrl);
   const sidecarUrls = uniqueStrings(
-    nearby.filter((song) => !isOfflinePlaybackSong(song)).flatMap((song) => [song.imageUrl, song.lyricsUrl]),
+    upcoming.filter((song) => !isOfflinePlaybackSong(song)).flatMap((song) => [song.imageUrl, song.lyricsUrl]),
   ).filter(sameOriginCacheableUrl);
-
-  requestPlaybackCache([...audioUrls, ...sidecarUrls]);
 
   for (const url of audioUrls) {
     await warmPlaybackUrl(url);

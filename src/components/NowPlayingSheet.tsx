@@ -18,6 +18,7 @@ import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { isRadioSong } from "@/lib/player-song";
+import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
@@ -70,7 +71,8 @@ export default function NowPlayingSheet({
   onSeek,
 }: NowPlayingSheetProps) {
   const navigate = useNavigate();
-  const toggle = usePlayerStore((s) => s.toggle);
+  const play = usePlayerStore((s) => s.play);
+  const pause = usePlayerStore((s) => s.pause);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
   const shuffle = usePlayerStore((s) => s.shuffle);
@@ -167,6 +169,15 @@ export default function NowPlayingSheet({
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
+  }
+
+  function handleTogglePlayback() {
+    if (isPlaying) {
+      pause();
+      return;
+    }
+    requestImmediatePlayback(song);
+    play();
   }
 
   function handleTouchStart(event: TouchEvent<HTMLElement>) {
@@ -326,7 +337,7 @@ export default function NowPlayingSheet({
                 <button
                   type="button"
                   aria-label={isPlaying ? "Pause" : "Play"}
-                  onClick={toggle}
+                  onClick={handleTogglePlayback}
                   className="h-16 w-16 rounded-full grid place-items-center bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 touch-manipulation"
                 >
                   {isPlaying ? <Pause size={28} /> : <Play size={28} className="translate-x-[2px]" />}

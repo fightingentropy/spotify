@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { API_AUTH_REQUIRED_EVENT, invalidateApiCache } from "@/client/api";
+import { setOfflineAccountScope } from "@/client/offline";
 import { useLikesStore } from "@/store/likes";
 
 export type AuthUser = {
@@ -214,6 +215,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    setOfflineAccountScope(user?.id ?? status);
+  }, [status, user?.id]);
+
+  useEffect(() => {
     const nextUserId = user?.id ?? null;
     if (userIdRef.current === nextUserId) return;
     userIdRef.current = nextUserId;
@@ -235,6 +240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     invalidateApiCache();
     clearServiceWorkerApiCache();
     writeCachedAuthUser(nextUser);
+    setOfflineAccountScope(nextUser.id);
     setUser(nextUser);
     setStatus("authenticated");
   }, []);
@@ -247,6 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     invalidateApiCache();
     clearServiceWorkerApiCache();
     writeCachedAuthUser(null, { signedOut: true });
+    setOfflineAccountScope("unauthenticated");
     setUser(null);
     setStatus("unauthenticated");
   }, []);

@@ -8,6 +8,7 @@ const PLAYBACK_CACHE = "spotify-playback-v1";
 const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, APP_ASSETS_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
 const CURRENT_CACHE_VERSION_NUMBER = Number(CACHE_VERSION.match(/spotify-v(\d+)/)?.[1] || 0);
 const MAX_CACHED_RANGE_BLOB_BYTES = 64 * 1024 * 1024;
+const OFFLINE_PLAYBACK_SEARCH_PARAM = "spotify_offline";
 const API_REFRESH_HEADER = "x-spotify-api-refresh";
 const APP_CACHE_RETENTION_COUNT = 3;
 const OFFLINE_ASSETS_MANIFEST_URL = "/offline-assets.json";
@@ -292,12 +293,17 @@ async function cachedRangeResponse(request, options = {}) {
 }
 
 async function rangeResponse(request) {
-  const cached = await cachedRangeResponse(request, { ignoreSizeLimit: true });
-  if (cached) return cached;
+  const url = new URL(request.url);
+  if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
+    const cached = await cachedRangeResponse(request, { ignoreSizeLimit: true });
+    if (cached) return cached;
+  }
 
   try {
     return await fetch(request);
   } catch {
+    const cached = await cachedRangeResponse(request);
+    if (cached) return cached;
     throw new Error("network and cached media miss");
   }
 }
@@ -347,12 +353,17 @@ async function clearRuntimeCaches() {
 }
 
 async function mediaResponse(request) {
-  const cached = await matchCachedMedia(request.url);
-  if (cached) return cached;
+  const url = new URL(request.url);
+  if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
+    const cached = await matchCachedMedia(request.url);
+    if (cached) return cached;
+  }
 
   try {
     return await fetch(request);
   } catch {
+    const cached = await matchCachedMedia(request.url);
+    if (cached) return cached;
     throw new Error("network and cached media miss");
   }
 }

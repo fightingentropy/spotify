@@ -14,6 +14,7 @@ export type OfflineDownloadRecord = {
   audioUrl: string;
   imageUrl: string;
   lyricsUrl?: string;
+  accountScope?: string;
   status: OfflineDownloadStatus;
   progress: number;
   size: number;
@@ -36,6 +37,7 @@ export type OfflineMutation =
   | {
       id: string;
       type: "like";
+      accountScope?: string;
       status: OfflineMutationStatus;
       attempts: number;
       error?: string;
@@ -50,6 +52,7 @@ export type OfflineMutation =
   | {
       id: string;
       type: "playlist-reorder";
+      accountScope?: string;
       status: OfflineMutationStatus;
       attempts: number;
       error?: string;
@@ -63,6 +66,7 @@ export type OfflineMutation =
   | {
       id: string;
       type: "song-edit";
+      accountScope?: string;
       status: OfflineMutationStatus;
       attempts: number;
       error?: string;
@@ -110,6 +114,7 @@ const API_SNAPSHOT_STORE = "api_snapshots";
 const MUTATION_STORE = "mutations";
 export const OFFLINE_MEDIA_CACHE = "spotify-media-v1";
 export const OFFLINE_PLAYBACK_CACHE = "spotify-playback-v1";
+const OFFLINE_ACCOUNT_SCOPE_STORAGE_KEY = "spotify_offline_account_scope";
 const OFFLINE_SYNC_EVENT = "spotify-offline-sync";
 const PLAYBACK_WARM_BYTES = 512 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
@@ -130,6 +135,7 @@ let prefetchRunning = false;
 let warmPlaybackPumpRunning = false;
 const warmPlaybackQueue: string[] = [];
 const warmPlaybackSeen = new Map<string, number>();
+let currentOfflineAccountScope = readStoredOfflineAccountScope();
 
 function now(): number {
   return Date.now();
@@ -138,6 +144,59 @@ function now(): number {
 function randomId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function normalizeOfflineAccountScope(scope: string | null | undefined): string {
+  const value = scope?.trim();
+  return value && value !== "loading" ? value : "anonymous";
+}
+
+function readStoredOfflineAccountScope(): string {
+  if (typeof window === "undefined") return "anonymous";
+  try {
+    return normalizeOfflineAccountScope(localStorage.getItem(OFFLINE_ACCOUNT_SCOPE_STORAGE_KEY));
+  } catch {
+    return "anonymous";
+  }
+}
+
+function writeStoredOfflineAccountScope(scope: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(OFFLINE_ACCOUNT_SCOPE_STORAGE_KEY, scope);
+  } catch {}
+}
+
+export function getOfflineAccountScope(): string {
+  return currentOfflineAccountScope;
+}
+
+function recordAccountScope(record: OfflineDownloadRecord): string {
+  return record.accountScope ? normalizeOfflineAccountScope(record.accountScope) : "legacy";
+}
+
+export function isOfflineRecordForAccount(
+  record: OfflineDownloadRecord | undefined,
+  scope: string | null | undefined = currentOfflineAccountScope,
+): record is OfflineDownloadRecord {
+  if (!record) return false;
+  return recordAccountScope(record) === normalizeOfflineAccountScope(scope);
+}
+
+function currentAccountRecords(records: OfflineDownloadRecord[]): OfflineDownloadRecord[] {
+  return records.filter((record) => isOfflineRecordForAccount(record));
+}
+
+function mutationAccountScope(mutation: OfflineMutation): string {
+  return mutation.accountScope ? normalizeOfflineAccountScope(mutation.accountScope) : "legacy";
+}
+
+function isMutationForCurrentAccount(mutation: OfflineMutation): boolean {
+  return mutationAccountScope(mutation) === currentOfflineAccountScope;
+}
+
+function currentAccountMutations(mutations: OfflineMutation[]): OfflineMutation[] {
+  return mutations.filter(isMutationForCurrentAccount);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -602,7 +661,7 @@ async function requeueInterruptedDownloadRecords(
 async function recoverInterruptedDownloads(force = false): Promise<void> {
   if (downloadPumpRunning) return;
   const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
-  const nextRecords = await requeueInterruptedDownloadRecords(records, force);
+  const nextRecords = await requeueInterruptedDownloadRecords(currentAccountRecords(records), force);
   useOfflineStore.setState({ records: recordsById(nextRecords) });
 }
 
@@ -610,10 +669,12 @@ async function processDownloadQueue(): Promise<void> {
   if (downloadPumpRunning) return;
   downloadPumpRunning = true;
   try {
-    const initialRecords = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
+    const initialRecords = currentAccountRecords(
+      await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []),
+    );
     await requeueInterruptedDownloadRecords(initialRecords);
     for (;;) {
-      const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE);
+      const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE));
       const record = records.find((item) => item.status === "queued");
       if (!record) break;
 
@@ -678,6 +739,26 @@ async function processDownloadQueue(): Promise<void> {
   } finally {
     downloadPumpRunning = false;
   }
+}
+
+async function refreshDownloadRecordsForCurrentAccount(): Promise<void> {
+  const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
+  const nextRecords = await requeueInterruptedDownloadRecords(records, true);
+  useOfflineStore.setState({ records: recordsById(nextRecords) });
+}
+
+export function setOfflineAccountScope(scope: string | null | undefined): void {
+  const nextScope = normalizeOfflineAccountScope(scope);
+  if (currentOfflineAccountScope === nextScope) return;
+  currentOfflineAccountScope = nextScope;
+  writeStoredOfflineAccountScope(nextScope);
+  if (!useOfflineStore.getState().hydrated) return;
+  void (async () => {
+    await refreshDownloadRecordsForCurrentAccount();
+    await useOfflineStore.getState().refreshStorage();
+    void processDownloadQueue();
+    void syncOfflineMutations();
+  })();
 }
 
 function attachBrowserListeners(): void {
@@ -773,6 +854,14 @@ function snapshotPath(url: string): string {
   }
 }
 
+function snapshotAccountScope(url: string): string {
+  try {
+    return normalizeOfflineAccountScope(new URL(url, "http://spotify.local").searchParams.get("auth"));
+  } catch {
+    return "legacy";
+  }
+}
+
 function updateLikedIds(data: unknown, songId: string, nextLiked: boolean): boolean {
   if (!data || typeof data !== "object") return false;
   const target = data as { likedSongIds?: unknown; likes?: unknown };
@@ -848,8 +937,10 @@ function reorderPlaylistPayload(data: unknown, songIds: string[]): boolean {
 async function updateSnapshotsForMutation(mutation: OfflineMutation): Promise<void> {
   if (!hasIndexedDb()) return;
   const snapshots = await idbGetAll<OfflineApiSnapshot>(API_SNAPSHOT_STORE).catch(() => []);
+  const accountScope = mutationAccountScope(mutation);
   await Promise.all(
     snapshots.map(async (snapshot) => {
+      if (snapshotAccountScope(snapshot.url) !== accountScope) return;
       const path = snapshotPath(snapshot.url);
       const next = cloneJsonLike(snapshot.data);
       let changed = false;
@@ -881,7 +972,7 @@ async function updateSnapshotsForMutation(mutation: OfflineMutation): Promise<vo
 
 async function mutationCount(): Promise<number> {
   const mutations = await idbGetAll<OfflineMutation>(MUTATION_STORE).catch(() => []);
-  return mutations.filter((mutation) => mutation.status !== "syncing").length;
+  return currentAccountMutations(mutations).filter((mutation) => mutation.status !== "syncing").length;
 }
 
 function setMutationStatus(status: OfflineSyncStatus, error: string | null = null): void {
@@ -898,6 +989,7 @@ export async function queueOfflineMutation(
   const timestamp = now();
   const queued = {
     ...mutation,
+    accountScope: getOfflineAccountScope(),
     id: randomId(),
     status: "queued",
     attempts: 0,
@@ -976,6 +1068,7 @@ async function syncOfflineMutations(): Promise<void> {
   setMutationStatus("syncing");
   try {
     const mutations = (await idbGetAll<OfflineMutation>(MUTATION_STORE))
+      .filter(isMutationForCurrentAccount)
       .filter((mutation) => mutation.status !== "syncing")
       .sort((left, right) => left.createdAt - right.createdAt);
 
@@ -1039,7 +1132,7 @@ export function resolveOfflinePlaybackSong(song: PlayerSong | null | undefined):
 export function resolveOfflinePlaybackSong(song: PlayerSong | null | undefined): PlayerSong | null | undefined {
   if (!song || isBrowserLocalSong(song) || isOfflinePlaybackSong(song)) return song;
   const record = useOfflineStore.getState().records[song.id];
-  if (record?.status !== "downloaded") return song;
+  if (!isOfflineRecordForAccount(record) || record.status !== "downloaded") return song;
 
   return preferOfflinePlaybackSong({
     ...record.song,
@@ -1105,7 +1198,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
       estimateStorage(),
       requestPersistentStorage(),
     ]);
-    const records = await requeueInterruptedDownloadRecords(storedRecords, true);
+    const records = await requeueInterruptedDownloadRecords(currentAccountRecords(storedRecords), true);
     set({
       hydrated: true,
       online: typeof navigator === "undefined" ? true : navigator.onLine,
@@ -1121,7 +1214,8 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   queueDownloads: async (songs, scope) => {
     await get().hydrate();
     const timestamp = now();
-    const existing = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
+    const accountScope = getOfflineAccountScope();
+    const existing = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
     const byId = recordsById(existing);
     for (const song of songs) {
       if (!canCacheSong(song)) continue;
@@ -1133,6 +1227,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
         audioUrl: song.audioUrl,
         imageUrl: song.imageUrl,
         lyricsUrl: song.lyricsUrl,
+        accountScope,
         status: current?.status === "downloaded" ? "downloaded" : "queued",
         progress: current?.status === "downloaded" ? 1 : current?.progress ?? 0,
         size: current?.size ?? 0,
@@ -1149,6 +1244,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   },
   removeDownload: async (songId) => {
     const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, songId).catch(() => undefined);
+    if (record && !isOfflineRecordForAccount(record)) return;
     if (record) await deleteCachedUrls(songAssetUrls(record.song));
     await idbDelete(DOWNLOAD_STORE, songId).catch(() => undefined);
     set((state) => {
@@ -1159,7 +1255,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     await get().refreshStorage();
   },
   removeScope: async (scope) => {
-    const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
+    const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
     for (const record of records) {
       if (!record.pinnedBy.includes(scope)) continue;
       const pinnedBy = record.pinnedBy.filter((item) => item !== scope);
@@ -1172,7 +1268,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     await get().refreshStorage();
   },
   retryFailedDownloads: async () => {
-    const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
+    const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
     for (const record of records) {
       if (record.status !== "failed") continue;
       await persistRecord({
@@ -1186,8 +1282,13 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     void processDownloadQueue();
   },
   clearDownloads: async () => {
-    await idbClear(DOWNLOAD_STORE).catch(() => undefined);
-    await clearCache(OFFLINE_MEDIA_CACHE);
+    const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
+    await Promise.all(
+      records.map(async (record) => {
+        await deleteCachedUrls(songAssetUrls(record.song));
+        await idbDelete(DOWNLOAD_STORE, record.songId).catch(() => undefined);
+      }),
+    );
     set({ records: {} });
     await get().refreshStorage();
   },

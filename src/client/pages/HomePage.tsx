@@ -334,6 +334,7 @@ export default function HomePage() {
   }, [enableVirtualList, sortedSongs.length]);
 
   useEffect(() => {
+    if (isPlaying) return;
     if (shouldSkipSpeculativeMetadataProbe()) return;
     const songsToProbe: HomeSong[] = [];
     const probeCandidates = enableVirtualList
@@ -400,7 +401,7 @@ export default function HomePage() {
         }
       }
     };
-  }, [enableVirtualList, listVirtualRange.end, listVirtualRange.start, resolveHomeSong, sortedSongs]);
+  }, [enableVirtualList, isPlaying, listVirtualRange.end, listVirtualRange.start, resolveHomeSong, sortedSongs]);
 
   const currentSongIsInList = useMemo(() => {
     return currentSongId ? sortedSongs.some((song) => song.id === currentSongId) : false;

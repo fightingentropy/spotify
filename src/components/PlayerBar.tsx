@@ -17,7 +17,8 @@ import {
   notePlaybackNetworkSuccess,
   prefetchUpcomingPlayback,
 } from "@/client/playback-warm";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
+import { normalizeOfflineAccountScope, resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
+import { useAuth } from "@/client/auth";
 
 function resolvePlayableSrc(src: string): string {
   if (/^(blob:|data:|https?:)/i.test(src)) return src;
@@ -117,6 +118,7 @@ function PlayerBar(): React.ReactElement | null {
   const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
 
   const navigate = useNavigate();
+  const { user, status: authStatus } = useAuth();
   const toggleLike = useLikesStore((state) => state.toggleLike);
   const likedLookup = useLikesStore((state) => state.likedSongIds);
   const pendingLookup = useLikesStore((state) => state.pending);
@@ -172,6 +174,8 @@ function PlayerBar(): React.ReactElement | null {
   const playRequestIdRef = useRef<number>(0);
   const volumeRef = useRef<number>(volume);
   const mutedRef = useRef<boolean>(isMuted);
+  const restoredPlayerStateRef = useRef(false);
+  const accountScopeRef = useRef<string | null>(null);
 
   const savedSeekRef = useRef<number | null>(null);
   const lockedPlaybackSourceRef = useRef<{ songId: string; src: string } | null>(null);
@@ -180,6 +184,20 @@ function PlayerBar(): React.ReactElement | null {
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
   const desiredSrc = playbackSong?.audioUrl || null;
+  const authSettled = authStatus !== "loading";
+  const accountScope = normalizeOfflineAccountScope(user?.id ?? authStatus);
+
+  useEffect(() => {
+    if (!authSettled) return;
+    if (accountScopeRef.current === null) {
+      accountScopeRef.current = accountScope;
+      return;
+    }
+    if (accountScopeRef.current === accountScope) return;
+    accountScopeRef.current = accountScope;
+    setQueue([], 0);
+    pause();
+  }, [accountScope, authSettled, pause, setQueue]);
 
   useEffect(() => {
     void hydrateOffline();
@@ -458,11 +476,13 @@ function PlayerBar(): React.ReactElement | null {
 
   // Restore last played queue/song and time on client mount to avoid SSR mismatches
   useEffect(() => {
+    if (!authSettled || restoredPlayerStateRef.current) return;
     try {
       const raw = localStorage.getItem("spotify_player_state");
       if (!raw) return;
       const data = JSON.parse(raw) as
         | {
+            accountScope?: string;
             queue?: PlayerSong[];
             currentIndex?: number;
             song?: PlayerSong;
@@ -470,6 +490,9 @@ function PlayerBar(): React.ReactElement | null {
             isPlaying?: boolean;
           }
         | null;
+      if (typeof data?.accountScope !== "string") return;
+      if (normalizeOfflineAccountScope(data.accountScope) !== accountScope) return;
+      restoredPlayerStateRef.current = true;
       if (data?.queue && Array.isArray(data.queue) && typeof data.currentIndex === "number") {
         const restoredQueue = data.queue.filter((song) => !isBrowserLocalSong(song));
         const restoredSongId = data.queue[data.currentIndex]?.id;
@@ -492,7 +515,7 @@ function PlayerBar(): React.ReactElement | null {
         }
       }
     } catch {}
-  }, [setSong, setQueue, pause]);
+  }, [accountScope, authSettled, pause, setSong, setQueue]);
 
   useEffect(() => {
     if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsOffline) return;
@@ -547,8 +570,13 @@ function PlayerBar(): React.ReactElement | null {
       return;
     }
     const lockedSource = lockedPlaybackSourceRef.current;
+    const activeSourceIsSettled = audio.currentTime > 0 || audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+    const canKeepLockedSource =
+      lockedSource?.songId === playbackSong.id &&
+      lockedSource.src !== desiredSrc &&
+      activeSourceIsSettled;
     const src =
-      lockedSource?.songId === playbackSong.id
+      canKeepLockedSource
         ? lockedSource.src
         : desiredSrc;
     const sourceChanged = audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(src);
@@ -733,6 +761,7 @@ function PlayerBar(): React.ReactElement | null {
         const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
         const time = active?.currentTime ?? currentTime;
         const payload = {
+          accountScope,
           queue: persistableQueue,
           currentIndex: persistableIndex,
           song: currentSong,
@@ -749,7 +778,7 @@ function PlayerBar(): React.ReactElement | null {
       window.removeEventListener("beforeunload", saveState);
       window.removeEventListener("pagehide", saveState);
     };
-  }, [queue, currentIndex, currentSong, currentTime, isPlaying, activeIdx]);
+  }, [accountScope, queue, currentIndex, currentSong, currentTime, isPlaying, activeIdx]);
 
   const handleActiveAudioResumePoint = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     const audio = event.currentTarget;

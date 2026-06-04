@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { patchLikeApiCache } from "@/client/api";
-import { queueOfflineMutation } from "@/client/offline";
+import { getOfflineAccountScope, queueOfflineMutation } from "@/client/offline";
 import type { PlayerSong } from "@/types/player";
 
 type LikeToggleResult = {
@@ -168,7 +168,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         pending: removeKey(state.pending, songId),
         hydrated: true,
       }));
-      patchLikeApiCache(songId, nextLiked, song);
+      patchLikeApiCache(songId, nextLiked, song, getOfflineAccountScope());
 
       return { ok: true, status: response.status };
     } catch (error) {
@@ -181,7 +181,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           pending: removeKey(state.pending, songId),
           hydrated: true,
         }));
-        patchLikeApiCache(songId, nextLiked, song);
+        patchLikeApiCache(songId, nextLiked, song, getOfflineAccountScope());
         return { ok: true, status: 202 };
       } catch {}
 

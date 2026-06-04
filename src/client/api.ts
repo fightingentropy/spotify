@@ -37,6 +37,14 @@ function getApiPath(url: string): string {
   }
 }
 
+function getApiAuthScope(url: string): string {
+  try {
+    return new URL(url, "http://spotify.local").searchParams.get("auth")?.trim() || "legacy";
+  } catch {
+    return "legacy";
+  }
+}
+
 export function withAccountScope(url: string, scope: string | null | undefined): string {
   const value = scope?.trim() || "anonymous";
   try {
@@ -225,9 +233,16 @@ function updateLikedSongsInPayload(
   return before !== nextSongs.length;
 }
 
-export function patchLikeApiCache(songId: string, nextLiked: boolean, song?: PlayerSong): void {
+export function patchLikeApiCache(
+  songId: string,
+  nextLiked: boolean,
+  song?: PlayerSong,
+  accountScope?: string,
+): void {
+  const scopedAccount = accountScope?.trim();
   for (const [url, entry] of Array.from(apiCache.entries())) {
     if (entry.data === undefined) continue;
+    if (scopedAccount && getApiAuthScope(url) !== scopedAccount) continue;
     const path = getApiPath(url);
     if (
       path !== "/api/home" &&
