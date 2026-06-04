@@ -73,3 +73,13 @@ export type LikeRow = {
   songId: string;
   createdAt: Date;
 };
+
+export type OfflineDownloadRow = {
+  id: string;
+  userId: string;
+  songId: string;
+  songJson: string;
+  scopesJson: string;
+  createdAt: Date;
+  updatedAt: Date;
+};

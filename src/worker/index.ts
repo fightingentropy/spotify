@@ -3,10 +3,11 @@ import { deleteCookie, setCookie } from "hono/cookie";
 import { compare, hash } from "bcryptjs";
 import { basename, extname, join } from "node:path";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
-import type { PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
+import type { OfflineDownloadRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
 import { buildSql, statementReturnsRows, type SqlRow, type SqlTag, type TemplateValue } from "@/lib/sql-tag";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { inferContentTypeFromKey, normalizeStorageKey } from "@/lib/storage-keys";
+import type { PlayerSong } from "@/types/player";
 import {
   QobuzDownloadError,
   resolveQobuzAvailability,
@@ -95,6 +96,21 @@ type SongPayload = {
   region?: unknown;
   lyricsText?: unknown;
   replaceExisting?: unknown;
+};
+
+type OfflineDownloadPayloadItem = {
+  song?: unknown;
+  scopes?: unknown;
+};
+
+type OfflineDownloadWritePayload = {
+  items?: unknown;
+};
+
+type OfflineDownloadDeletePayload = {
+  clearAll?: unknown;
+  songId?: unknown;
+  scope?: unknown;
 };
 
 type ResolvedAudioDownload = {
@@ -281,6 +297,87 @@ function durationSecondsFromPayload(payload: SongPayload): number | null {
 function toObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function coercePlayerSongPayload(value: unknown): PlayerSong | null {
+  const payload = toObject(value);
+  if (!payload) return null;
+  const id = toStringValue(payload.id);
+  const title = toStringValue(payload.title);
+  const artist = toStringValue(payload.artist);
+  const audioUrl = toStringValue(payload.audioUrl);
+  if (!id || !title || !artist || !audioUrl) return null;
+  const imageUrl = toStringValue(payload.imageUrl) || "/apple-icon.png";
+  const lyricsUrl = toStringValue(payload.lyricsUrl);
+  const album = toStringValue(payload.album);
+  const createdAt = toStringValue(payload.createdAt);
+  const source = toStringValue(payload.source);
+  const localPath = toStringValue(payload.localPath);
+  const duration = toNumberValue(payload.duration);
+  const audioBitDepth = toNumberValue(payload.audioBitDepth);
+  const audioSampleRate = toNumberValue(payload.audioSampleRate);
+  return {
+    id,
+    title,
+    artist,
+    album: album || undefined,
+    imageUrl,
+    audioUrl,
+    lyricsUrl: lyricsUrl || undefined,
+    duration: duration ?? undefined,
+    audioBitDepth: audioBitDepth ?? undefined,
+    audioSampleRate: audioSampleRate ?? undefined,
+    createdAt: createdAt || new Date().toISOString(),
+    source: source ? (source as PlayerSong["source"]) : undefined,
+    localPath: localPath || undefined,
+  };
+}
+
+function coerceOfflineDownloadScopes(value: unknown, songId: string): string[] {
+  const rawScopes = Array.isArray(value) ? value : [];
+  const scopes = rawScopes
+    .map((scope) => toStringValue(scope))
+    .filter((scope) => scope.length > 0 && scope.length <= 256);
+  if (scopes.length === 0) scopes.push(`song:${songId}`);
+  return Array.from(new Set(scopes)).slice(0, 32);
+}
+
+function parseJsonArray(value: string): unknown[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseOfflineDownloadRow(row: OfflineDownloadRow) {
+  let rawSong: unknown;
+  try {
+    rawSong = JSON.parse(row.songJson);
+  } catch {
+    return null;
+  }
+  const song = coercePlayerSongPayload(rawSong);
+  if (!song) return null;
+  return {
+    song,
+    pinnedBy: coerceOfflineDownloadScopes(parseJsonArray(row.scopesJson), song.id),
+    updatedAt: row.updatedAt,
+  };
+}
+
+function offlineDownloadItemsFromPayload(payload: OfflineDownloadWritePayload | null | undefined) {
+  if (!Array.isArray(payload?.items)) throw new ApiError("items must be an array", 400);
+  return payload.items.map((item, index) => {
+    const entry = toObject(item) as OfflineDownloadPayloadItem | null;
+    const song = coercePlayerSongPayload(entry?.song);
+    if (!song) throw new ApiError(`items[${index}].song is invalid`, 400);
+    return {
+      song,
+      scopes: coerceOfflineDownloadScopes(entry?.scopes, song.id),
+    };
+  });
 }
 
 function jsonError(message: string, status = 400): Response {
@@ -1959,6 +2056,123 @@ app.delete("/api/likes", async (c) => {
     SELECT "id" FROM "Song" WHERE "id" = ${songId} AND "userId" = ${user.id} LIMIT 1
   `;
   if (!song[0]) return jsonError("Song not found", 404);
+  return c.json({ ok: true });
+});
+
+app.get("/api/offline-downloads", async (c) => {
+  const user = requireUser(c.get("user"));
+  const rows = await c.get("db")<OfflineDownloadRow>`
+    SELECT "id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt"
+    FROM "OfflineDownload"
+    WHERE "userId" = ${user.id}
+    ORDER BY "updatedAt" DESC
+  `;
+  return c.json({
+    downloads: rows
+      .map(parseOfflineDownloadRow)
+      .filter((download): download is NonNullable<ReturnType<typeof parseOfflineDownloadRow>> => !!download),
+  });
+});
+
+app.put("/api/offline-downloads", async (c) => {
+  const user = requireUser(c.get("user"));
+  const payload = await readJson<OfflineDownloadWritePayload>(c.req.raw);
+  const items = offlineDownloadItemsFromPayload(payload);
+  const db = c.get("db");
+  await db`
+    DELETE FROM "OfflineDownload"
+    WHERE "userId" = ${user.id}
+  `;
+  for (const item of items) {
+    await db`
+      INSERT INTO "OfflineDownload" ("id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt")
+      VALUES (${crypto.randomUUID()}, ${user.id}, ${item.song.id}, ${JSON.stringify(item.song)}, ${JSON.stringify(item.scopes)}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `;
+  }
+  return c.json({ ok: true, count: items.length });
+});
+
+app.post("/api/offline-downloads", async (c) => {
+  const user = requireUser(c.get("user"));
+  const payload = await readJson<OfflineDownloadWritePayload>(c.req.raw);
+  const items = offlineDownloadItemsFromPayload(payload);
+  const db = c.get("db");
+  for (const item of items) {
+    const existing = await db<OfflineDownloadRow>`
+      SELECT "id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt"
+      FROM "OfflineDownload"
+      WHERE "userId" = ${user.id}
+        AND "songId" = ${item.song.id}
+      LIMIT 1
+    `;
+    const scopes = Array.from(new Set([
+      ...coerceOfflineDownloadScopes(parseJsonArray(existing[0]?.scopesJson ?? "[]"), item.song.id),
+      ...item.scopes,
+    ]));
+    if (existing[0]) {
+      await db`
+        UPDATE "OfflineDownload"
+        SET "songJson" = ${JSON.stringify(item.song)}, "scopesJson" = ${JSON.stringify(scopes)}, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${existing[0].id}
+      `;
+    } else {
+      await db`
+        INSERT INTO "OfflineDownload" ("id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt")
+        VALUES (${crypto.randomUUID()}, ${user.id}, ${item.song.id}, ${JSON.stringify(item.song)}, ${JSON.stringify(scopes)}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `;
+    }
+  }
+  return c.json({ ok: true, count: items.length });
+});
+
+app.delete("/api/offline-downloads", async (c) => {
+  const user = requireUser(c.get("user"));
+  const payload = await readJson<OfflineDownloadDeletePayload>(c.req.raw);
+  const songId = toStringValue(payload?.songId);
+  const scope = toStringValue(payload?.scope);
+  const db = c.get("db");
+
+  if (payload?.clearAll === true) {
+    await db`
+      DELETE FROM "OfflineDownload"
+      WHERE "userId" = ${user.id}
+    `;
+    return c.json({ ok: true });
+  }
+
+  if (!songId && !scope) return jsonError("Provide songId, scope, or clearAll", 400);
+
+  const rows = songId
+    ? await db<OfflineDownloadRow>`
+        SELECT "id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt"
+        FROM "OfflineDownload"
+        WHERE "userId" = ${user.id}
+          AND "songId" = ${songId}
+      `
+    : await db<OfflineDownloadRow>`
+        SELECT "id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt"
+        FROM "OfflineDownload"
+        WHERE "userId" = ${user.id}
+      `;
+
+  for (const row of rows) {
+    const scopes = scope
+      ? coerceOfflineDownloadScopes(parseJsonArray(row.scopesJson), row.songId).filter((item) => item !== scope)
+      : [];
+    if (scopes.length === 0) {
+      await db`
+        DELETE FROM "OfflineDownload"
+        WHERE "id" = ${row.id}
+      `;
+    } else {
+      await db`
+        UPDATE "OfflineDownload"
+        SET "scopesJson" = ${JSON.stringify(scopes)}, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${row.id}
+      `;
+    }
+  }
+
   return c.json({ ok: true });
 });
 
