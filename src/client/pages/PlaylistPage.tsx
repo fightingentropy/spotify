@@ -66,7 +66,6 @@ export default function PlaylistPage() {
           viewToggleClassName="mb-8 sm:-mt-14"
         />
       )}
-      <div className="h-24" />
     </div>
   );
 }

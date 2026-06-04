@@ -96,7 +96,6 @@ export default function RadioPage() {
           })}
         </div>
 
-        <div className="h-8 lg:h-24" />
       </div>
     </div>
   );

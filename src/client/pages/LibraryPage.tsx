@@ -101,7 +101,6 @@ export default function LibraryPage() {
             </div>
           </Link>
         </div>
-        <div className="h-24 lg:hidden" />
       </div>
     </div>
   );

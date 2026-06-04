@@ -38,7 +38,6 @@ export default function SearchPage() {
   return (
     <>
       <MobileSearch songs={songs} />
-      <div className="h-24 lg:hidden" />
     </>
   );
 }

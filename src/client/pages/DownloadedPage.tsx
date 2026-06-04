@@ -73,7 +73,6 @@ export default function DownloadedPage() {
             viewToggleClassName="mb-8 sm:-mt-14"
           />
         )}
-        <div className="h-8 lg:h-24" />
       </div>
     </div>
   );
