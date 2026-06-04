@@ -85,6 +85,33 @@ body.wf-now-playing-open {
   touch-action: manipulation;
 }
 
+@media (max-width: 1023px) {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
+  .wf-main {
+    position: fixed;
+    min-height: 0;
+    top: calc(3.5rem + env(safe-area-inset-top));
+    right: 0;
+    bottom: calc(var(--wf-mobile-nav-height) + env(safe-area-inset-bottom));
+    left: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 0 var(--wf-mobile-player-height);
+  }
+}
+
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
