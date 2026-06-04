@@ -80,7 +80,7 @@ export default function LibrarySidebarClient({
             to="/liked"
             title="Liked Songs"
             className={cn(
-              "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
@@ -98,7 +98,7 @@ export default function LibrarySidebarClient({
             to="/downloads"
             title="Downloads"
             className={cn(
-              "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
@@ -116,7 +116,7 @@ export default function LibrarySidebarClient({
             to="/radio"
             title="Radio Stations"
             className={cn(
-              "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
@@ -144,7 +144,7 @@ export default function LibrarySidebarClient({
                     to={`/playlist/${pl.id}`}
                     title={pl.name}
                     className={cn(
-                      "flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+                      "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
                       collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
                     )}
                   >

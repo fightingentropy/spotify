@@ -71,7 +71,7 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          className="w-full h-12 pl-11 pr-4 rounded-full border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-base outline-none focus:ring-2 focus:ring-emerald-500/40"
+          className="w-full h-12 pl-11 pr-4 rounded-full border border-black/10 dark:border-white/10 bg-black/5 dark:bg-white/5 text-base outline-none transition focus:ring-2 focus:ring-emerald-500/40"
         />
       </div>
 
@@ -92,13 +92,13 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
                   setQueue(songs, queueIndex);
                 }
               }}
-              className="w-full min-h-[56px] px-2 rounded-xl flex items-center gap-3 text-left active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+              className="wf-list-row wf-pressable w-full min-h-[56px] px-2 rounded-xl flex items-center gap-3 text-left active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
             >
               <div className="relative h-12 w-12 rounded-md overflow-hidden shrink-0">
                 <img
                   src={normalizeCoverImageUrl(song.imageUrl)}
                   alt={song.title}
-                  className="h-full w-full object-cover"
+                  className="wf-song-cover h-full w-full object-cover"
                 />
               </div>
               <div className="min-w-0 flex-1">

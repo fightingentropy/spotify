@@ -473,7 +473,7 @@ export default function HomePage() {
         onPointerEnter={() => warmSongSoon(displaySong)}
         onFocus={() => warmSongSoon(displaySong)}
         className={cn(
-          "group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
+          "wf-list-row wf-pressable group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
           HOME_LIST_GRID,
           active ? "bg-white/[0.11]" : "hover:bg-white/[0.07]",
         )}
@@ -501,7 +501,7 @@ export default function HomePage() {
 	              alt={displaySong.title}
               fill
               sizes="48px"
-              className="object-cover"
+              className="wf-song-cover object-cover"
               loading={index < 8 ? "eager" : "lazy"}
             />
           </div>
@@ -574,7 +574,7 @@ export default function HomePage() {
             aria-label={listIsPlaying ? "Pause library" : "Play library"}
             onClick={handlePlayAll}
             disabled={sortedSongs.length === 0}
-            className="grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
+            className="wf-control-button grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
           >
             {listIsPlaying ? (
               <Pause size={31} fill="currentColor" />
@@ -590,6 +590,7 @@ export default function HomePage() {
             onClick={toggleShuffle}
             className={cn(
               "relative grid h-11 w-11 cursor-pointer place-items-center rounded-full text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:h-12 sm:w-12",
+              "wf-control-button",
               shuffle && "text-[#1ed760]",
             )}
           >
@@ -603,7 +604,7 @@ export default function HomePage() {
           </button>
 
           <Suspense fallback={null}>
-            <OfflineBulkDownloadButton songs={sortedSongs} scope="home" iconOnly className="text-white/70 hover:text-white sm:h-12 sm:w-12" />
+          <OfflineBulkDownloadButton songs={sortedSongs} scope="home" iconOnly className="wf-control-button text-white/70 hover:text-white sm:h-12 sm:w-12" />
           </Suspense>
 
           <div className="ml-auto flex items-center gap-1 rounded-full border border-white/[0.12] bg-white/[0.04] p-1 text-white/[0.68]">
@@ -614,6 +615,7 @@ export default function HomePage() {
               onClick={() => setNextViewMode("grid")}
               className={cn(
                 "grid h-9 w-9 place-items-center rounded-full transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50",
+                "wf-control-button",
                 viewMode === "grid" ? "bg-white/[0.14] text-white" : "hover:bg-white/[0.09]",
               )}
             >
@@ -626,6 +628,7 @@ export default function HomePage() {
               onClick={() => setNextViewMode("list")}
               className={cn(
                 "grid h-9 w-9 place-items-center rounded-full transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50",
+                "wf-control-button",
                 viewMode === "list" ? "bg-white/[0.14] text-white" : "hover:bg-white/[0.09]",
               )}
             >
@@ -696,7 +699,7 @@ export default function HomePage() {
                       }}
                       aria-pressed={active && isPlaying}
                       className={cn(
-                        "group cursor-pointer rounded-md p-3 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760]",
+                        "wf-song-card wf-pressable group cursor-pointer rounded-md p-3 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760]",
                         active ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
                       )}
                     >
@@ -706,13 +709,13 @@ export default function HomePage() {
 	                          alt={displaySong.title}
                           fill
                           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 180px"
-                          className="object-cover"
+                          className="wf-song-cover object-cover"
 	                          loading={index < 8 ? "eager" : "lazy"}
 	                        />
 	                        <Suspense fallback={null}>
 	                          <OfflineSongDownloadButton
 	                            song={song}
-	                            className="absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 sm:opacity-0 sm:group-hover:opacity-100"
+	                            className="wf-control-button absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 sm:opacity-0 sm:group-hover:opacity-100"
 	                          />
 	                        </Suspense>
 	                        <button
@@ -724,6 +727,7 @@ export default function HomePage() {
                           }}
                           className={cn(
                             "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]",
+                            "wf-control-button",
                             active ? "opacity-100" : "opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0",
                           )}
                         >

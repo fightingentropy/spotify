@@ -179,9 +179,12 @@ function PlayerBar(): React.ReactElement | null {
 
   const savedSeekRef = useRef<number | null>(null);
   const lockedPlaybackSourceRef = useRef<{ songId: string; src: string } | null>(null);
+  const nowPlayingOpenFrameRef = useRef<number | null>(null);
+  const nowPlayingCloseTimeoutRef = useRef<number | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
+  const [nowPlayingMounted, setNowPlayingMounted] = useState(false);
 
   const desiredSrc = playbackSong?.audioUrl || null;
   const authSettled = authStatus !== "loading";
@@ -202,6 +205,41 @@ function PlayerBar(): React.ReactElement | null {
   useEffect(() => {
     void hydrateOffline();
   }, [hydrateOffline]);
+
+  const closeNowPlaying = useCallback(() => {
+    if (nowPlayingOpenFrameRef.current != null) {
+      window.cancelAnimationFrame(nowPlayingOpenFrameRef.current);
+      nowPlayingOpenFrameRef.current = null;
+    }
+    setNowPlayingOpen(false);
+    if (nowPlayingCloseTimeoutRef.current != null) {
+      window.clearTimeout(nowPlayingCloseTimeoutRef.current);
+    }
+    nowPlayingCloseTimeoutRef.current = window.setTimeout(() => {
+      nowPlayingCloseTimeoutRef.current = null;
+      setNowPlayingMounted(false);
+    }, 380);
+  }, []);
+
+  const openNowPlaying = useCallback(() => {
+    if (nowPlayingCloseTimeoutRef.current != null) {
+      window.clearTimeout(nowPlayingCloseTimeoutRef.current);
+      nowPlayingCloseTimeoutRef.current = null;
+    }
+    setNowPlayingMounted(true);
+    if (nowPlayingOpenFrameRef.current != null) {
+      window.cancelAnimationFrame(nowPlayingOpenFrameRef.current);
+    }
+    nowPlayingOpenFrameRef.current = window.requestAnimationFrame(() => {
+      nowPlayingOpenFrameRef.current = null;
+      setNowPlayingOpen(true);
+    });
+  }, []);
+
+  const toggleNowPlaying = useCallback(() => {
+    if (nowPlayingOpen) closeNowPlaying();
+    else openNowPlaying();
+  }, [closeNowPlaying, nowPlayingOpen, openNowPlaying]);
 
   const unloadAudioSource = useCallback((audio: HTMLAudioElement) => {
     const current = audioSourceStateRef.current.get(audio);
@@ -403,6 +441,12 @@ function PlayerBar(): React.ReactElement | null {
     return () => {
       if (pendingSeekTimeoutRef.current != null) {
         window.clearTimeout(pendingSeekTimeoutRef.current);
+      }
+      if (nowPlayingOpenFrameRef.current != null) {
+        window.cancelAnimationFrame(nowPlayingOpenFrameRef.current);
+      }
+      if (nowPlayingCloseTimeoutRef.current != null) {
+        window.clearTimeout(nowPlayingCloseTimeoutRef.current);
       }
     };
   }, []);
@@ -962,11 +1006,11 @@ function PlayerBar(): React.ReactElement | null {
 
   return (
     <>
-      {nowPlayingOpen ? (
+      {nowPlayingMounted ? (
         <Suspense fallback={null}>
           <NowPlayingSheet
             open={nowPlayingOpen}
-            onClose={() => setNowPlayingOpen(false)}
+            onClose={closeNowPlaying}
             song={playbackSong}
             isPlaying={isPlaying}
             currentTime={safeCurrentTime}
@@ -991,8 +1035,8 @@ function PlayerBar(): React.ReactElement | null {
         <div className="h-[var(--wf-mobile-player-height)] px-3 flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setNowPlayingOpen(true)}
-            className="flex items-center gap-3 min-w-0 flex-1 text-left touch-manipulation"
+            onClick={openNowPlaying}
+            className="wf-pressable flex items-center gap-3 min-w-0 flex-1 text-left touch-manipulation"
             aria-label="Open now playing"
           >
             <CoverImage
@@ -1001,7 +1045,7 @@ function PlayerBar(): React.ReactElement | null {
               width={48}
               height={48}
               loading="eager"
-              className="w-12 h-12 rounded-md object-cover shrink-0"
+              className="wf-song-cover w-12 h-12 rounded-md object-cover shrink-0"
               sizes="48px"
             />
             <div className="min-w-0">
@@ -1016,7 +1060,7 @@ function PlayerBar(): React.ReactElement | null {
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending || !currentSongId}
               className={cn(
-                "h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
+                "wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
                 likePending ? "opacity-60" : "",
                 songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
               )}
@@ -1028,7 +1072,7 @@ function PlayerBar(): React.ReactElement | null {
             type="button"
             aria-label={isPlaying ? "Pause" : "Play"}
             onClick={handleTogglePlayback}
-            className="h-11 w-11 rounded-full grid place-items-center bg-white text-black touch-manipulation shrink-0"
+            className="wf-control-button h-11 w-11 rounded-full grid place-items-center bg-white text-black touch-manipulation shrink-0"
           >
             {isPlaying ? <Pause size={20} /> : <Play size={20} className="translate-x-[1px]" />}
           </button>
@@ -1044,7 +1088,7 @@ function PlayerBar(): React.ReactElement | null {
             width={48}
             height={48}
             loading="eager"
-            className="h-12 w-12 shrink-0 rounded-[5px] object-cover"
+            className="wf-song-cover h-12 w-12 shrink-0 rounded-[5px] object-cover"
             sizes="48px"
           />
           <div className="min-w-0 max-w-[20rem]">
@@ -1059,7 +1103,7 @@ function PlayerBar(): React.ReactElement | null {
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending || !currentSongId}
               className={cn(
-                "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+                "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
                 likePending ? "cursor-wait opacity-60" : "hover:bg-white/[0.09] hover:text-white",
                 songIsLiked ? "text-[#1ed760]" : "text-white/[0.68]",
               )}
@@ -1076,7 +1120,7 @@ function PlayerBar(): React.ReactElement | null {
               title={shuffle ? "Disable shuffle" : "Enable shuffle"}
               onClick={toggleShuffle}
               className={cn(
-                "relative p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white",
+                "wf-control-button relative p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white",
                 shuffle && "text-[#1ed760]",
               )}
             >
@@ -1088,16 +1132,16 @@ function PlayerBar(): React.ReactElement | null {
                 )}
               />
             </button>
-            <button aria-label="Previous" onClick={previous} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
+            <button aria-label="Previous" onClick={previous} className="wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipBack size={18} />
             </button>
-            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={handleTogglePlayback} className="h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
+            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={handleTogglePlayback} className="wf-control-button h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
               {isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-[1px]" />}
             </button>
-            <button aria-label="Next" onClick={next} className="p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
+            <button aria-label="Next" onClick={next} className="wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipForward size={18} />
             </button>
-            <button aria-label="Repeat" onClick={cycleRepeatMode} className={cn("p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", repeatMode !== "off" && "text-[#1ed760]")}>
+            <button aria-label="Repeat" onClick={cycleRepeatMode} className={cn("wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white", repeatMode !== "off" && "text-[#1ed760]")}>
               <Repeat size={18} />
             </button>
           </div>
@@ -1137,9 +1181,9 @@ function PlayerBar(): React.ReactElement | null {
             type="button"
             aria-label={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
             title={nowPlayingOpen ? "Collapse now playing" : "Open now playing"}
-            onClick={() => setNowPlayingOpen((open) => !open)}
+            onClick={toggleNowPlaying}
             className={cn(
-              "flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+              "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
               nowPlayingOpen
                 ? "bg-white/[0.08] text-[#1ed760]"
                 : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
@@ -1148,7 +1192,7 @@ function PlayerBar(): React.ReactElement | null {
             {nowPlayingOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
           </button>
           <div className="hidden items-center gap-2 xl:flex">
-            <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="rounded-full p-2 text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
+            <button aria-label={isMuted ? "Unmute" : "Mute"} onClick={toggleMute} className="wf-control-button rounded-full p-2 text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <VolumeIcon size={18} />
             </button>
             <input

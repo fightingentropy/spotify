@@ -101,7 +101,7 @@ const SongCardComponent = function SongCard({
       onKeyDown={handleKeyDown}
       aria-pressed={isActiveAndPlaying}
       className={cn(
-        "group relative aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+        "wf-song-card wf-pressable group relative aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
         isActive && "ring-2 ring-emerald-500"
       )}
     >
@@ -110,7 +110,7 @@ const SongCardComponent = function SongCard({
         alt={resolvedSong.title}
         fill
         sizes="(max-width: 640px) 100vw, (max-width: 1024px) 33vw, 200px"
-        className="object-cover"
+        className="wf-song-cover object-cover"
         priority={priority}
         loading={priority ? "eager" : "lazy"}
       />
@@ -118,7 +118,7 @@ const SongCardComponent = function SongCard({
 
       <OfflineSongDownloadButton
         song={song}
-        className="absolute left-2 top-2 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
+        className="wf-control-button absolute left-2 top-2 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
       />
 
       {showLike ? (
@@ -130,6 +130,7 @@ const SongCardComponent = function SongCard({
           onClick={handleToggleLike}
           className={cn(
             "absolute top-2 right-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
+            "wf-control-button",
             canLike ? "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500" : "opacity-80",
             likePending && "opacity-60 cursor-wait"
           )}
@@ -154,7 +155,7 @@ const SongCardComponent = function SongCard({
             event.stopPropagation();
             onEdit(song);
           }}
-          className="absolute left-2 top-12 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+          className="wf-control-button absolute left-2 top-12 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
         >
           <Pencil size={16} />
         </button>
@@ -180,7 +181,7 @@ const SongCardComponent = function SongCard({
               : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
           )}
         >
-          <div className="h-10 w-10 rounded-full bg-emerald-500 text-white grid place-items-center">
+          <div className="wf-control-button h-10 w-10 rounded-full bg-emerald-500 text-white grid place-items-center">
             {isActiveAndPlaying ? <Pause size={18} /> : <Play size={18} />}
           </div>
         </div>

@@ -3,6 +3,22 @@ import { Download, Heart, ListMusic, RadioTower } from "lucide-react";
 import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 
+function PlaylistSkeletonRows() {
+  return (
+    <div className="space-y-2 px-3 py-2" aria-hidden>
+      {[0, 1, 2].map((item) => (
+        <div key={item} className="flex min-h-[64px] items-center gap-4 rounded-xl">
+          <div className="wf-skeleton h-14 w-14 shrink-0 rounded-lg" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="wf-skeleton h-4 w-44 max-w-full rounded-full" />
+            <div className="wf-skeleton h-3 w-24 rounded-full" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function LibraryPage() {
   const { user, status } = useAuth();
   const { data, loading } = useApiData<LibraryPayload>(
@@ -18,7 +34,7 @@ export default function LibraryPage() {
       <div className="mx-auto max-w-7xl">
         <h1 className="mb-5 text-2xl font-bold">Your Library</h1>
         <div className="space-y-2">
-          <Link to="/liked" className="flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/liked" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 text-white">
               <Heart size={24} />
             </div>
@@ -28,7 +44,7 @@ export default function LibraryPage() {
             </div>
           </Link>
 
-          <Link to="/downloads" className="flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/downloads" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
               <Download size={24} />
             </div>
@@ -38,7 +54,7 @@ export default function LibraryPage() {
             </div>
           </Link>
 
-          <Link to="/radio" className="flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/radio" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-cyan-500/15 text-cyan-200">
               <RadioTower size={24} />
             </div>
@@ -56,7 +72,7 @@ export default function LibraryPage() {
                   <Link
                     key={playlist.id}
                     to={`/playlist/${playlist.id}`}
-                    className="flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5"
+                    className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5"
                   >
                     <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-black/5 dark:bg-white/10">
                       <ListMusic size={24} className="opacity-80" />
@@ -69,7 +85,7 @@ export default function LibraryPage() {
                 ))}
               </>
             ) : loading ? (
-              <div className="px-3 py-6 text-sm opacity-70">Loading playlists...</div>
+              <PlaylistSkeletonRows />
             ) : null
           ) : (
             <div className="px-3 py-6 text-sm opacity-70">
@@ -77,7 +93,7 @@ export default function LibraryPage() {
             </div>
           )}
 
-          <Link to="/upload" className="flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5 lg:hidden">
+          <Link to="/upload" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5 lg:hidden">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-black/5 text-lg font-semibold dark:bg-white/10">+</div>
             <div>
               <div className="font-semibold">Upload</div>

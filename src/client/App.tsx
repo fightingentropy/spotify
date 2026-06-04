@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
-import { Link, Route, Routes } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
 import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
@@ -58,7 +58,18 @@ const OfflineStatusIndicator = lazy(loadOfflineStatusIndicator);
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white/[0.7] sm:px-6">
-      {label}
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-6 text-sm">{label}</div>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {[0, 1, 2, 3, 4, 5].map((item) => (
+            <div key={item} className="space-y-3">
+              <div className="wf-skeleton aspect-square rounded-lg" />
+              <div className="wf-skeleton h-4 rounded-full" />
+              <div className="wf-skeleton h-3 w-2/3 rounded-full" />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -183,6 +194,7 @@ function useIdleRoutePrefetch() {
 
 function Shell() {
   const { user, status } = useAuth();
+  const location = useLocation();
   const { data: library } = useApiData<LibraryPayload>(
     withAccountScope("/api/library", user?.id ?? status),
     {
@@ -234,7 +246,8 @@ function Shell() {
       />
       <NowPlayingSidebar />
       <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">
-        <Routes>
+        <div key={location.pathname} className="wf-route-surface">
+        <Routes location={location}>
           <Route path="/" element={<HomePage />} />
           <Route path="/search" element={lazyRoute(<SearchPage />, "Loading search...")} />
           <Route path="/library" element={lazyRoute(<LibraryPage />, "Loading library...")} />
@@ -257,6 +270,7 @@ function Shell() {
             }
           />
         </Routes>
+        </div>
       </main>
       <PlayerBar />
       <MobileNav />

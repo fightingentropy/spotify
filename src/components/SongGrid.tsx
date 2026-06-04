@@ -528,7 +528,7 @@ export function SongGrid({
             title={listIsPlaying ? "Pause songs" : "Play songs"}
             onClick={handlePlayVisibleSongs}
             disabled={visibleSongs.length === 0}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_8px_18px_rgba(0,0,0,0.22)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
+            className="wf-control-button grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_8px_18px_rgba(0,0,0,0.22)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
           >
             {listIsPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="translate-x-0.5" />}
           </button>
@@ -539,6 +539,7 @@ export function SongGrid({
             onClick={toggleShuffle}
             className={cn(
               "relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-black/10 bg-black/5 text-foreground/70 transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/70 dark:border-white/10 dark:bg-white/5 dark:text-white/70 dark:hover:text-white",
+              "wf-control-button",
               shuffle && "text-[#1ed760] dark:text-[#1ed760]",
             )}
           >
@@ -567,6 +568,7 @@ export function SongGrid({
               onClick={() => setNextViewMode("grid")}
               className={cn(
                 "inline-flex h-8 w-9 items-center justify-center gap-2 rounded-md text-sm transition sm:w-auto sm:px-3",
+                "wf-control-button",
                 viewMode === "grid" && "bg-black/10 font-medium dark:bg-white/10",
               )}
               aria-pressed={viewMode === "grid"}
@@ -580,6 +582,7 @@ export function SongGrid({
               onClick={() => setNextViewMode("list")}
               className={cn(
                 "inline-flex h-8 w-9 items-center justify-center gap-2 rounded-md text-sm transition sm:w-auto sm:px-3",
+                "wf-control-button",
                 viewMode === "list" && "bg-black/10 font-medium dark:bg-white/10",
               )}
               aria-pressed={viewMode === "list"}
@@ -705,7 +708,7 @@ export function SongGrid({
 
       {editingSong && (
         <div className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm p-4 grid place-items-center">
-          <div className="w-full max-w-2xl rounded-3xl border border-white/15 bg-zinc-950/95 shadow-[0_20px_80px_rgba(0,0,0,0.65)] p-6 md:p-7 space-y-6">
+          <div className="wf-modal-surface w-full max-w-2xl rounded-3xl border border-white/15 bg-zinc-950/95 shadow-[0_20px_80px_rgba(0,0,0,0.65)] p-6 md:p-7 space-y-6">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-2xl font-semibold tracking-tight">Edit song</h3>
@@ -716,7 +719,7 @@ export function SongGrid({
               <button
                 type="button"
                 onClick={closeEditModal}
-                className="h-9 w-9 rounded-full grid place-items-center border border-white/15 hover:bg-white/10 transition"
+                className="wf-control-button h-9 w-9 rounded-full grid place-items-center border border-white/15 hover:bg-white/10 transition"
                 aria-label="Close"
               >
                 <X size={16} />

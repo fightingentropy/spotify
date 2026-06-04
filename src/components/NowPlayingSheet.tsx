@@ -205,7 +205,7 @@ export default function NowPlayingSheet({
       <button
         type="button"
         className={cn(
-          "absolute inset-0 bg-black/60 transition-opacity lg:block",
+          "wf-sheet-backdrop absolute inset-0 bg-black/60 transition-opacity lg:block",
           open ? "opacity-100" : "opacity-0",
           "hidden lg:block",
         )}
@@ -217,12 +217,13 @@ export default function NowPlayingSheet({
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         className={cn(
-          "absolute overflow-hidden transition duration-300 ease-out bg-background",
+          "wf-now-playing-panel absolute overflow-hidden bg-background",
           "inset-0 lg:inset-auto lg:left-0 lg:right-0 lg:top-14 lg:bottom-[84px] lg:mx-auto lg:max-w-3xl lg:border lg:border-black/10 lg:dark:border-white/10 lg:bg-background/95 lg:backdrop-blur-lg lg:rounded-t-2xl",
           open
             ? "translate-y-0 opacity-100"
             : "translate-y-full opacity-0 lg:translate-y-8 lg:opacity-0",
         )}
+        data-open={open ? "true" : "false"}
       >
         <div className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(var(--wf-mobile-nav-height)+var(--wf-mobile-player-height)+env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0">
           <div className="p-4 sm:p-6 min-h-full flex flex-col">
@@ -230,7 +231,7 @@ export default function NowPlayingSheet({
               <button
                 type="button"
                 onClick={onClose}
-                className="h-11 w-11 -ml-1 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
+                className="wf-control-button h-11 w-11 -ml-1 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
                 aria-label="Collapse now playing"
               >
                 <ChevronDown size={24} />
@@ -239,7 +240,7 @@ export default function NowPlayingSheet({
               <div className="-mr-1 flex items-center gap-1">
                 {!liveStream ? (
                   <>
-                    <OfflineSongDownloadButton song={song} className="h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
+                    <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
                     <button
                       type="button"
                       aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
@@ -247,6 +248,7 @@ export default function NowPlayingSheet({
                       disabled={!likesHydrated || likePending}
                       className={cn(
                         "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                        "wf-control-button",
                         likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
                         songIsLiked ? "text-emerald-500" : "text-foreground/70",
                       )}
@@ -259,7 +261,7 @@ export default function NowPlayingSheet({
             </div>
 
             <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">
-              <div className="mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
+              <div className="wf-now-playing-art mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
                 <CoverImage
                   src={song.imageUrl || "/apple-icon.png"}
                   alt={song.title}
@@ -314,7 +316,7 @@ export default function NowPlayingSheet({
                   title={shuffle ? "Disable shuffle" : "Enable shuffle"}
                   onClick={toggleShuffle}
                   className={cn(
-                    "relative h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                    "wf-control-button relative h-11 w-11 rounded-full grid place-items-center touch-manipulation",
                     shuffle ? "text-emerald-500" : "text-foreground/70",
                   )}
                 >
@@ -330,7 +332,7 @@ export default function NowPlayingSheet({
                   type="button"
                   aria-label="Previous"
                   onClick={previous}
-                  className="h-11 w-11 rounded-full grid place-items-center touch-manipulation"
+                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
                 >
                   <SkipBack size={24} />
                 </button>
@@ -338,7 +340,7 @@ export default function NowPlayingSheet({
                   type="button"
                   aria-label={isPlaying ? "Pause" : "Play"}
                   onClick={handleTogglePlayback}
-                  className="h-16 w-16 rounded-full grid place-items-center bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 touch-manipulation"
+                  className="wf-control-button h-16 w-16 rounded-full grid place-items-center bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 touch-manipulation"
                 >
                   {isPlaying ? <Pause size={28} /> : <Play size={28} className="translate-x-[2px]" />}
                 </button>
@@ -346,7 +348,7 @@ export default function NowPlayingSheet({
                   type="button"
                   aria-label="Next"
                   onClick={next}
-                  className="h-11 w-11 rounded-full grid place-items-center touch-manipulation"
+                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
                 >
                   <SkipForward size={24} />
                 </button>
@@ -355,7 +357,7 @@ export default function NowPlayingSheet({
                   aria-label="Repeat"
                   onClick={cycleRepeatMode}
                   className={cn(
-                    "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                    "wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation",
                     repeatMode !== "off" ? "text-emerald-500" : "text-foreground/70",
                   )}
                 >
@@ -372,7 +374,7 @@ export default function NowPlayingSheet({
                   <button
                     type="button"
                     onClick={() => setShowLyrics((value) => !value)}
-                    className="inline-flex items-center gap-2 h-9 px-3 rounded-full border border-black/15 dark:border-white/20 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+                    className="wf-control-button inline-flex items-center gap-2 h-9 px-3 rounded-full border border-black/15 dark:border-white/20 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
                   >
                     <FileText size={14} />
                     {showLyrics ? "Hide lyrics" : "Show lyrics"}

@@ -4,6 +4,26 @@ import { useAuth } from "@/client/auth";
 import { SongGrid } from "@/components/SongGrid";
 import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
 
+function PlaylistLoadingSkeleton() {
+  return (
+    <div className="px-6 py-8 max-w-7xl mx-auto">
+      <div className="mb-8 space-y-3">
+        <div className="wf-skeleton h-7 w-56 max-w-full rounded-full" />
+        <div className="wf-skeleton h-4 w-24 rounded-full" />
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" aria-hidden>
+        {[0, 1, 2, 3, 4, 5].map((item) => (
+          <div key={item} className="space-y-3">
+            <div className="wf-skeleton aspect-square rounded-lg" />
+            <div className="wf-skeleton h-4 rounded-full" />
+            <div className="wf-skeleton h-3 w-2/3 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function PlaylistPage() {
   const { id = "" } = useParams();
   const { user, status } = useAuth();
@@ -16,7 +36,7 @@ export default function PlaylistPage() {
     },
   );
 
-  if (loading) return <div className="px-6 py-8 max-w-7xl mx-auto opacity-70">Loading playlist...</div>;
+  if (loading) return <PlaylistLoadingSkeleton />;
   if (error) return <div className="px-6 py-8 max-w-7xl mx-auto text-red-500">{error}</div>;
   if (!data.playlist) return <div className="px-6 py-8 max-w-7xl mx-auto opacity-70">Playlist not found.</div>;
 

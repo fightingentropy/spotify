@@ -5,6 +5,22 @@ import { useAuth } from "@/client/auth";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { SongGrid } from "@/components/SongGrid";
 
+function DownloadSkeletonRows() {
+  return (
+    <div className="space-y-2" aria-hidden>
+      {[0, 1, 2, 3].map((item) => (
+        <div key={item} className="flex min-h-[64px] items-center gap-4 rounded-xl px-3">
+          <div className="wf-skeleton h-14 w-14 shrink-0 rounded-lg" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="wf-skeleton h-4 w-48 max-w-full rounded-full" />
+            <div className="wf-skeleton h-3 w-28 rounded-full" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function DownloadedPage() {
   const { user, status } = useAuth();
   const hydrate = useOfflineStore((state) => state.hydrate);
@@ -45,7 +61,7 @@ export default function DownloadedPage() {
         </div>
 
         {!hydrated ? (
-          <div className="opacity-70">Loading downloads...</div>
+          <DownloadSkeletonRows />
         ) : downloadedSongs.length === 0 ? (
           <div className="opacity-70">Downloaded songs will show up here.</div>
         ) : (

@@ -98,7 +98,7 @@ const SongListItemComponent = function SongListItem({
       onKeyDown={handleKeyDown}
       aria-pressed={isActiveAndPlaying}
       className={cn(
-        "group flex items-center gap-3 px-3 py-2 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+        "wf-list-row wf-pressable group flex items-center gap-3 px-3 py-2 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
         isActive ? "bg-emerald-500/10 rounded-lg" : "hover:bg-black/5 hover:dark:bg-white/5 rounded-lg",
       )}
     >
@@ -117,7 +117,7 @@ const SongListItemComponent = function SongListItem({
           alt={resolvedSong.title}
           fill
           sizes="48px"
-          className="object-cover"
+          className="wf-song-cover object-cover"
           priority={priority}
           loading={priority ? "eager" : "lazy"}
         />
@@ -135,7 +135,7 @@ const SongListItemComponent = function SongListItem({
         ) : null}
       </div>
 
-      <OfflineSongDownloadButton song={song} className="text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />
+      <OfflineSongDownloadButton song={song} className="wf-control-button text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />
 
       {editMode && onEdit ? (
         <button
@@ -146,7 +146,7 @@ const SongListItemComponent = function SongListItem({
             event.stopPropagation();
             onEdit(song);
           }}
-          className="h-9 w-9 rounded-full grid place-items-center transition hover:bg-black/10 hover:dark:bg-white/10"
+          className="wf-control-button h-9 w-9 rounded-full grid place-items-center transition hover:bg-black/10 hover:dark:bg-white/10"
         >
           <Pencil size={17} />
         </button>
@@ -161,6 +161,7 @@ const SongListItemComponent = function SongListItem({
           onClick={handleToggleLike}
           className={cn(
             "h-9 w-9 rounded-full grid place-items-center transition",
+            "wf-control-button",
             canLike ? "hover:bg-black/10 hover:dark:bg-white/10" : "opacity-80",
             likePending && "opacity-60 cursor-wait",
           )}
@@ -175,7 +176,7 @@ const SongListItemComponent = function SongListItem({
         </button>
       ) : null}
 
-      <div className="h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
+      <div className="wf-control-button h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
         {isActiveAndPlaying ? <Pause size={17} /> : <Play size={17} className="translate-x-[1px]" />}
       </div>
     </div>

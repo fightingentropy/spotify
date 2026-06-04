@@ -43,7 +43,7 @@ export default function MobileNav() {
               key={tab.href}
               to={tab.href}
               className={cn(
-                "flex flex-col items-center justify-center gap-0.5 min-h-[44px] touch-manipulation transition-colors",
+                "wf-control-button flex flex-col items-center justify-center gap-0.5 min-h-[44px] touch-manipulation transition-colors",
                 active ? "text-[#1ed760]" : "text-white/[0.62]",
               )}
             >
