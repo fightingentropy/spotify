@@ -225,7 +225,7 @@ export default function NowPlayingSheet({
         )}
         data-open={open ? "true" : "false"}
       >
-        <div className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(var(--wf-mobile-nav-height)+var(--wf-mobile-player-height)+env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0">
+        <div className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0">
           <div className="p-4 sm:p-6 min-h-full flex flex-col">
             <div className="flex items-center justify-between mb-4 lg:mb-4">
               <button
