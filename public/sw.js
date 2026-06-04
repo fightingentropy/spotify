@@ -203,10 +203,27 @@ async function precacheShell() {
   );
 }
 
+function urlWithoutOfflinePlaybackParam(urlValue) {
+  try {
+    const url = new URL(urlValue, self.location.origin);
+    if (!url.searchParams.has(OFFLINE_PLAYBACK_SEARCH_PARAM)) return null;
+    url.searchParams.delete(OFFLINE_PLAYBACK_SEARCH_PARAM);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 async function matchCachedMedia(urlValue) {
   const url = new URL(urlValue, self.location.origin);
   const exact = await caches.match(url.toString());
   if (exact) return exact;
+
+  const originalMediaUrl = urlWithoutOfflinePlaybackParam(url.toString());
+  if (originalMediaUrl) {
+    const cachedOriginal = await caches.match(originalMediaUrl);
+    if (cachedOriginal) return cachedOriginal;
+  }
 
   if (!url.pathname.startsWith("/api/files/") && !url.pathname.startsWith("/api/artwork/")) {
     return null;
