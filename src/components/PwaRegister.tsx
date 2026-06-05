@@ -8,6 +8,17 @@ const APP_ASSETS_CACHE = "spotify-app-assets-v1";
 const OFFLINE_ASSETS_MANIFEST_URL = "/offline-assets.json";
 const watchedRegistrations = new WeakSet<ServiceWorkerRegistration>();
 
+function isNativeCapacitorApp(): boolean {
+  const capacitor = (window as Window & {
+    Capacitor?: { isNativePlatform?: () => boolean };
+  }).Capacitor;
+  try {
+    return !!capacitor?.isNativePlatform?.();
+  } catch {
+    return false;
+  }
+}
+
 function warmAppShell(registration: ServiceWorkerRegistration) {
   try {
     navigator.serviceWorker.controller?.postMessage(CACHE_APP_SHELL_MESSAGE);
@@ -37,6 +48,7 @@ function watchRegistration(registration: ServiceWorkerRegistration) {
 
 async function warmAppAssetsFromPage(): Promise<void> {
   if (typeof caches === "undefined") return;
+  if (navigator.onLine === false) return;
   try {
     const response = await fetch(OFFLINE_ASSETS_MANIFEST_URL, {
       cache: "reload",
@@ -67,6 +79,7 @@ async function warmAppAssetsFromPage(): Promise<void> {
 
 export default function PwaRegister() {
   useEffect(() => {
+    if (isNativeCapacitorApp()) return;
     if (!("serviceWorker" in navigator)) return;
 
     let lastUpdateCheck = 0;

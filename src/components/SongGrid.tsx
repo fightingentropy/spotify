@@ -29,9 +29,22 @@ type SongGridProps = {
 };
 
 type SongSortMode = "default" | "uploaded_desc" | "uploaded_asc";
+type VirtualGridRange = {
+  start: number;
+  end: number;
+  columns: number;
+  rowHeight: number;
+  rowGap: number;
+};
+
 const VIRTUAL_ROW_HEIGHT = 72;
 const VIRTUAL_OVERSCAN_ROWS = 8;
 const VIRTUALIZATION_MIN_ITEMS = 80;
+const VIRTUAL_GRID_OVERSCAN_ROWS = 4;
+const VIRTUAL_GRID_FALLBACK_COLUMNS = 2;
+const VIRTUAL_GRID_FALLBACK_ROW_HEIGHT = 160;
+const VIRTUAL_GRID_FALLBACK_ROW_GAP = 16;
+const VIRTUAL_GRID_INITIAL_ROWS = 12;
 
 function haveSameIds(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
@@ -50,6 +63,11 @@ function haveSameIds(left: string[], right: string[]): boolean {
 
 function normalizeSongPart(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function parseCssPixels(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export function SongGrid({
@@ -78,6 +96,13 @@ export function SongGrid({
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [virtualRange, setVirtualRange] = useState({ start: 0, end: 0 });
+  const [virtualGridRange, setVirtualGridRange] = useState<VirtualGridRange>({
+    start: 0,
+    end: VIRTUAL_GRID_FALLBACK_COLUMNS * VIRTUAL_GRID_INITIAL_ROWS,
+    columns: VIRTUAL_GRID_FALLBACK_COLUMNS,
+    rowHeight: VIRTUAL_GRID_FALLBACK_ROW_HEIGHT,
+    rowGap: VIRTUAL_GRID_FALLBACK_ROW_GAP,
+  });
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const setQueue = usePlayerStore((state) => state.setQueue);
@@ -220,11 +245,14 @@ export function SongGrid({
   }, [visibleSongs]);
 
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const gridContainerRef = useRef<HTMLDivElement | null>(null);
+  const gridMeasureRef = useRef<HTMLDivElement | null>(null);
   const playlistId = useMemo(() => {
     const match = pathname.match(/^\/playlist\/([^/]+)$/);
     return match ? decodeURIComponent(match[1]) : null;
   }, [pathname]);
   const canReorder = editMode && sortMode === "default" && viewMode === "list";
+  const enableVirtualGrid = viewMode === "grid" && visibleSongs.length >= VIRTUALIZATION_MIN_ITEMS;
   const enableVirtualList =
     viewMode === "list" &&
     visibleSongs.length >= VIRTUALIZATION_MIN_ITEMS &&
@@ -289,6 +317,133 @@ export function SongGrid({
       window.removeEventListener("resize", scheduleRangeUpdate);
     };
   }, [enableVirtualList, visibleSongs.length]);
+
+  useEffect(() => {
+    if (!enableVirtualGrid) {
+      const nextEnd = Math.min(
+        visibleSongs.length,
+        VIRTUAL_GRID_FALLBACK_COLUMNS * VIRTUAL_GRID_INITIAL_ROWS,
+      );
+      setVirtualGridRange((current) =>
+        current.start === 0 && current.end === nextEnd
+          ? current
+          : { ...current, start: 0, end: nextEnd },
+      );
+      return;
+    }
+
+    let frameId = 0;
+    let resizeObserver: ResizeObserver | null = null;
+    const updateRange = () => {
+      frameId = 0;
+      const containerEl = gridContainerRef.current;
+      const measureEl = gridMeasureRef.current ?? containerEl;
+      if (!containerEl || !measureEl) {
+        const nextEnd = Math.min(
+          visibleSongs.length,
+          VIRTUAL_GRID_FALLBACK_COLUMNS * VIRTUAL_GRID_INITIAL_ROWS,
+        );
+        setVirtualGridRange((current) =>
+          current.start === 0 && current.end === nextEnd
+            ? current
+            : { ...current, start: 0, end: nextEnd },
+        );
+        return;
+      }
+
+      const styles = window.getComputedStyle(measureEl);
+      const columns =
+        styles.gridTemplateColumns
+          .split(/\s+/)
+          .filter((column) => column && column !== "none").length ||
+        VIRTUAL_GRID_FALLBACK_COLUMNS;
+      const columnGap = Math.max(
+        0,
+        parseCssPixels(styles.columnGap) ??
+          parseCssPixels(styles.gap) ??
+          VIRTUAL_GRID_FALLBACK_ROW_GAP,
+      );
+      const rowGap = Math.max(
+        0,
+        parseCssPixels(styles.rowGap) ??
+          parseCssPixels(styles.gap) ??
+          VIRTUAL_GRID_FALLBACK_ROW_GAP,
+      );
+      const measuredCardHeight =
+        measureEl.querySelector<HTMLElement>(".wf-song-card")?.getBoundingClientRect().height ?? 0;
+      const calculatedCardHeight =
+        measureEl.clientWidth > 0
+          ? (measureEl.clientWidth - columnGap * (columns - 1)) / columns
+          : VIRTUAL_GRID_FALLBACK_ROW_HEIGHT;
+      const rowHeight = Math.max(1, measuredCardHeight || calculatedCardHeight);
+      const rowStride = rowHeight + rowGap;
+      const totalRows = Math.ceil(visibleSongs.length / columns);
+
+      const rect = containerEl.getBoundingClientRect();
+      const scrollContainer = containerEl.closest(".wf-main") as HTMLElement | null;
+      const scrollRect = scrollContainer?.getBoundingClientRect();
+      const viewportTop = scrollRect?.top ?? 0;
+      const viewportBottom = scrollRect?.bottom ?? window.innerHeight;
+      const localViewportTop = Math.max(0, viewportTop - rect.top);
+      const localViewportBottom = Math.max(0, viewportBottom - rect.top);
+
+      const nextStartRow = Math.min(
+        totalRows,
+        Math.max(0, Math.floor(localViewportTop / rowStride) - VIRTUAL_GRID_OVERSCAN_ROWS),
+      );
+      const nextEndRow = Math.min(
+        totalRows,
+        Math.max(
+          nextStartRow,
+          Math.ceil(localViewportBottom / rowStride) + VIRTUAL_GRID_OVERSCAN_ROWS,
+        ),
+      );
+      const nextStart = Math.min(visibleSongs.length, nextStartRow * columns);
+      const nextEnd = Math.min(visibleSongs.length, Math.max(nextStart, nextEndRow * columns));
+
+      setVirtualGridRange((current) =>
+        current.start === nextStart &&
+        current.end === nextEnd &&
+        current.columns === columns &&
+        current.rowHeight === rowHeight &&
+        current.rowGap === rowGap
+          ? current
+          : {
+              start: nextStart,
+              end: nextEnd,
+              columns,
+              rowHeight,
+              rowGap,
+            },
+      );
+    };
+
+    const scheduleRangeUpdate = () => {
+      if (frameId) return;
+      frameId = window.requestAnimationFrame(updateRange);
+    };
+
+    const scrollContainer = gridContainerRef.current?.closest(".wf-main") as HTMLElement | null;
+    const observedEl = gridMeasureRef.current ?? gridContainerRef.current;
+    updateRange();
+    scrollContainer?.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
+    window.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
+    window.addEventListener("resize", scheduleRangeUpdate);
+    if (observedEl && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(scheduleRangeUpdate);
+      resizeObserver.observe(observedEl);
+    }
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      resizeObserver?.disconnect();
+      scrollContainer?.removeEventListener("scroll", scheduleRangeUpdate);
+      window.removeEventListener("scroll", scheduleRangeUpdate);
+      window.removeEventListener("resize", scheduleRangeUpdate);
+    };
+  }, [enableVirtualGrid, visibleSongs.length]);
 
   const onPlayAt = useCallback((index: number) => {
     setQueue(visibleSongsRef.current, index);
@@ -506,6 +661,34 @@ export function SongGrid({
       ? `${editingSong.audioBitDepth}-bit/${Math.round(editingSong.audioSampleRate / 100) / 10}kHz`
       : "Unknown quality";
 
+  const virtualGridRows = Math.ceil(visibleSongs.length / virtualGridRange.columns);
+  const virtualGridHeight =
+    virtualGridRows > 0
+      ? virtualGridRows * virtualGridRange.rowHeight +
+        Math.max(0, virtualGridRows - 1) * virtualGridRange.rowGap
+      : 0;
+  const virtualGridTop =
+    Math.floor(virtualGridRange.start / virtualGridRange.columns) *
+    (virtualGridRange.rowHeight + virtualGridRange.rowGap);
+
+  const renderSongCard = (song: PlayerSong, index: number) => (
+    <SongCard
+      key={song.id}
+      song={song}
+      songIndex={index}
+      onPlayAt={onPlayAt}
+      liked={!!likedMap[song.id]}
+      likePending={!!pendingLookup[song.id]}
+      canLike={canLike}
+      showLike={showLikeControls}
+      onToggleLike={handleToggleLike}
+      hideIfUnliked={hideIfUnliked}
+      editMode={editMode}
+      onEdit={openEditModal}
+      priority={index < 6}
+    />
+  );
+
   if (visibleSongs.length === 0) {
     if (hideIfUnliked && emptyLabel) {
       return <div className="opacity-70">{emptyLabel}</div>;
@@ -596,25 +779,30 @@ export function SongGrid({
       </div>
 
       {viewMode === "grid" ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-          {visibleSongs.map((song, index) => (
-            <SongCard
-              key={song.id}
-              song={song}
-              songIndex={index}
-              onPlayAt={onPlayAt}
-              liked={!!likedMap[song.id]}
-              likePending={!!pendingLookup[song.id]}
-              canLike={canLike}
-              showLike={showLikeControls}
-              onToggleLike={handleToggleLike}
-              hideIfUnliked={hideIfUnliked}
-              editMode={editMode}
-              onEdit={openEditModal}
-              priority={index < 6}
-            />
-          ))}
-        </div>
+        enableVirtualGrid ? (
+          <div
+            ref={gridContainerRef}
+            className="relative"
+            style={{ height: `${virtualGridHeight}px` }}
+          >
+            <div
+              ref={gridMeasureRef}
+              className="absolute left-0 right-0 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
+              style={{ top: `${virtualGridTop}px` }}
+            >
+              {visibleSongs
+                .slice(virtualGridRange.start, virtualGridRange.end)
+                .map((song, offset) => renderSongCard(song, virtualGridRange.start + offset))}
+            </div>
+          </div>
+        ) : (
+          <div
+            ref={gridContainerRef}
+            className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
+          >
+            {visibleSongs.map(renderSongCard)}
+          </div>
+        )
       ) : (
         <div ref={listContainerRef}>
           {enableVirtualList ? (

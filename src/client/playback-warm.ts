@@ -50,6 +50,7 @@ export function notePlaybackNetworkSuccess(): void {
 
 function shouldSkipSpeculativeMediaFetch(): boolean {
   if (typeof navigator === "undefined") return false;
+  if (navigator.onLine === false) return true;
   const connection = (navigator as Navigator & {
     connection?: { saveData?: boolean; effectiveType?: string };
   }).connection;

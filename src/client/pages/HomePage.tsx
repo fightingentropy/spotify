@@ -18,6 +18,7 @@ import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
+import { resolveNativeApiUrl } from "@/lib/song-utils";
 import { cn, formatTime } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
 
@@ -385,7 +386,7 @@ export default function HomePage() {
         if (cancelled) return;
         rememberDuration(song.id, null);
       };
-      audio.src = song.audioUrl;
+      audio.src = resolveNativeApiUrl(song.audioUrl);
       audio.load();
     }
 

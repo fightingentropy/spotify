@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Spotify</string>
+    <string name="title_activity_main">Spotify</string>
+    <string name="package_name">org.fightingentropy.spotify</string>
+    <string name="custom_url_scheme">org.fightingentropy.spotify</string>
+</resources>

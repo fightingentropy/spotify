@@ -4,6 +4,16 @@ import { create } from "zustand";
 import type { PlayerSong } from "@/types/player";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, preferOfflinePlaybackSong } from "@/lib/player-song";
+import {
+  deleteNativeOfflineFiles,
+  isNativeOfflineStorageAvailable,
+  nativeOfflineAssetWebUrl,
+  saveNativeOfflineAsset,
+  verifyNativeOfflineAsset,
+  type NativeOfflineAsset,
+  type NativeOfflineAssetKind,
+  type NativeOfflineFiles,
+} from "@/client/capacitor-offline";
 
 export type DownloadScope = "home" | "liked" | `playlist:${string}` | `song:${string}`;
 export type OfflineDownloadStatus = "queued" | "downloading" | "downloaded" | "failed";
@@ -14,6 +24,7 @@ export type OfflineDownloadRecord = {
   audioUrl: string;
   imageUrl: string;
   lyricsUrl?: string;
+  nativeFiles?: NativeOfflineFiles;
   accountScope?: string;
   status: OfflineDownloadStatus;
   progress: number;
@@ -23,6 +34,7 @@ export type OfflineDownloadRecord = {
   createdAt: number;
   updatedAt: number;
   lastAccessedAt: number;
+  verifiedAt?: number;
 };
 
 export type OfflineApiSnapshot<T = unknown> = {
@@ -84,6 +96,7 @@ export type OfflineMutation =
 
 export type OfflineMutationStatus = "queued" | "syncing" | "failed" | "auth-required";
 export type OfflineSyncStatus = "idle" | "syncing" | "failed" | "auth-required";
+export type OfflineVerificationStatus = "idle" | "checking" | "ok" | "repair-needed" | "failed";
 
 type OfflineState = {
   hydrated: boolean;
@@ -95,6 +108,12 @@ type OfflineState = {
   storageUsage: number | null;
   storageQuota: number | null;
   persistentStorage: boolean | null;
+  nativeStorage: boolean;
+  verificationStatus: OfflineVerificationStatus;
+  verificationCheckedAt: number | null;
+  verifiedDownloads: number;
+  missingDownloads: number;
+  verificationError: string | null;
   hydrate: () => Promise<void>;
   queueDownloads: (songs: PlayerSong[], scope: DownloadScope) => Promise<void>;
   removeDownload: (songId: string) => Promise<void>;
@@ -102,6 +121,7 @@ type OfflineState = {
   retryFailedDownloads: () => Promise<void>;
   clearDownloads: () => Promise<void>;
   clearPlaybackCache: () => Promise<void>;
+  verifyDownloads: () => Promise<void>;
   prefetchUpcoming: (queue: PlayerSong[], currentIndex: number) => Promise<void>;
   syncMutations: () => Promise<void>;
   refreshStorage: () => Promise<void>;
@@ -404,6 +424,7 @@ function resolveUrl(value: string): string {
 
 function shouldSkipSpeculativeMediaFetch(): boolean {
   if (typeof navigator === "undefined") return false;
+  if (navigator.onLine === false) return true;
   const connection = (navigator as Navigator & {
     connection?: { saveData?: boolean; effectiveType?: string };
   }).connection;
@@ -414,8 +435,24 @@ function shouldSkipSpeculativeMediaFetch(): boolean {
   );
 }
 
+function songAssetUrlEntries(song: PlayerSong): Array<{ kind: NativeOfflineAssetKind; url: string }> {
+  const entries: Array<{ kind: NativeOfflineAssetKind; url?: string }> = [
+    { kind: "audio", url: song.audioUrl },
+    { kind: "image", url: song.imageUrl },
+    { kind: "lyrics", url: song.lyricsUrl },
+  ];
+  const seen = new Set<string>();
+  return entries.flatMap((entry) => {
+    if (!entry.url || !sameOriginCacheableUrl(entry.url)) return [];
+    const url = resolveUrl(entry.url);
+    if (seen.has(url)) return [];
+    seen.add(url);
+    return [{ kind: entry.kind, url }];
+  });
+}
+
 function songAssetUrls(song: PlayerSong): string[] {
-  return uniqueStrings([song.audioUrl, song.imageUrl, song.lyricsUrl]).filter(sameOriginCacheableUrl).map(resolveUrl);
+  return songAssetUrlEntries(song).map((entry) => entry.url);
 }
 
 async function requestPersistentStorage(): Promise<boolean | null> {
@@ -692,6 +729,105 @@ async function cacheDurableUrl(
   throw lastError instanceof Error ? lastError : new Error("Download failed");
 }
 
+async function readCachedAssetBlob(url: string): Promise<Blob | null> {
+  if (!hasCacheStorage()) return null;
+  const absoluteUrl = resolveUrl(url);
+  const cache = await caches.open(OFFLINE_MEDIA_CACHE);
+  const response = await cache.match(absoluteUrl);
+  if (!response?.ok) return null;
+  return response.blob().catch(() => null);
+}
+
+async function saveCachedAssetToNative(options: {
+  songId: string;
+  kind: NativeOfflineAssetKind;
+  url: string;
+}): Promise<NativeOfflineAsset | null> {
+  if (!isNativeOfflineStorageAvailable()) return null;
+  const blob = await readCachedAssetBlob(options.url);
+  if (!blob || blob.size <= 0) throw new Error("Cached media file is empty");
+  return saveNativeOfflineAsset({
+    songId: options.songId,
+    kind: options.kind,
+    url: options.url,
+    blob,
+  });
+}
+
+async function verifyCachedAsset(url: string): Promise<boolean> {
+  if (!hasCacheStorage()) return false;
+  try {
+    const cache = await caches.open(OFFLINE_MEDIA_CACHE);
+    const response = await cache.match(resolveUrl(url));
+    if (!response?.ok) return false;
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > 0) return true;
+    const blob = await withTimeout(
+      response.clone().blob().catch(() => null),
+      DOWNLOAD_CACHE_WRITE_TIMEOUT_MS,
+      "Reading cached download timed out",
+    );
+    return !!blob && blob.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyOrRepairRecord(record: OfflineDownloadRecord): Promise<{
+  ok: boolean;
+  record: OfflineDownloadRecord;
+}> {
+  const entries = songAssetUrlEntries(record.song);
+  if (entries.length === 0) return { ok: false, record };
+
+  const nativeAvailable = isNativeOfflineStorageAvailable();
+  let nextNativeFiles = record.nativeFiles;
+  let repairedNativeFiles = false;
+
+  for (const entry of entries) {
+    if (nativeAvailable) {
+      const nativeAsset = nextNativeFiles?.[entry.kind];
+      if (await verifyNativeOfflineAsset(nativeAsset)) continue;
+      if (await verifyCachedAsset(entry.url)) {
+        const repairedAsset = await saveCachedAssetToNative({
+          songId: record.songId,
+          kind: entry.kind,
+          url: entry.url,
+        });
+        if (repairedAsset) {
+          nextNativeFiles = { ...(nextNativeFiles ?? {}), [entry.kind]: repairedAsset };
+          repairedNativeFiles = true;
+          continue;
+        }
+      }
+      return { ok: false, record };
+    }
+
+    if (!(await verifyCachedAsset(entry.url))) {
+      return { ok: false, record };
+    }
+  }
+
+  if (repairedNativeFiles) {
+    const nextRecord = {
+      ...record,
+      nativeFiles: nextNativeFiles,
+      verifiedAt: now(),
+      error: undefined,
+      updatedAt: now(),
+    };
+    await persistRecord(nextRecord);
+    return { ok: true, record: nextRecord };
+  }
+
+  const verifiedRecord = {
+    ...record,
+    verifiedAt: now(),
+  };
+  await idbPut(DOWNLOAD_STORE, verifiedRecord).catch(() => undefined);
+  return { ok: true, record: verifiedRecord };
+}
+
 function setRecordState(record: OfflineDownloadRecord): void {
   useOfflineStore.setState((state) => ({
     records: {
@@ -919,26 +1055,37 @@ async function processDownloadQueue(): Promise<void> {
       await persistRecord(working);
 
       try {
-        const urls = songAssetUrls(working.song);
-        if (urls.length === 0) throw new Error("No cacheable media URLs for this song");
+        const assetEntries = songAssetUrlEntries(working.song);
+        if (assetEntries.length === 0) throw new Error("No cacheable media URLs for this song");
 
         let completedAssets = 0;
         let totalBytes = 0;
-        for (const url of urls) {
+        let nativeFiles: NativeOfflineFiles | undefined = working.nativeFiles;
+        for (const asset of assetEntries) {
+          const { kind, url } = asset;
           const bytes = await cacheDurableUrl(url, (loaded, total) => {
             const assetProgress = total ? Math.min(1, loaded / total) : loaded > 0 ? 0.5 : 0;
             working = {
               ...working,
-              progress: Math.min(0.98, (completedAssets + assetProgress) / urls.length),
+              progress: Math.min(0.98, (completedAssets + assetProgress) / assetEntries.length),
               updatedAt: now(),
             };
             setRecordState(working);
           });
+          const nativeAsset = await saveCachedAssetToNative({
+            songId: working.songId,
+            kind,
+            url,
+          });
+          if (nativeAsset) {
+            nativeFiles = { ...(nativeFiles ?? {}), [kind]: nativeAsset };
+          }
           completedAssets += 1;
           totalBytes += bytes;
           working = {
             ...working,
-            progress: Math.min(0.98, completedAssets / urls.length),
+            nativeFiles,
+            progress: Math.min(0.98, completedAssets / assetEntries.length),
             size: totalBytes,
             updatedAt: now(),
           };
@@ -953,6 +1100,7 @@ async function processDownloadQueue(): Promise<void> {
           error: undefined,
           updatedAt: now(),
           lastAccessedAt: now(),
+          verifiedAt: now(),
         };
         await persistRecord(working);
       } catch (error) {
@@ -1379,6 +1527,22 @@ export function resolveOfflinePlaybackSong(song: PlayerSong | null | undefined):
   if (!song || isBrowserLocalSong(song) || isOfflinePlaybackSong(song)) return song;
   const record = useOfflineStore.getState().records[song.id];
   if (!isOfflineRecordForAccount(record) || record.status !== "downloaded") return song;
+  const nativeAudioUrl = nativeOfflineAssetWebUrl(record.nativeFiles?.audio);
+  if (nativeAudioUrl) {
+    return {
+      ...record.song,
+      ...song,
+      source: "offline",
+      album: song.album ?? record.song.album,
+      duration: song.duration ?? record.song.duration,
+      audioBitDepth: song.audioBitDepth ?? record.song.audioBitDepth,
+      audioSampleRate: song.audioSampleRate ?? record.song.audioSampleRate,
+      audioUrl: nativeAudioUrl,
+      imageUrl: nativeOfflineAssetWebUrl(record.nativeFiles?.image) ?? record.imageUrl ?? song.imageUrl,
+      lyricsUrl: nativeOfflineAssetWebUrl(record.nativeFiles?.lyrics) ?? record.lyricsUrl ?? song.lyricsUrl ?? record.song.lyricsUrl,
+    };
+  }
+  if (isNativeOfflineStorageAvailable()) return song;
 
   return preferOfflinePlaybackSong({
     ...record.song,
@@ -1434,6 +1598,12 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   storageUsage: null,
   storageQuota: null,
   persistentStorage: null,
+  nativeStorage: isNativeOfflineStorageAvailable(),
+  verificationStatus: "idle",
+  verificationCheckedAt: null,
+  verifiedDownloads: 0,
+  missingDownloads: 0,
+  verificationError: null,
   hydrate: async () => {
     if (hydrateStarted) return;
     hydrateStarted = true;
@@ -1453,6 +1623,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
       storageUsage: storage.usage,
       storageQuota: storage.quota,
       persistentStorage,
+      nativeStorage: isNativeOfflineStorageAvailable(),
     });
     void restoreThenSyncRemoteDownloadPreferences();
     void processDownloadQueue();
@@ -1474,6 +1645,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
         audioUrl: song.audioUrl,
         imageUrl: song.imageUrl,
         lyricsUrl: song.lyricsUrl,
+        nativeFiles: current?.nativeFiles,
         accountScope,
         status: current?.status === "downloaded" ? "downloaded" : "queued",
         progress: current?.status === "downloaded" ? 1 : current?.progress ?? 0,
@@ -1483,6 +1655,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
         createdAt: current?.createdAt ?? timestamp,
         updatedAt: timestamp,
         lastAccessedAt: timestamp,
+        verifiedAt: current?.verifiedAt,
       };
       await persistRecord(record);
     }
@@ -1493,7 +1666,10 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   removeDownload: async (songId) => {
     const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, songId).catch(() => undefined);
     if (record && !isOfflineRecordForAccount(record)) return;
-    if (record) await deleteCachedUrls(songAssetUrls(record.song));
+    if (record) {
+      await deleteCachedUrls(songAssetUrls(record.song));
+      await deleteNativeOfflineFiles(record.nativeFiles);
+    }
     await idbDelete(DOWNLOAD_STORE, songId).catch(() => undefined);
     set((state) => {
       const records = { ...state.records };
@@ -1538,6 +1714,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     await Promise.all(
       records.map(async (record) => {
         await deleteCachedUrls(songAssetUrls(record.song));
+        await deleteNativeOfflineFiles(record.nativeFiles);
         await idbDelete(DOWNLOAD_STORE, record.songId).catch(() => undefined);
       }),
     );
@@ -1549,6 +1726,53 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   clearPlaybackCache: async () => {
     await clearCache(OFFLINE_PLAYBACK_CACHE);
     await get().refreshStorage();
+  },
+  verifyDownloads: async () => {
+    await get().hydrate();
+    set({
+      verificationStatus: "checking",
+      verificationError: null,
+    });
+
+    try {
+      const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
+      const downloadedRecords = records.filter((record) => record.status === "downloaded");
+      let verified = 0;
+      let missing = 0;
+
+      for (const record of downloadedRecords) {
+        const result = await verifyOrRepairRecord(record);
+        if (result.ok) {
+          verified += 1;
+          continue;
+        }
+        missing += 1;
+        const queued: OfflineDownloadRecord = {
+          ...record,
+          status: "queued",
+          progress: 0,
+          error: "Offline file missing; queued for repair",
+          updatedAt: now(),
+        };
+        await persistRecord(queued);
+      }
+
+      set({
+        verificationStatus: missing > 0 ? "repair-needed" : "ok",
+        verificationCheckedAt: now(),
+        verifiedDownloads: verified,
+        missingDownloads: missing,
+        verificationError: null,
+      });
+      if (missing > 0) void processDownloadQueue();
+      await get().refreshStorage();
+    } catch (error) {
+      set({
+        verificationStatus: "failed",
+        verificationCheckedAt: now(),
+        verificationError: error instanceof Error ? error.message : "Download verification failed",
+      });
+    }
   },
   prefetchUpcoming: async (queue, currentIndex) => {
     if (prefetchRunning) return;

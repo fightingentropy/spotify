@@ -5,7 +5,9 @@ const eslintConfig = [
   {
     ignores: [
       ".wrangler/**",
+      "android/app/src/main/assets/public/**",
       "dist/**",
+      "ios/App/App/public/**",
       "node_modules/**",
       "cloudflare-env.d.ts",
       "public/sw.js",

@@ -284,6 +284,9 @@ async function cachedRangeResponse(request, options = {}) {
   const cached = await matchCachedMedia(request.url);
   if (!cached || !cached.ok) return null;
   const contentLength = Number(cached.headers.get("content-length") || 0);
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return null;
+  }
   if (!options.ignoreSizeLimit && Number.isFinite(contentLength) && contentLength > MAX_CACHED_RANGE_BLOB_BYTES) {
     return null;
   }
@@ -309,11 +312,25 @@ async function cachedRangeResponse(request, options = {}) {
   });
 }
 
+async function cachedFullMediaResponse(request) {
+  const cached = await matchCachedMedia(request.url);
+  if (!cached || !cached.ok) return null;
+  const headers = new Headers(cached.headers);
+  headers.set("accept-ranges", "bytes");
+  return new Response(cached.body, {
+    status: cached.status,
+    statusText: cached.statusText,
+    headers,
+  });
+}
+
 async function rangeResponse(request) {
   const url = new URL(request.url);
   if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
-    const cached = await cachedRangeResponse(request, { ignoreSizeLimit: true });
-    if (cached) return cached;
+    const cachedRange = await cachedRangeResponse(request);
+    if (cachedRange) return cachedRange;
+    const cachedFull = await cachedFullMediaResponse(request);
+    if (cachedFull) return cachedFull;
   }
 
   try {
@@ -321,6 +338,8 @@ async function rangeResponse(request) {
   } catch {
     const cached = await cachedRangeResponse(request);
     if (cached) return cached;
+    const cachedFull = await cachedFullMediaResponse(request);
+    if (cachedFull) return cachedFull;
     throw new Error("network and cached media miss");
   }
 }

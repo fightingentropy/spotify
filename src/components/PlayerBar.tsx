@@ -12,6 +12,7 @@ import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, isRadioSong } from "@/lib/player-song";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
+import { resolveNativeApiUrl } from "@/lib/song-utils";
 import {
   notePlaybackNetworkFailure,
   notePlaybackNetworkSuccess,
@@ -21,7 +22,9 @@ import { normalizeOfflineAccountScope, resolveOfflinePlaybackSong, useOfflineSto
 import { useAuth } from "@/client/auth";
 
 function resolvePlayableSrc(src: string): string {
-  if (/^(blob:|data:|https?:)/i.test(src)) return src;
+  if (/^(blob:|data:|file:|capacitor:|https?:)/i.test(src)) return src;
+  const nativeUrl = resolveNativeApiUrl(src);
+  if (/^https?:/i.test(nativeUrl)) return nativeUrl;
   return `${location.origin}${src}`;
 }
 
