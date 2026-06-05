@@ -2061,16 +2061,24 @@ app.delete("/api/likes", async (c) => {
 
 app.get("/api/offline-downloads", async (c) => {
   const user = requireUser(c.get("user"));
+  const requestedLimit = Number(c.req.query("limit") || 100);
+  const requestedOffset = Number(c.req.query("offset") || 0);
+  const limit = Math.max(1, Math.min(100, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 100));
+  const offset = Math.max(0, Number.isFinite(requestedOffset) ? Math.round(requestedOffset) : 0);
   const rows = await c.get("db")<OfflineDownloadRow>`
     SELECT "id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt"
     FROM "OfflineDownload"
     WHERE "userId" = ${user.id}
     ORDER BY "updatedAt" DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
   `;
+  const downloads = rows
+    .map(parseOfflineDownloadRow)
+    .filter((download): download is NonNullable<ReturnType<typeof parseOfflineDownloadRow>> => !!download);
   return c.json({
-    downloads: rows
-      .map(parseOfflineDownloadRow)
-      .filter((download): download is NonNullable<ReturnType<typeof parseOfflineDownloadRow>> => !!download),
+    downloads,
+    nextOffset: rows.length === limit ? offset + rows.length : null,
   });
 });
 

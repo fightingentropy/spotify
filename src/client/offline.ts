@@ -113,6 +113,11 @@ type RemoteOfflineDownload = {
   updatedAt?: string;
 };
 
+type RemoteOfflineDownloadPage = {
+  downloads: RemoteOfflineDownload[];
+  nextOffset: number | null;
+};
+
 const DB_NAME = "spotify_offline_v1";
 const DB_VERSION = 1;
 const DOWNLOAD_STORE = "downloads";
@@ -132,6 +137,9 @@ const DOWNLOAD_RETRY_ATTEMPTS = 3;
 const DOWNLOAD_RETRY_DELAY_MS = 1_000;
 const STALE_DOWNLOADING_MS = 2 * 60 * 1_000;
 const REMOTE_DOWNLOAD_SYNC_TIMEOUT_MS = 8_000;
+const REMOTE_DOWNLOAD_PAGE_SIZE = 100;
+const REMOTE_DOWNLOAD_SYNC_BATCH_SIZE = 25;
+const REMOTE_DOWNLOAD_BATCH_PAUSE_MS = 25;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let hydrateStarted = false;
@@ -688,60 +696,82 @@ async function persistRecord(record: OfflineDownloadRecord): Promise<void> {
   setRecordState(record);
 }
 
-async function fetchRemoteDownloadPreferences(scope = currentOfflineAccountScope): Promise<RemoteOfflineDownload[]> {
-  if (!canUseRemoteDownloadPreferences(scope) || !isNetworkAvailable()) return [];
+async function fetchRemoteDownloadPreferencePage(
+  scope = currentOfflineAccountScope,
+  offset = 0,
+): Promise<RemoteOfflineDownloadPage> {
+  if (!canUseRemoteDownloadPreferences(scope) || !isNetworkAvailable()) {
+    return { downloads: [], nextOffset: null };
+  }
+  const params = new URLSearchParams({
+    limit: String(REMOTE_DOWNLOAD_PAGE_SIZE),
+    offset: String(Math.max(0, offset)),
+  });
   const response = await withTimeout(
-    fetch("/api/offline-downloads", {
+    fetch(`/api/offline-downloads?${params}`, {
       credentials: "include",
       cache: "no-store",
     }),
     REMOTE_DOWNLOAD_SYNC_TIMEOUT_MS,
     "Reading saved downloads timed out",
   );
-  if (response.status === 401 || response.status === 403) return [];
+  if (response.status === 401 || response.status === 403) return { downloads: [], nextOffset: null };
   if (!response.ok) throw new Error(`Saved downloads failed with ${response.status}`);
-  const data = (await response.json().catch(() => ({}))) as { downloads?: unknown };
-  if (!Array.isArray(data.downloads)) return [];
-  return data.downloads
-    .map(coerceRemoteOfflineDownload)
-    .filter((download): download is RemoteOfflineDownload => !!download);
+  const data = (await response.json().catch(() => ({}))) as { downloads?: unknown; nextOffset?: unknown };
+  const downloads = Array.isArray(data.downloads)
+    ? data.downloads
+        .map(coerceRemoteOfflineDownload)
+        .filter((download): download is RemoteOfflineDownload => !!download)
+    : [];
+  const nextOffset = typeof data.nextOffset === "number" && Number.isFinite(data.nextOffset)
+    ? Math.max(0, Math.round(data.nextOffset))
+    : null;
+  return { downloads, nextOffset };
 }
 
-async function replaceRemoteDownloadPreferences(records: OfflineDownloadRecord[]): Promise<void> {
+async function upsertRemoteDownloadPreferenceBatch(records: OfflineDownloadRecord[]): Promise<void> {
+  if (!canUseRemoteDownloadPreferences() || !isNetworkAvailable()) return;
+  if (records.length === 0) return;
+  const items = records
+    .filter((record) => record.pinnedBy.length > 0 && canCacheSong(record.song))
+    .map((record) => ({
+      song: record.song,
+      scopes: record.pinnedBy,
+    }));
+  if (items.length === 0) return;
+  const response = await withTimeout(
+    fetch("/api/offline-downloads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      cache: "no-store",
+      body: JSON.stringify({ items }),
+    }),
+    REMOTE_DOWNLOAD_SYNC_TIMEOUT_MS,
+    "Saving download list timed out",
+  );
+  if (response.status === 401 || response.status === 403) return;
+  if (!response.ok) throw new Error(`Saving download list failed with ${response.status}`);
+}
+
+async function syncLocalDownloadPreferences(): Promise<void> {
   if (!canUseRemoteDownloadPreferences() || !isNetworkAvailable()) return;
   const accountScope = currentOfflineAccountScope;
   if (!restoredRemoteDownloadScopes.has(accountScope)) return;
   if (remoteDownloadSyncRunning) return;
   remoteDownloadSyncRunning = true;
   try {
-    const items = records
-      .filter((record) => record.pinnedBy.length > 0 && canCacheSong(record.song))
-      .map((record) => ({
-        song: record.song,
-        scopes: record.pinnedBy,
-      }));
-    const response = await withTimeout(
-      fetch("/api/offline-downloads", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        cache: "no-store",
-        body: JSON.stringify({ items }),
-      }),
-      REMOTE_DOWNLOAD_SYNC_TIMEOUT_MS,
-      "Saving download list timed out",
-    );
-    if (response.status === 401 || response.status === 403) return;
-    if (!response.ok) throw new Error(`Saving download list failed with ${response.status}`);
+    const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
+    for (let index = 0; index < records.length; index += REMOTE_DOWNLOAD_SYNC_BATCH_SIZE) {
+      await upsertRemoteDownloadPreferenceBatch(records.slice(index, index + REMOTE_DOWNLOAD_SYNC_BATCH_SIZE));
+      if (index + REMOTE_DOWNLOAD_SYNC_BATCH_SIZE < records.length) {
+        await sleep(REMOTE_DOWNLOAD_BATCH_PAUSE_MS);
+      }
+    }
   } catch {
   } finally {
     remoteDownloadSyncRunning = false;
   }
-}
-
-async function syncLocalDownloadPreferences(): Promise<void> {
-  const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
-  await replaceRemoteDownloadPreferences(records);
 }
 
 async function deleteRemoteDownloadPreference(payload: { songId?: string; scope?: DownloadScope; clearAll?: boolean }): Promise<void> {
@@ -769,40 +799,48 @@ async function restoreRemoteDownloadPreferences(): Promise<void> {
   if (!canUseRemoteDownloadPreferences(accountScope) || !isNetworkAvailable()) return;
   remoteDownloadRestoreRunning = true;
   try {
-    const remoteDownloads = await fetchRemoteDownloadPreferences(accountScope);
     restoredRemoteDownloadScopes.add(accountScope);
-    if (remoteDownloads.length === 0) return;
-
-    const timestamp = now();
     const existing = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
     const byId = recordsById(existing);
-    for (const remoteDownload of remoteDownloads) {
-      const { song } = remoteDownload;
-      if (!canCacheSong(song)) continue;
-      const current = byId[song.id];
-      const pinnedBy = normalizeDownloadScopes(
-        [...(current?.pinnedBy ?? []), ...remoteDownload.pinnedBy],
-        song.id,
-      );
-      const record: OfflineDownloadRecord = {
-        songId: song.id,
-        song: current?.song ? { ...current.song, ...song } : song,
-        audioUrl: song.audioUrl,
-        imageUrl: song.imageUrl,
-        lyricsUrl: song.lyricsUrl,
-        accountScope,
-        status: current?.status === "downloaded" ? "downloaded" : "queued",
-        progress: current?.status === "downloaded" ? 1 : current?.progress ?? 0,
-        size: current?.size ?? 0,
-        error: undefined,
-        pinnedBy,
-        createdAt: current?.createdAt ?? timestamp,
-        updatedAt: timestamp,
-        lastAccessedAt: current?.lastAccessedAt ?? timestamp,
-      };
-      byId[song.id] = record;
-      await persistRecord(record);
+    let offset = 0;
+    let restoredAny = false;
+    for (;;) {
+      const page = await fetchRemoteDownloadPreferencePage(accountScope, offset);
+      if (page.downloads.length === 0 && page.nextOffset == null) break;
+      const timestamp = now();
+      for (const remoteDownload of page.downloads) {
+        const { song } = remoteDownload;
+        if (!canCacheSong(song)) continue;
+        const current = byId[song.id];
+        const pinnedBy = normalizeDownloadScopes(
+          [...(current?.pinnedBy ?? []), ...remoteDownload.pinnedBy],
+          song.id,
+        );
+        const record: OfflineDownloadRecord = {
+          songId: song.id,
+          song: current?.song ? { ...current.song, ...song } : song,
+          audioUrl: song.audioUrl,
+          imageUrl: song.imageUrl,
+          lyricsUrl: song.lyricsUrl,
+          accountScope,
+          status: current?.status === "downloaded" ? "downloaded" : "queued",
+          progress: current?.status === "downloaded" ? 1 : current?.progress ?? 0,
+          size: current?.size ?? 0,
+          error: undefined,
+          pinnedBy,
+          createdAt: current?.createdAt ?? timestamp,
+          updatedAt: timestamp,
+          lastAccessedAt: current?.lastAccessedAt ?? timestamp,
+        };
+        byId[song.id] = record;
+        restoredAny = true;
+        await persistRecord(record);
+      }
+      if (page.nextOffset == null) break;
+      offset = page.nextOffset;
+      await sleep(REMOTE_DOWNLOAD_BATCH_PAUSE_MS);
     }
+    if (!restoredAny) return;
     await useOfflineStore.getState().refreshStorage();
     void processDownloadQueue();
   } catch {
