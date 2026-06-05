@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 
 const DISMISS_KEY = "spotify_ios_install_dismissed";
 
@@ -18,10 +19,19 @@ function isStandalone(): boolean {
   );
 }
 
+function isNativeCapacitorApp(): boolean {
+  try {
+    return Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+}
+
 export default function InstallPrompt() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    if (isNativeCapacitorApp()) return;
     if (!isIos() || isStandalone()) return;
     try {
       if (localStorage.getItem(DISMISS_KEY) === "1") return;
