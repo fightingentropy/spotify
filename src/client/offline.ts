@@ -339,6 +339,16 @@ function isNetworkAvailable(): boolean {
   return typeof navigator === "undefined" || navigator.onLine;
 }
 
+function isNetworkUnavailable(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+function isTransientNetworkError(error: unknown): boolean {
+  if (isNetworkUnavailable()) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed to fetch|load failed|network|offline|cancelled|canceled|timed out|abort/i.test(message);
+}
+
 function isPlayerSongLike(value: unknown): value is PlayerSong {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<PlayerSong>;
@@ -886,6 +896,7 @@ async function recoverInterruptedDownloads(force = false): Promise<void> {
 
 async function processDownloadQueue(): Promise<void> {
   if (downloadPumpRunning) return;
+  if (isNetworkUnavailable()) return;
   downloadPumpRunning = true;
   try {
     const initialRecords = currentAccountRecords(
@@ -896,6 +907,7 @@ async function processDownloadQueue(): Promise<void> {
       const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE));
       const record = records.find((item) => item.status === "queued");
       if (!record) break;
+      if (isNetworkUnavailable()) break;
 
       let working: OfflineDownloadRecord = {
         ...record,
@@ -944,13 +956,20 @@ async function processDownloadQueue(): Promise<void> {
         };
         await persistRecord(working);
       } catch (error) {
+        const waitingForNetwork = isTransientNetworkError(error);
         working = {
           ...working,
-          status: "failed",
-          error: error instanceof Error ? error.message : "Download failed",
+          status: waitingForNetwork ? "queued" : "failed",
+          progress: waitingForNetwork ? 0 : working.progress,
+          error: waitingForNetwork
+            ? "Waiting for connection"
+            : error instanceof Error
+              ? error.message
+              : "Download failed",
           updatedAt: now(),
         };
         await persistRecord(working);
+        if (waitingForNetwork) break;
       }
 
       await useOfflineStore.getState().refreshStorage();
