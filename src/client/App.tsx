@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, type CSSProperties, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -209,13 +209,16 @@ function Shell() {
     },
   );
   useIdleRoutePrefetch();
+  useEffect(() => {
+    document.body.classList.toggle("wf-has-mobile-player", Boolean(currentSong));
+    return () => {
+      document.body.classList.remove("wf-has-mobile-player");
+    };
+  }, [currentSong]);
   const visibleLibrary =
     library.userId && library.userId === user?.id
       ? library
       : { playlists: [], userId: user?.id ?? null };
-  const mobileChromeStyle = {
-    "--wf-mobile-player-reserve-height": currentSong ? "var(--wf-mobile-player-height)" : "0px",
-  } as CSSProperties;
 
   return (
     <>
@@ -250,7 +253,7 @@ function Shell() {
         initialCollapsed={localStorage.getItem("spotify_left_sidebar_collapsed") === "1"}
       />
       <NowPlayingSidebar />
-      <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]" style={mobileChromeStyle}>
+      <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">
         <div key={location.pathname} className="wf-route-surface">
         <Routes location={location}>
           <Route path="/" element={<HomePage />} />
