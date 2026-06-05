@@ -1022,7 +1022,7 @@ function PlayerBar(): React.ReactElement | null {
           />
         </Suspense>
       ) : null}
-      <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[calc(var(--wf-mobile-nav-height)+env(safe-area-inset-bottom))] lg:bottom-0">
+      <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[var(--wf-mobile-nav-bottom-offset)] lg:bottom-0">
       {audioElements}
       {/* Mobile mini player */}
       <div className="lg:hidden relative">

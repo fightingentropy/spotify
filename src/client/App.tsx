@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, type CSSProperties, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -13,6 +13,7 @@ import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
 import ProfilePage from "@/client/pages/ProfilePage";
 import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
+import { usePlayerStore } from "@/store/player";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
@@ -195,6 +196,7 @@ function useIdleRoutePrefetch() {
 function Shell() {
   const { user, status } = useAuth();
   const location = useLocation();
+  const currentSong = usePlayerStore((state) => state.currentSong);
   const { data: library } = useApiData<LibraryPayload>(
     withAccountScope("/api/library", user?.id ?? status),
     {
@@ -211,6 +213,9 @@ function Shell() {
     library.userId && library.userId === user?.id
       ? library
       : { playlists: [], userId: user?.id ?? null };
+  const mobileChromeStyle = {
+    "--wf-mobile-player-reserve-height": currentSong ? "var(--wf-mobile-player-height)" : "0px",
+  } as CSSProperties;
 
   return (
     <>
@@ -245,7 +250,7 @@ function Shell() {
         initialCollapsed={localStorage.getItem("spotify_left_sidebar_collapsed") === "1"}
       />
       <NowPlayingSidebar />
-      <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">
+      <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]" style={mobileChromeStyle}>
         <div key={location.pathname} className="wf-route-surface">
         <Routes location={location}>
           <Route path="/" element={<HomePage />} />

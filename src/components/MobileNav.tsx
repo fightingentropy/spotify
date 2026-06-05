@@ -32,7 +32,7 @@ export default function MobileNav() {
   return (
     <nav
       aria-label="Main navigation"
-      className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.12] bg-background text-white pb-[env(safe-area-inset-bottom)]"
+      className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.12] bg-background text-white pb-[var(--wf-mobile-bottom-gutter)]"
     >
       <div className="h-[var(--wf-mobile-nav-height)] grid grid-cols-3">
         {tabs.map((tab) => {
