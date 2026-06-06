@@ -268,7 +268,7 @@ export default function PodcastsPage() {
                     <article
                       key={episode.id}
                       className={cn(
-                        "wf-list-row flex min-h-[92px] items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-white/[0.07] sm:gap-4",
+                        "wf-list-row wf-list-row-flat flex min-h-[92px] items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-white/[0.07] sm:gap-4",
                         active && "bg-white/[0.08] ring-1 ring-emerald-500/40",
                       )}
                     >
