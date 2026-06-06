@@ -583,7 +583,7 @@ export default function HomePage() {
             aria-label={listIsPlaying ? "Pause library" : "Play library"}
             onClick={handlePlayAll}
             disabled={sortedSongs.length === 0}
-            className="wf-control-button grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:scale-105 hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:scale-100 disabled:hover:bg-[#1ed760]"
+            className="wf-control-button grid h-16 w-16 shrink-0 cursor-pointer place-items-center rounded-full bg-[#1ed760] text-black shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:bg-[#1fdf64] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#1ed760]"
           >
             {listIsPlaying ? (
               <Pause size={31} fill="currentColor" />
@@ -727,7 +727,7 @@ export default function HomePage() {
                           className={cn(
                             "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]",
                             "wf-control-button",
-                            active ? "opacity-100" : "opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 focus-visible:opacity-100 focus-visible:translate-y-0",
+                            active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
                           )}
                         >
                           {active && isPlaying ? (

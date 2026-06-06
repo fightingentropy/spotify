@@ -132,14 +132,6 @@ body.wf-now-playing-open {
 .wf-list-row {
   transform: translateZ(0);
   transition:
-    transform 170ms ease,
-    background-color 170ms ease,
-    box-shadow 180ms ease,
-    opacity 170ms ease;
-}
-
-.wf-list-row-flat {
-  transition:
     background-color 170ms ease,
     opacity 170ms ease;
 }
@@ -181,40 +173,15 @@ body.wf-now-playing-open {
 }
 
 @media (hover: hover) {
-  .wf-pressable:hover,
-  .wf-control-button:hover {
-    transform: translateY(-1px);
-  }
-
-  .wf-song-card:hover {
-    transform: translateY(-3px) scale(1.015);
-    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.26);
-  }
-
   .wf-song-card:hover .wf-song-cover,
   .wf-now-playing-art:hover img {
     transform: scale(1.035);
   }
-
-  .wf-list-row:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
-  }
-
-  .wf-list-row.wf-list-row-flat:hover {
-    transform: translateZ(0);
-    box-shadow: none;
-  }
 }
 
-.wf-pressable:active,
-.wf-control-button:active,
-.wf-list-row:active {
+.wf-pressable:active:not(.wf-list-row),
+.wf-control-button:active {
   transform: scale(0.985);
-}
-
-.wf-list-row.wf-list-row-flat:active {
-  transform: translateZ(0);
 }
 
 .wf-song-card:active {
