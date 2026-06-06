@@ -179,7 +179,7 @@ export default function PodcastsPage() {
                   alt={podcastShow.title}
                   fill
                   loading={index === 0 ? "eager" : "lazy"}
-                  className="object-cover transition duration-300 group-hover:scale-[1.03]"
+                  className="object-cover"
                   sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/45 to-black/10" />

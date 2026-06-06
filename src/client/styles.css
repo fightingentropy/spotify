@@ -124,11 +124,6 @@ body.wf-now-playing-open {
     filter 220ms ease;
 }
 
-.wf-song-cover,
-.wf-now-playing-art img {
-  transition: transform 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
 .wf-list-row {
   transform: translateZ(0);
   transition:
@@ -172,13 +167,6 @@ body.wf-now-playing-open {
   animation: wf-skeleton-shimmer 1.25s ease-in-out infinite;
 }
 
-@media (hover: hover) {
-  .wf-song-card:hover .wf-song-cover,
-  .wf-now-playing-art:hover img {
-    transform: scale(1.035);
-  }
-}
-
 .wf-pressable:active:not(.wf-list-row),
 .wf-control-button:active {
   transform: scale(0.985);
@@ -205,11 +193,9 @@ body.wf-now-playing-open {
   .wf-pressable,
   .wf-control-button,
   .wf-song-card,
-  .wf-song-cover,
   .wf-list-row,
   .wf-sheet-backdrop,
-  .wf-now-playing-panel,
-  .wf-now-playing-art img {
+  .wf-now-playing-panel {
     transition-duration: 1ms;
   }
 }
