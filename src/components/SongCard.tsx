@@ -1,13 +1,13 @@
 "use client";
 
-import { memo, useCallback, useMemo, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useCallback, useMemo, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
-import { Heart, Pause, Pencil, Play } from "lucide-react";
+import { Heart, Pause, Play } from "lucide-react";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
@@ -21,8 +21,6 @@ type SongCardProps = {
   hideIfUnliked?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
   showLike?: boolean;
-  editMode?: boolean;
-  onEdit?: (song: PlayerSong) => void;
   priority?: boolean;
 };
 
@@ -36,8 +34,6 @@ const SongCardComponent = function SongCard({
   hideIfUnliked = false,
   onToggleLike,
   showLike = true,
-  editMode = false,
-  onEdit,
   priority = false,
 }: SongCardProps) {
   // Optimized selector - only subscribes to necessary state changes
@@ -70,16 +66,6 @@ const SongCardComponent = function SongCard({
     }
   }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, resolvedSong, setSong, song, songIndex]);
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        handlePlay();
-      }
-    },
-    [handlePlay]
-  );
-
   const handleToggleLike = useCallback(
     async (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
@@ -93,18 +79,20 @@ const SongCardComponent = function SongCard({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={handlePlay}
       onPointerEnter={() => warmPlaybackSong(resolvedSong, true)}
-      onFocus={() => warmPlaybackSong(resolvedSong, true)}
-      onKeyDown={handleKeyDown}
-      aria-pressed={isActiveAndPlaying}
       className={cn(
-        "wf-song-card wf-pressable group relative aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+        "wf-song-card wf-pressable group relative aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-white/5",
         isActive && "ring-2 ring-emerald-500"
       )}
     >
+      <button
+        type="button"
+        aria-label={isActiveAndPlaying ? `Pause ${resolvedSong.title}` : `Play ${resolvedSong.title}`}
+        aria-pressed={isActiveAndPlaying}
+        onClick={handlePlay}
+        onFocus={() => warmPlaybackSong(resolvedSong, true)}
+        className="absolute inset-0 z-10 rounded-lg cursor-pointer text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+      />
       <CoverImage
         src={resolvedSong.imageUrl}
         alt={resolvedSong.title}
@@ -118,7 +106,7 @@ const SongCardComponent = function SongCard({
 
       <OfflineSongDownloadButton
         song={song}
-        className="wf-control-button absolute left-2 top-2 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
+        className="wf-control-button absolute left-2 top-2 z-30 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
       />
 
       {showLike ? (
@@ -129,7 +117,7 @@ const SongCardComponent = function SongCard({
           disabled={likePending}
           onClick={handleToggleLike}
           className={cn(
-            "absolute top-2 right-2 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
+            "absolute top-2 right-2 z-30 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
             "wf-control-button",
             canLike ? "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500" : "opacity-80",
             likePending && "opacity-60 cursor-wait"
@@ -146,32 +134,10 @@ const SongCardComponent = function SongCard({
         </button>
       ) : null}
 
-      {editMode && onEdit ? (
-        <button
-          type="button"
-          aria-label="Edit song"
-          title="Edit song"
-          onClick={(event) => {
-            event.stopPropagation();
-            onEdit(song);
-          }}
-          className="wf-control-button absolute left-2 top-12 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-        >
-          <Pencil size={16} />
-        </button>
-      ) : null}
-
-      <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between gap-2">
+      <div className="pointer-events-none absolute bottom-2 left-2 right-2 z-20 flex items-end justify-between gap-2">
         <div className="text-left min-w-0 flex-1">
           <div className="text-white font-medium drop-shadow truncate">{resolvedSong.title}</div>
           <div className="text-white/80 text-xs drop-shadow truncate">{resolvedSong.artist}</div>
-          {editMode ? (
-            <div className="text-white/80 text-[11px] drop-shadow truncate">
-              {song.audioBitDepth && song.audioSampleRate
-                ? `${song.audioBitDepth}-bit/${Math.round(song.audioSampleRate / 100) / 10}kHz`
-                : "Quality: Unknown"}
-            </div>
-          ) : null}
         </div>
         <div
           className={cn(
@@ -201,10 +167,8 @@ export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
     prevProps.canLike === nextProps.canLike &&
     prevProps.hideIfUnliked === nextProps.hideIfUnliked &&
     prevProps.showLike === nextProps.showLike &&
-    prevProps.editMode === nextProps.editMode &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&
-    prevProps.onToggleLike === nextProps.onToggleLike &&
-    prevProps.onEdit === nextProps.onEdit
+    prevProps.onToggleLike === nextProps.onToggleLike
   );
 });

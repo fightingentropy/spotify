@@ -300,8 +300,9 @@ export default function NowPlayingSheet({
                     max={Math.max(0, duration)}
                     step={0.1}
                     value={currentTime}
+                    aria-label="Playback position"
                     onChange={(event) => onSeek(Number(event.target.value))}
-                    className="w-full h-1 appearance-none rounded-full bg-black/10 dark:bg-white/10 accent-emerald-500 touch-manipulation"
+                    className="w-full h-1 appearance-none rounded-full bg-black/10 dark:bg-white/10 accent-emerald-500 touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                     style={{
                       background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
                     }}

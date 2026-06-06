@@ -101,10 +101,6 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: false, status: 400, error: "Invalid song id" };
     }
 
-    if (!nextLiked) {
-      return { ok: true, status: 200 };
-    }
-
     const pendingMap = get().pending;
     if (pendingMap[songId]) {
       return { ok: false, status: 0, error: "Like is still updating" };

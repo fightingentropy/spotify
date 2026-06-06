@@ -9,15 +9,26 @@ export type OfflineApiSnapshot<T = unknown> = {
 };
 
 const DB_NAME = "spotify_offline_v1";
-const DB_VERSION = 1;
-const DOWNLOAD_STORE = "downloads";
+const DB_VERSION = 3;
+const DOWNLOAD_STORE = "downloads_v2";
 const API_SNAPSHOT_STORE = "api_snapshots";
 const MUTATION_STORE = "mutations";
+const DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT = "accountScope_updatedAt";
+const DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT = "accountScope_status_updatedAt";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function hasIndexedDb(): boolean {
   return typeof indexedDB !== "undefined";
+}
+
+function ensureDownloadIndexes(store: IDBObjectStore): void {
+  if (!store.indexNames.contains(DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT)) {
+    store.createIndex(DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT, ["accountScope", "updatedAt"]);
+  }
+  if (!store.indexNames.contains(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT)) {
+    store.createIndex(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT, ["accountScope", "status", "updatedAt"]);
+  }
 }
 
 function openOfflineDb(): Promise<IDBDatabase> {
@@ -26,9 +37,13 @@ function openOfflineDb(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      let downloadStore: IDBObjectStore | null = null;
       if (!db.objectStoreNames.contains(DOWNLOAD_STORE)) {
-        db.createObjectStore(DOWNLOAD_STORE, { keyPath: "songId" });
+        downloadStore = db.createObjectStore(DOWNLOAD_STORE, { keyPath: ["accountScope", "songId"] });
+      } else {
+        downloadStore = request.transaction?.objectStore(DOWNLOAD_STORE) ?? null;
       }
+      if (downloadStore) ensureDownloadIndexes(downloadStore);
       if (!db.objectStoreNames.contains(API_SNAPSHOT_STORE)) {
         db.createObjectStore(API_SNAPSHOT_STORE, { keyPath: "url" });
       }
@@ -36,8 +51,22 @@ function openOfflineDb(): Promise<IDBDatabase> {
         db.createObjectStore(MUTATION_STORE, { keyPath: "id" });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("Failed to open offline database"));
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => {
+      dbPromise = null;
+      reject(request.error ?? new Error("Failed to open offline database"));
+    };
+    request.onblocked = () => {
+      dbPromise = null;
+      reject(new Error("Offline database upgrade is blocked by another tab"));
+    };
   });
   return dbPromise;
 }

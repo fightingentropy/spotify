@@ -68,6 +68,20 @@ function normalizeText(value: string): string {
   return value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 }
 
+export function safePodcastUrl(value: string, baseUrl?: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed, baseUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    if (url.username || url.password) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function stripHtml(value: string): string {
   const trimmed = value.trim();
   if (!/<[a-z][\s\S]*>/i.test(trimmed)) return normalizeText(trimmed);
@@ -128,14 +142,14 @@ export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50)
   const channelAuthor = textOf(firstElementByTag(channel, "itunes:author")) || show.author;
   const imageContainer = firstElementByTag(channel, "image");
   const channelImage =
-    textOf(firstElementByTag(imageContainer, "url")) ||
-    attrOf(firstElementByTag(channel, "itunes:image"), "href") ||
+    safePodcastUrl(textOf(firstElementByTag(imageContainer, "url")), show.feedUrl) ||
+    safePodcastUrl(attrOf(firstElementByTag(channel, "itunes:image"), "href"), show.feedUrl) ||
     show.imageUrl;
 
   return Array.from(channel.getElementsByTagName("item"))
     .map((item): PodcastEpisode | null => {
       const enclosure = firstElementByTag(item, "enclosure");
-      const audioUrl = attrOf(enclosure, "url");
+      const audioUrl = safePodcastUrl(attrOf(enclosure, "url"), show.feedUrl);
       if (!audioUrl) return null;
 
       const title = textOf(firstElementByTag(item, "title")) || "Untitled episode";
@@ -144,7 +158,9 @@ export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50)
         stripHtml(textOf(firstElementByTag(item, "content:encoded")));
       const duration = parseDurationSeconds(textOf(firstElementByTag(item, "itunes:duration")));
       const publishedAt = isoDate(textOf(firstElementByTag(item, "pubDate")));
-      const imageUrl = attrOf(firstElementByTag(item, "itunes:image"), "href") || channelImage;
+      const imageUrl =
+        safePodcastUrl(attrOf(firstElementByTag(item, "itunes:image"), "href"), show.feedUrl) ||
+        channelImage;
 
       return {
         id: stableEpisodeId(show.id, item, audioUrl, title),
@@ -159,7 +175,7 @@ export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50)
         podcastId: show.id,
         podcastTitle: channelTitle,
         description,
-        link: textOf(firstElementByTag(item, "link")) || show.websiteUrl,
+        link: safePodcastUrl(textOf(firstElementByTag(item, "link")), show.websiteUrl) || show.websiteUrl,
         publishedAt,
       };
     })

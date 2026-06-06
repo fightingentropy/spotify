@@ -36,18 +36,47 @@ export default function RegisterPage() {
       <h1 className="text-2xl font-semibold mb-6">Create your account</h1>
       <form onSubmit={onSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm mb-1">Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-3 py-2 bg-transparent" />
+          <label htmlFor="register-name" className="block text-sm mb-1">Name</label>
+          <input
+            id="register-name"
+            autoComplete="name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            aria-describedby={error ? "register-error" : undefined}
+            className="w-full border rounded px-3 py-2 bg-transparent"
+          />
         </div>
         <div>
-          <label className="block text-sm mb-1">Email</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border rounded px-3 py-2 bg-transparent" required />
+          <label htmlFor="register-email" className="block text-sm mb-1">Email</label>
+          <input
+            id="register-email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            aria-describedby={error ? "register-error" : undefined}
+            className="w-full border rounded px-3 py-2 bg-transparent"
+            required
+          />
         </div>
         <div>
-          <label className="block text-sm mb-1">Password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border rounded px-3 py-2 bg-transparent" required />
+          <label htmlFor="register-password" className="block text-sm mb-1">Password</label>
+          <input
+            id="register-password"
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            aria-describedby={error ? "register-error" : undefined}
+            className="w-full border rounded px-3 py-2 bg-transparent"
+            required
+          />
         </div>
-        {error && <div className="text-sm text-red-600">{error}</div>}
+        {error && (
+          <div id="register-error" role="alert" className="text-sm text-red-600">
+            {error}
+          </div>
+        )}
         <button type="submit" disabled={loading} className="w-full h-10 rounded bg-foreground text-background disabled:opacity-50">
           {loading ? "Creating..." : "Create account"}
         </button>

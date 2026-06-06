@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
   Clock3,
@@ -65,6 +65,7 @@ export default function PodcastsPage() {
   const [status, setStatus] = useState<FeedStatus>("loading");
   const [error, setError] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
+  const loadRequestIdRef = useRef(0);
 
   const setQueue = usePlayerStore((state) => state.setQueue);
   const toggle = usePlayerStore((state) => state.toggle);
@@ -75,19 +76,23 @@ export default function PodcastsPage() {
   const loadFeed = useCallback(
     async (signal?: AbortSignal) => {
       if (!show) return;
+      const requestId = ++loadRequestIdRef.current;
+      const activeShow = show;
       setStatus("loading");
       setError(null);
 
       try {
-        const response = await fetch(show.feedUrl, { signal });
+        const response = await fetch(activeShow.feedUrl, { signal });
         if (!response.ok) throw new Error(`Podcast feed returned ${response.status}`);
         const xml = await response.text();
-        const nextEpisodes = parsePodcastFeed(xml, show);
+        const nextEpisodes = parsePodcastFeed(xml, activeShow);
+        if (signal?.aborted || requestId !== loadRequestIdRef.current) return;
         setEpisodes(nextEpisodes);
         setLoadedAt(new Date().toISOString());
         setStatus("ready");
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === "AbortError") return;
+        if (signal?.aborted || requestId !== loadRequestIdRef.current) return;
         setError(caught instanceof Error ? caught.message : "Could not load podcast feed");
         setStatus("error");
       }
@@ -220,7 +225,7 @@ export default function PodcastsPage() {
                 <a
                   href={show.websiteUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-white/[0.72] transition hover:text-white"
                 >
                   <ExternalLink size={14} />
@@ -302,7 +307,7 @@ export default function PodcastsPage() {
                     <a
                       href={episode.link}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       aria-label={`Open show notes for ${episode.title}`}
                       title="Open show notes"
                       className="wf-control-button grid h-10 w-10 shrink-0 place-items-center rounded-full text-white/[0.62] transition hover:bg-white/[0.09] hover:text-white"

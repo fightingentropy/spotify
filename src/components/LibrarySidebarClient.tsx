@@ -56,9 +56,11 @@ export default function LibrarySidebarClient({
           <div className={cn("flex items-center", collapsed ? "gap-0" : "gap-1")}>
             {!collapsed && (
               <button
+                type="button"
+                aria-label="Create playlist (coming soon)"
                 title="Create playlist (coming soon)"
                 className="h-8 w-8 rounded-full grid place-items-center bg-white/[0.08] text-white/[0.68] cursor-default"
-                aria-disabled
+                disabled
               >
                 <Plus size={16} />
               </button>

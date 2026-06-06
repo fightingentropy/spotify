@@ -1,9 +1,9 @@
 "use client";
 
-import { memo, useCallback, useMemo, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useCallback, useMemo, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
 import { warmPlaybackSong } from "@/client/playback-warm";
-import { GripVertical, Heart, Pause, Pencil, Play } from "lucide-react";
+import { Heart, Pause, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
@@ -20,9 +20,6 @@ type SongListItemProps = {
   canLike?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
   showLike?: boolean;
-  editMode?: boolean;
-  canReorder?: boolean;
-  onEdit?: (song: PlayerSong) => void;
   priority?: boolean;
 };
 
@@ -35,9 +32,6 @@ const SongListItemComponent = function SongListItem({
   canLike = false,
   onToggleLike,
   showLike = true,
-  editMode = false,
-  canReorder = false,
-  onEdit,
   priority = false,
 }: SongListItemProps) {
   const setSong = usePlayerStore((state) => state.setSong);
@@ -69,16 +63,6 @@ const SongListItemComponent = function SongListItem({
     play();
   }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, resolvedSong, setSong, song, songIndex]);
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        handlePlay();
-      }
-    },
-    [handlePlay],
-  );
-
   const handleToggleLike = useCallback(
     async (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
@@ -90,67 +74,39 @@ const SongListItemComponent = function SongListItem({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={handlePlay}
       onPointerEnter={() => warmPlaybackSong(resolvedSong, true)}
-      onFocus={() => warmPlaybackSong(resolvedSong, true)}
-      onKeyDown={handleKeyDown}
-      aria-pressed={isActiveAndPlaying}
       className={cn(
-        "wf-list-row wf-pressable group flex items-center gap-3 px-3 py-2 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+        "wf-list-row group flex items-center gap-3 px-3 py-2",
         isActive ? "bg-emerald-500/10 rounded-lg" : "hover:bg-black/5 hover:dark:bg-white/5 rounded-lg",
       )}
     >
-      <div className="relative h-12 w-12 rounded overflow-hidden shrink-0">
-        {canReorder ? (
-          <div
-            aria-hidden
-            className="absolute -left-6 top-1/2 -translate-y-1/2 text-foreground/45"
-            title="Drag to reorder"
-          >
-            <GripVertical size={15} />
-          </div>
-        ) : null}
-        <CoverImage
-          src={resolvedSong.imageUrl}
-          alt={resolvedSong.title}
-          fill
-          sizes="48px"
-          className="wf-song-cover object-cover"
-          priority={priority}
-          loading={priority ? "eager" : "lazy"}
-        />
-      </div>
+      <button
+        type="button"
+        aria-label={isActiveAndPlaying ? `Pause ${resolvedSong.title}` : `Play ${resolvedSong.title}`}
+        aria-pressed={isActiveAndPlaying}
+        onClick={handlePlay}
+        onFocus={() => warmPlaybackSong(resolvedSong, true)}
+        className="wf-pressable flex min-w-0 flex-1 items-center gap-3 rounded-md bg-transparent text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+      >
+        <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded">
+          <CoverImage
+            src={resolvedSong.imageUrl}
+            alt={resolvedSong.title}
+            fill
+            sizes="48px"
+            className="wf-song-cover object-cover"
+            priority={priority}
+            loading={priority ? "eager" : "lazy"}
+          />
+        </span>
 
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium truncate">{resolvedSong.title}</div>
-        <div className="text-xs opacity-70 truncate">{resolvedSong.artist}</div>
-        {editMode ? (
-          <div className="text-[11px] opacity-60 truncate">
-            {song.audioBitDepth && song.audioSampleRate
-              ? `${song.audioBitDepth}-bit/${Math.round(song.audioSampleRate / 100) / 10}kHz`
-              : "Quality: Unknown"}
-          </div>
-        ) : null}
-      </div>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{resolvedSong.title}</span>
+          <span className="block truncate text-xs opacity-70">{resolvedSong.artist}</span>
+        </span>
+      </button>
 
       <OfflineSongDownloadButton song={song} className="wf-control-button text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />
-
-      {editMode && onEdit ? (
-        <button
-          type="button"
-          aria-label="Edit song"
-          title="Edit song"
-          onClick={(event) => {
-            event.stopPropagation();
-            onEdit(song);
-          }}
-          className="wf-control-button h-9 w-9 rounded-full grid place-items-center transition hover:bg-black/10 hover:dark:bg-white/10"
-        >
-          <Pencil size={17} />
-        </button>
-      ) : null}
 
       {showLike ? (
         <button
@@ -176,7 +132,7 @@ const SongListItemComponent = function SongListItem({
         </button>
       ) : null}
 
-      <div className="wf-control-button h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
+      <div aria-hidden className="pointer-events-none wf-control-button h-9 w-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
         {isActiveAndPlaying ? <Pause size={17} /> : <Play size={17} className="translate-x-[1px]" />}
       </div>
     </div>
@@ -191,12 +147,9 @@ export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) =
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
     prevProps.showLike === nextProps.showLike &&
-    prevProps.editMode === nextProps.editMode &&
-    prevProps.canReorder === nextProps.canReorder &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&
-    prevProps.onToggleLike === nextProps.onToggleLike &&
-    prevProps.onEdit === nextProps.onEdit
+    prevProps.onToggleLike === nextProps.onToggleLike
   );
 });
 

@@ -1210,6 +1210,74 @@ async function listSongs(db: SqlTag, userId: string | null) {
   `;
 }
 
+async function ensureLegacyLikedSongsForUser(db: SqlTag, userId: string): Promise<void> {
+  await ensureSongColumns(db);
+  const backfilled = await db<{ userId: string }>`
+    SELECT "userId"
+    FROM "LikeBackfill"
+    WHERE "userId" = ${userId}
+    LIMIT 1
+  `;
+  if (backfilled[0]) return;
+
+  const rows = await db<{ likeCount: number }>`
+    SELECT COUNT(*) AS "likeCount"
+    FROM "Like"
+    WHERE "userId" = ${userId}
+  `;
+  if (Number(rows[0]?.likeCount ?? 0) === 0) {
+    await db`
+      INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
+      SELECT ${userId} || ':' || s."id", ${userId}, s."id", COALESCE(s."createdAt", CURRENT_TIMESTAMP)
+      FROM "Song" s
+      WHERE s."userId" = ${userId}
+      ON CONFLICT ("userId", "songId") DO NOTHING
+    `;
+  }
+
+  await db`
+    INSERT INTO "LikeBackfill" ("userId", "completedAt")
+    VALUES (${userId}, CURRENT_TIMESTAMP)
+    ON CONFLICT ("userId") DO NOTHING
+  `;
+}
+
+async function likeSong(db: SqlTag, userId: string, songId: string): Promise<void> {
+  await db`
+    INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
+    VALUES (${crypto.randomUUID()}, ${userId}, ${songId}, CURRENT_TIMESTAMP)
+    ON CONFLICT ("userId", "songId") DO NOTHING
+  `;
+}
+
+async function listLikedSongIds(db: SqlTag, userId: string | null): Promise<string[]> {
+  if (!userId) return [];
+  await ensureLegacyLikedSongsForUser(db, userId);
+  const rows = await db<{ songId: string }>`
+    SELECT l."songId" AS "songId"
+    FROM "Like" l
+    INNER JOIN "Song" s ON s."id" = l."songId"
+    WHERE l."userId" = ${userId}
+      AND s."userId" = ${userId}
+    ORDER BY l."createdAt" DESC
+    LIMIT 5000
+  `;
+  return rows.map((row) => row.songId);
+}
+
+async function listLikedSongs(db: SqlTag, userId: string): Promise<SongRow[]> {
+  await ensureLegacyLikedSongsForUser(db, userId);
+  return db<SongRow>`
+    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt"
+    FROM "Like" l
+    INNER JOIN "Song" s ON s."id" = l."songId"
+    WHERE l."userId" = ${userId}
+      AND s."userId" = ${userId}
+    ORDER BY l."createdAt" DESC
+    LIMIT 5000
+  `;
+}
+
 async function listSearchSongs(db: SqlTag, userId: string | null) {
   await ensureSongColumns(db);
   if (!userId) return [];
@@ -1275,6 +1343,21 @@ function isMacMiniMusicConfigured(env: CloudflareEnv): boolean {
   }
 }
 
+function isLocalMacMiniOrigin(env: CloudflareEnv): boolean {
+  const origin = getMacMiniOrigin(env);
+  if (!origin) return false;
+  try {
+    return isLocalPreviewHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function canUseMacMiniProxy(env: CloudflareEnv): boolean {
+  if (!isMacMiniMusicConfigured(env)) return false;
+  return Boolean(getMacMiniProxyToken(env)) || isLocalMacMiniOrigin(env);
+}
+
 function isLocalPreviewHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return (
@@ -1287,7 +1370,7 @@ function isLocalPreviewHost(hostname: string): boolean {
 }
 
 function getLocalMacMiniAuthUser(c: Context<AppEnv>): AuthUser | null {
-  if (!isMacMiniMusicConfigured(c.env)) return null;
+  if (!canUseMacMiniProxy(c.env)) return null;
   try {
     return isLocalPreviewHost(new URL(c.req.url).hostname) ? LOCAL_MAC_MINI_AUTH_USER : null;
   } catch {
@@ -1300,7 +1383,7 @@ function macMiniProxyPathname(c: Context<AppEnv>): string {
 }
 
 function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
-  if (!isMacMiniMusicConfigured(c.env)) return false;
+  if (!canUseMacMiniProxy(c.env)) return false;
   const pathname = macMiniProxyPathname(c);
   const method = c.req.method.toUpperCase();
 
@@ -1520,9 +1603,10 @@ app.get("/api/home", async (c) => {
   const db = c.get("db");
   const user = c.get("user");
   const songs = await listSongs(db, user?.id ?? null);
+  const likedSongIds = await listLikedSongIds(db, user?.id ?? null);
   return jsonCached(c, {
     songs: songs.map(songToPlayerSong),
-    likedSongIds: songs.map((song) => song.id),
+    likedSongIds,
   });
 });
 
@@ -1542,14 +1626,7 @@ app.get("/api/library", async (c) => {
 
 app.get("/api/liked", async (c) => {
   const user = requireUser(c.get("user"));
-  await ensureSongColumns(c.get("db"));
-  const rows = await c.get("db")<SongRow>`
-    SELECT "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-    FROM "Song"
-    WHERE "userId" = ${user.id}
-    ORDER BY "createdAt" DESC
-    LIMIT 5000
-  `;
+  const rows = await listLikedSongs(c.get("db"), user.id);
   return jsonCached(c, { songs: rows.map(songToPlayerSong), likedSongIds: rows.map((row) => row.id) });
 });
 
@@ -1578,7 +1655,7 @@ app.get("/api/playlist/:id", async (c) => {
   return jsonCached(c, {
     playlist,
     songs: songRows.map(songToPlayerSong),
-    likedSongIds: songRows.map((row) => row.id),
+    likedSongIds: await listLikedSongIds(db, user.id),
   });
 });
 
@@ -1939,6 +2016,7 @@ app.post("/api/songs", async (c) => {
         VALUES (${songId}, ${title}, ${artist}, ${album || null}, ${duration}, ${imageUrl}, ${audioUrl}, ${lyricsUrl}, ${audioBitDepth}, ${audioSampleRate}, ${user.id})
         RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
       `;
+  if (!existingSong) await likeSong(db, user.id, songId);
   return c.json(rows[0], existingSong ? 200 : 201);
 });
 
@@ -2025,8 +2103,7 @@ app.post("/api/songs/:id/assets", async (c) => {
 app.get("/api/likes", async (c) => {
   const user = c.get("user");
   if (!user) return jsonCached(c, { likes: [], likedSongIds: [] });
-  const songs = await listSongs(c.get("db"), user.id);
-  const likedSongIds = songs.map((song) => song.id);
+  const likedSongIds = await listLikedSongIds(c.get("db"), user.id);
   return jsonCached(c, { likes: likedSongIds, likedSongIds });
 });
 
@@ -2039,11 +2116,7 @@ app.post("/api/likes", async (c) => {
     SELECT "id" FROM "Song" WHERE "id" = ${songId} AND "userId" = ${user.id} LIMIT 1
   `;
   if (!song[0]) return jsonError("Song not found", 404);
-  await c.get("db")`
-    INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
-    VALUES (${crypto.randomUUID()}, ${user.id}, ${songId}, CURRENT_TIMESTAMP)
-    ON CONFLICT ("userId", "songId") DO NOTHING
-  `;
+  await likeSong(c.get("db"), user.id, songId);
   return c.json({ ok: true });
 });
 
@@ -2056,6 +2129,12 @@ app.delete("/api/likes", async (c) => {
     SELECT "id" FROM "Song" WHERE "id" = ${songId} AND "userId" = ${user.id} LIMIT 1
   `;
   if (!song[0]) return jsonError("Song not found", 404);
+  await ensureLegacyLikedSongsForUser(c.get("db"), user.id);
+  await c.get("db")`
+    DELETE FROM "Like"
+    WHERE "userId" = ${user.id}
+      AND "songId" = ${songId}
+  `;
   return c.json({ ok: true });
 });
 

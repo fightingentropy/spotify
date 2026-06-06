@@ -45,6 +45,15 @@ function requestMediaCache(song: PlayerSong | null): void {
     .catch(() => {});
 }
 
+function isPersistablePlayerSong(song: PlayerSong | null | undefined): song is PlayerSong {
+  return Boolean(
+    song &&
+      !isBrowserLocalSong(song) &&
+      !isRadioSong(song) &&
+      !isPodcastSong(song),
+  );
+}
+
 function finiteMediaDuration(value: number): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -544,7 +553,7 @@ function PlayerBar(): React.ReactElement | null {
       if (normalizeOfflineAccountScope(data.accountScope) !== accountScope) return;
       restoredPlayerStateRef.current = true;
       if (data?.queue && Array.isArray(data.queue) && typeof data.currentIndex === "number") {
-        const restoredQueue = data.queue.filter((song) => !isBrowserLocalSong(song));
+        const restoredQueue = data.queue.filter(isPersistablePlayerSong);
         const restoredSongId = data.queue[data.currentIndex]?.id;
         const idxFromSong = restoredQueue.findIndex((song) => song.id === restoredSongId);
         const idx = idxFromSong >= 0 ? idxFromSong : Math.max(0, Math.min(restoredQueue.length - 1, data.currentIndex));
@@ -556,7 +565,7 @@ function PlayerBar(): React.ReactElement | null {
           savedSeekRef.current = data.currentTime;
           setCurrentTime(data.currentTime);
         }
-      } else if (data?.song) {
+      } else if (isPersistablePlayerSong(data?.song)) {
         setSong(data.song);
         pause();
         if (typeof data.currentTime === "number") {
@@ -578,6 +587,13 @@ function PlayerBar(): React.ReactElement | null {
         const response = await fetch(`/api/songs/${encodeURIComponent(songId)}`, {
           cache: "no-store",
         });
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
+          if (cancelled) return;
+          localStorage.removeItem("spotify_player_state");
+          setQueue([], 0);
+          pause();
+          return;
+        }
         if (!response.ok) return;
         const song = (await response.json()) as PlayerSong;
         if (cancelled || !song?.id || song.id !== songId) return;
@@ -590,7 +606,7 @@ function PlayerBar(): React.ReactElement | null {
     return () => {
       cancelled = true;
     };
-  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, replaceSong]);
+  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, pause, replaceSong, setQueue]);
 
   useEffect(() => {
     if (!currentSongId) {
@@ -798,11 +814,11 @@ function PlayerBar(): React.ReactElement | null {
   useEffect(() => {
     function saveState() {
       try {
-        if (!currentSong || isBrowserLocalSong(currentSong)) {
+        if (!isPersistablePlayerSong(currentSong)) {
           localStorage.removeItem("spotify_player_state");
           return;
         }
-        const persistableQueue = queue.filter((song) => !isBrowserLocalSong(song));
+        const persistableQueue = queue.filter(isPersistablePlayerSong);
         const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
         if (persistableIndex < 0) {
           localStorage.removeItem("spotify_player_state");
@@ -1169,10 +1185,9 @@ function PlayerBar(): React.ReactElement | null {
                 max={Math.max(0, duration)}
                 step={0.1}
                 value={safeCurrentTime}
+                aria-label="Playback position"
                 onChange={(e) => onSeek(Number(e.target.value))}
-                tabIndex={-1}
-                onFocus={(e) => e.currentTarget.blur()}
-                className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
+                className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                 style={{
                   background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
                 }}
@@ -1207,10 +1222,9 @@ function PlayerBar(): React.ReactElement | null {
               max={1}
               step={0.01}
               value={isMuted ? 0 : volume}
+              aria-label="Volume"
               onChange={(e) => setVolume(Number(e.target.value))}
-              tabIndex={-1}
-              onFocus={(e) => e.currentTarget.blur()}
-              className="h-1.5 w-28 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:outline-none"
+              className="h-1.5 w-28 appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             />
           </div>
         </div>

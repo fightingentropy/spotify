@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { CheckCircle2, CircleArrowDown, RefreshCw, X } from "lucide-react";
 import {
   getScopeDownloadState,
@@ -80,6 +81,10 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const actionPendingRef = useRef(false);
+  const confirmTitleId = useId();
+  const confirmDescriptionId = useId();
   const hydrate = useOfflineStore((state) => state.hydrate);
   const record = useOfflineStore((state) => state.records[song.id]);
   const queueDownloads = useOfflineStore((state) => state.queueDownloads);
@@ -94,6 +99,10 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
   }, [hydrate]);
 
   useEffect(() => {
+    actionPendingRef.current = actionPending;
+  }, [actionPending]);
+
+  useEffect(() => {
     if (status !== "downloaded" && confirmOpen) {
       setConfirmOpen(false);
     }
@@ -101,15 +110,24 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
 
   useEffect(() => {
     if (!confirmOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frameId = window.requestAnimationFrame(() => {
+      cancelButtonRef.current?.focus();
+    });
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (actionPendingRef.current) return;
         setConfirmOpen(false);
       }
     }
 
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
   }, [confirmOpen]);
 
   if (!canCacheSong(song)) return null;
@@ -135,8 +153,16 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
 
   async function handleRemoveDownload(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
-    await removeDownload(song.id);
-    setConfirmOpen(false);
+    setActionPending(true);
+    setActionError(null);
+    try {
+      await removeDownload(song.id);
+      setConfirmOpen(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not remove download");
+    } finally {
+      setActionPending(false);
+    }
   }
 
   const title =
@@ -179,48 +205,61 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
         {busy ? <DownloadProgressPie progress={progress} /> : <Icon size={18} />}
       </button>
 
-      {confirmOpen ? (
-        <div
-          className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
-          role="presentation"
-          onClick={(event) => {
-            event.stopPropagation();
-            setConfirmOpen(false);
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Remove download confirmation"
-            className="w-full max-w-sm rounded-2xl border border-white/15 bg-zinc-950 p-5 text-white shadow-[0_20px_80px_rgba(0,0,0,0.65)]"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 className="text-lg font-semibold">Remove download?</h2>
-            <p className="mt-2 text-sm leading-6 text-white/70">
-              This will delete the offline copy of "{song.title}" from this device.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                className="h-10 rounded-full border border-white/20 px-4 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setConfirmOpen(false);
-                }}
+      {confirmOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+              role="presentation"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (actionPending) return;
+                setConfirmOpen(false);
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={confirmTitleId}
+                aria-describedby={confirmDescriptionId}
+                className="w-full max-w-sm rounded-2xl border border-white/15 bg-zinc-950 p-5 text-white shadow-[0_20px_80px_rgba(0,0,0,0.65)]"
+                onClick={(event) => event.stopPropagation()}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="h-10 rounded-full bg-emerald-500 px-4 text-sm font-semibold text-black transition hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-                onClick={handleRemoveDownload}
-              >
-                Remove download
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+                <h2 id={confirmTitleId} className="text-lg font-semibold">Remove download?</h2>
+                <p id={confirmDescriptionId} className="mt-2 text-sm leading-6 text-white/70">
+                  This will delete the offline copy of "{song.title}" from this device.
+                </p>
+                {actionError ? (
+                  <div role="alert" className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                    {actionError}
+                  </div>
+                ) : null}
+                <div className="mt-5 flex justify-end gap-2">
+                  <button
+                    ref={cancelButtonRef}
+                    type="button"
+                    className="h-10 rounded-full border border-white/20 px-4 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+                    disabled={actionPending}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setConfirmOpen(false);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="h-10 rounded-full bg-emerald-500 px-4 text-sm font-semibold text-black transition hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+                    disabled={actionPending}
+                    onClick={handleRemoveDownload}
+                  >
+                    {actionPending ? "Removing..." : "Remove download"}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }
@@ -237,9 +276,16 @@ export function OfflineBulkDownloadButton({
   const records = useOfflineStore((state) => state.records);
   const queueDownloads = useOfflineStore((state) => state.queueDownloads);
   const removeScope = useOfflineStore((state) => state.removeScope);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const actionPendingRef = useRef(false);
+  const confirmTitleId = useId();
+  const confirmDescriptionId = useId();
   const status = getScopeDownloadState(records, songs, scope);
   const cacheableSongs = songs.filter(canCacheSong);
-  const busy = status === "downloading";
+  const busy = actionPending || status === "downloading";
   const downloaded = status === "downloaded";
   const progress = busy ? scopeProgress(records, songs, scope) : 0;
   const progressPercent = Math.round(progress * 100);
@@ -248,50 +294,167 @@ export function OfflineBulkDownloadButton({
     void hydrate();
   }, [hydrate]);
 
+  useEffect(() => {
+    actionPendingRef.current = actionPending;
+  }, [actionPending]);
+
+  useEffect(() => {
+    if (status !== "downloaded" && confirmOpen) {
+      setConfirmOpen(false);
+    }
+  }, [confirmOpen, status]);
+
+  useEffect(() => {
+    if (!confirmOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frameId = window.requestAnimationFrame(() => {
+      cancelButtonRef.current?.focus();
+    });
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        if (actionPendingRef.current) return;
+        setConfirmOpen(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [confirmOpen]);
+
   if (downloaded && hideWhenDownloaded) return null;
 
   async function handleClick() {
     if (busy || cacheableSongs.length === 0) return;
+    setActionError(null);
     if (downloaded) {
-      await removeScope(scope);
+      setConfirmOpen(true);
       return;
     }
-    await queueDownloads(cacheableSongs, scope);
+    setActionPending(true);
+    try {
+      await queueDownloads(cacheableSongs, scope);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not start downloads");
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  async function handleRemoveScope(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setActionPending(true);
+    setActionError(null);
+    try {
+      await removeScope(scope);
+      setConfirmOpen(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not remove downloads");
+    } finally {
+      setActionPending(false);
+    }
   }
 
   const Icon = downloaded ? X : status === "failed" ? RefreshCw : CircleArrowDown;
-  const text = downloaded
-    ? "Remove downloads"
-    : status === "failed"
-      ? "Retry downloads"
-      : status === "partial"
-        ? "Finish download"
-        : busy
-          ? `Downloading ${progressPercent}%`
-          : label;
+  const text = actionError
+    ? "Retry downloads"
+    : downloaded
+      ? "Remove downloads"
+      : status === "failed"
+        ? "Retry downloads"
+        : status === "partial"
+          ? "Finish download"
+          : busy
+            ? `Downloading ${progressPercent}%`
+            : label;
+  const title = actionError || text;
 
   return (
-    <button
-      type="button"
-      aria-label={text}
-      title={text}
-      disabled={busy || cacheableSongs.length === 0}
-      onClick={handleClick}
-      className={cn(
-        iconOnly
-          ? "grid h-11 w-11 place-items-center rounded-full"
-          : "inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm font-medium",
-        "shrink-0 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-        downloaded
-          ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20"
-          : "bg-white/[0.08] text-white/[0.78] hover:bg-white/[0.12] hover:text-white",
-        busy && "cursor-wait text-emerald-300",
-        cacheableSongs.length === 0 && "cursor-wait opacity-70",
-        className,
-      )}
-    >
-      {busy ? <DownloadProgressPie progress={progress} size={iconOnly ? 24 : 17} /> : <Icon size={iconOnly ? 24 : 17} />}
-      {!iconOnly ? <span>{text}</span> : null}
-    </button>
+    <>
+      <button
+        type="button"
+        aria-label={title}
+        title={title}
+        disabled={busy || cacheableSongs.length === 0}
+        onClick={handleClick}
+        className={cn(
+          iconOnly
+            ? "grid h-11 w-11 place-items-center rounded-full"
+            : "inline-flex h-10 items-center gap-2 rounded-full px-3 text-sm font-medium",
+          "shrink-0 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+          downloaded
+            ? "bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20"
+            : actionError
+              ? "bg-red-500/15 text-red-300 hover:bg-red-500/20"
+              : "bg-white/[0.08] text-white/[0.78] hover:bg-white/[0.12] hover:text-white",
+          busy && "cursor-wait text-emerald-300",
+          cacheableSongs.length === 0 && "cursor-wait opacity-70",
+          className,
+        )}
+      >
+        {busy ? <DownloadProgressPie progress={progress} size={iconOnly ? 24 : 17} /> : <Icon size={iconOnly ? 24 : 17} />}
+        {!iconOnly ? <span>{text}</span> : null}
+      </button>
+
+      {confirmOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[90] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+              role="presentation"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (actionPending) return;
+                setConfirmOpen(false);
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={confirmTitleId}
+                aria-describedby={confirmDescriptionId}
+                className="w-full max-w-sm rounded-2xl border border-white/15 bg-zinc-950 p-5 text-white shadow-[0_20px_80px_rgba(0,0,0,0.65)]"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h2 id={confirmTitleId} className="text-lg font-semibold">Remove downloads?</h2>
+                <p id={confirmDescriptionId} className="mt-2 text-sm leading-6 text-white/70">
+                  This will remove offline copies for this collection from this device.
+                </p>
+                {actionError ? (
+                  <div role="alert" className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                    {actionError}
+                  </div>
+                ) : null}
+                <div className="mt-5 flex justify-end gap-2">
+                  <button
+                    ref={cancelButtonRef}
+                    type="button"
+                    className="h-10 rounded-full border border-white/20 px-4 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+                    disabled={actionPending}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setConfirmOpen(false);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="h-10 rounded-full bg-emerald-500 px-4 text-sm font-semibold text-black transition hover:bg-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+                    disabled={actionPending}
+                    onClick={handleRemoveScope}
+                  >
+                    {actionPending ? "Removing..." : "Remove downloads"}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }

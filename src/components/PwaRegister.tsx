@@ -8,6 +8,10 @@ const APP_ASSETS_CACHE = "spotify-app-assets-v1";
 const OFFLINE_ASSETS_MANIFEST_URL = "/offline-assets.json";
 const watchedRegistrations = new WeakSet<ServiceWorkerRegistration>();
 
+function isDevelopmentAppCache(cacheName: string): boolean {
+  return cacheName.startsWith("spotify-v") || cacheName === APP_ASSETS_CACHE;
+}
+
 function isNativeCapacitorApp(): boolean {
   const capacitor = (window as Window & {
     Capacitor?: { isNativePlatform?: () => boolean };
@@ -77,9 +81,33 @@ async function warmAppAssetsFromPage(): Promise<void> {
   } catch {}
 }
 
+async function resetDevelopmentServiceWorkers(): Promise<void> {
+  if (!("serviceWorker" in navigator)) return;
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const results = await Promise.all(registrations.map((registration) => registration.unregister()));
+
+  if (typeof caches !== "undefined") {
+    const cacheNames = await caches.keys();
+    await Promise.all(
+      cacheNames
+        .filter(isDevelopmentAppCache)
+        .map((cacheName) => caches.delete(cacheName)),
+    );
+  }
+
+  if (hadController && results.some(Boolean)) {
+    window.location.reload();
+  }
+}
+
 export default function PwaRegister() {
   useEffect(() => {
     if (isNativeCapacitorApp()) return;
+    if (import.meta.env.DEV) {
+      void resetDevelopmentServiceWorkers().catch(() => undefined);
+      return;
+    }
     if (!("serviceWorker" in navigator)) return;
 
     let lastUpdateCheck = 0;

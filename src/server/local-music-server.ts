@@ -52,16 +52,23 @@ type RequestUserIdentity = {
 };
 
 type PersistentSongCache = {
-  version: 1;
+  version: number;
   root: string;
   entries: Record<
     string,
     {
       size: number;
       mtimeMs: number;
+      sidecarMtimeMs?: number;
       song: PlayerSong;
     }
   >;
+};
+
+type PersistentLikesCache = {
+  version: 1;
+  root: string;
+  likedSongIds: string[];
 };
 
 type LocalSidecar = {
@@ -96,7 +103,8 @@ const AUDIO_EXTENSIONS = new Set([
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const LYRICS_EXTENSIONS = new Set([".lrc", ".txt"]);
-const SCAN_CACHE_VERSION = 1;
+const SCAN_CACHE_VERSION = 2;
+const LIKES_CACHE_VERSION = 1;
 const ARTWORK_CACHE_VERSION = 2;
 const LOCAL_USER = {
   id: "local-mac-mini",
@@ -959,9 +967,13 @@ async function readCachedLibrarySnapshot(source: LibrarySource): Promise<Library
 function cachedStatMatches(
   cached: PersistentSongCache["entries"][string] | undefined,
   fileStat: Stats,
+  sidecarMtimeMs: number | undefined,
 ): cached is PersistentSongCache["entries"][string] {
   if (!cached || cached.size !== fileStat.size) return false;
-  return Math.trunc(cached.mtimeMs) === Math.trunc(fileStat.mtimeMs);
+  return (
+    Math.trunc(cached.mtimeMs) === Math.trunc(fileStat.mtimeMs) &&
+    Math.trunc(cached.sidecarMtimeMs ?? 0) === Math.trunc(sidecarMtimeMs ?? 0)
+  );
 }
 
 async function scanLibrary(source: LibrarySource, usePersistentCache = true): Promise<LibrarySnapshot> {
@@ -981,15 +993,19 @@ async function scanLibrary(source: LibrarySource, usePersistentCache = true): Pr
 
   const entries = await mapWithConcurrency(files, 8, async (file) => {
     const fileStat = await stat(file.absolutePath);
+    const sidecarMtimeMs = await stat(sidecarPathForAudio(file.absolutePath))
+      .then((sidecarStat) => sidecarStat.mtimeMs)
+      .catch(() => undefined);
     const cached = previous.entries[file.relativePath];
     const song =
-      cachedStatMatches(cached, fileStat)
+      cachedStatMatches(cached, fileStat, sidecarMtimeMs)
         ? cached.song
         : await songFromFile(source, file.relativePath, file.absolutePath, fileStat, directoryCache);
 
     nextCache.entries[file.relativePath] = {
       size: fileStat.size,
       mtimeMs: fileStat.mtimeMs,
+      sidecarMtimeMs,
       song,
     };
 
@@ -1171,8 +1187,71 @@ function librarySourceForMediaRequest(request: Request, url: URL): LibrarySource
   return scope === "shared" ? sharedLibrarySource() : userLibrarySource(userId);
 }
 
-function likedSongIdsForSongs(songs: PlayerSong[]): string[] {
-  return songs.map((song) => song.id);
+function likesCachePath(source: LibrarySource): string {
+  return resolve(dirname(source.cachePath), "local-music-likes.json");
+}
+
+function visibleSongIds(songs: PlayerSong[]): Set<string> {
+  return new Set(songs.map((song) => song.id));
+}
+
+function filterVisibleLikedSongIds(ids: Iterable<string>, songs: PlayerSong[]): string[] {
+  const visible = visibleSongIds(songs);
+  return Array.from(new Set(ids)).filter((id) => visible.has(id));
+}
+
+async function writePersistentLikes(source: LibrarySource, likedSongIds: Iterable<string>): Promise<void> {
+  const path = likesCachePath(source);
+  const cache: PersistentLikesCache = {
+    version: LIKES_CACHE_VERSION,
+    root: source.root,
+    likedSongIds: Array.from(new Set(likedSongIds)),
+  };
+  await mkdir(dirname(path), { recursive: true });
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(cache)}\n`, "utf8");
+  await rename(tempPath, path);
+}
+
+async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]): Promise<string[]> {
+  try {
+    const raw = await readFile(likesCachePath(source), "utf8");
+    const parsed = JSON.parse(raw) as Partial<PersistentLikesCache> | null;
+    if (
+      parsed?.version === LIKES_CACHE_VERSION &&
+      parsed.root === source.root &&
+      Array.isArray(parsed.likedSongIds)
+    ) {
+      return filterVisibleLikedSongIds(
+        parsed.likedSongIds.filter((id): id is string => typeof id === "string"),
+        songs,
+      );
+    }
+  } catch {}
+
+  const legacyLikedSongIds = songs.map((song) => song.id);
+  await writePersistentLikes(source, legacyLikedSongIds).catch(() => {});
+  return legacyLikedSongIds;
+}
+
+async function setSongLikedForSource(
+  source: LibrarySource,
+  songs: PlayerSong[],
+  songId: string,
+  nextLiked: boolean,
+): Promise<string[] | null> {
+  const visible = visibleSongIds(songs);
+  if (!visible.has(songId)) return null;
+  const liked = new Set(await likedSongIdsForSongs(source, songs));
+  if (nextLiked) liked.add(songId);
+  else liked.delete(songId);
+  const likedSongIds = filterVisibleLikedSongIds(liked, songs);
+  await writePersistentLikes(source, likedSongIds);
+  return likedSongIds;
+}
+
+async function markSongLikedForSource(source: LibrarySource, songs: PlayerSong[], songId: string): Promise<void> {
+  await setSongLikedForSource(source, songs, songId, true).catch(() => {});
 }
 
 async function readJsonBody<T>(request: Request): Promise<T | null> {
@@ -1186,7 +1265,7 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
 async function handleLikes(request: Request): Promise<Response> {
   const source = librarySourceForRequest(request);
   const visibleSongs = source ? songsForRequest((await getLibrary(source)).songs, request) : [];
-  const likedSongIds = likedSongIdsForSongs(visibleSongs);
+  const likedSongIds = source ? await likedSongIdsForSongs(source, visibleSongs) : [];
 
   if (request.method === "GET") {
     return jsonCached(request, { likes: likedSongIds, likedSongIds });
@@ -1199,9 +1278,10 @@ async function handleLikes(request: Request): Promise<Response> {
   const payload = await readJsonBody<{ songId?: unknown }>(request);
   const songId = typeof payload?.songId === "string" ? payload.songId : "";
   if (!songId) return json({ error: "Song id is required" }, { status: 400 });
-  if (!likedSongIds.includes(songId)) return notFound("Song not found");
+  const nextLikedSongIds = await setSongLikedForSource(source, visibleSongs, songId, request.method === "POST");
+  if (!nextLikedSongIds) return notFound("Song not found");
 
-  return json({ ok: true, likes: likedSongIds, likedSongIds });
+  return json({ ok: true, likes: nextLikedSongIds, likedSongIds: nextLikedSongIds });
 }
 
 function sanitizeFileName(value: string): string {
@@ -1485,6 +1565,7 @@ async function handleRemoteSongUpload(payload: {
   const relativePath = relative(source.root, audioPath).split(sep).join("/");
   const entry = nextSnapshot.entriesByPath.get(relativePath);
   if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
+  if (!existingEntry) await markSongLikedForSource(source, nextSnapshot.songs, entry.song.id);
   return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
@@ -1559,6 +1640,7 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
   const relativePath = relative(source.root, audioPath).split(sep).join("/");
   const entry = snapshot.entriesByPath.get(relativePath);
   if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
+  await markSongLikedForSource(source, snapshot.songs, entry.song.id);
   return json(entry.song, { status: 201 });
 }
 
@@ -1878,7 +1960,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const songs = songsForRequest(snapshot.songs, request);
     return jsonCached(request, {
       songs,
-      likedSongIds: likedSongIdsForSongs(songs),
+      likedSongIds: await likedSongIdsForSongs(source, songs),
     });
   }
 
@@ -1915,9 +1997,11 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     if (!source) return forbiddenLibraryResponse();
     const snapshot = await getLibrary(source);
     const songs = songsForRequest(snapshot.songs, request);
+    const likedSongIds = await likedSongIdsForSongs(source, songs);
+    const likedLookup = new Set(likedSongIds);
     return jsonCached(request, {
-      songs,
-      likedSongIds: likedSongIdsForSongs(songs),
+      songs: songs.filter((song) => likedLookup.has(song.id)),
+      likedSongIds,
     });
   }
 

@@ -138,14 +138,24 @@ async function waitForServiceWorkerControl(): Promise<void> {
 
 async function prefetchRouteModules(): Promise<void> {
   await waitForServiceWorkerControl();
-  await Promise.all(
-    ROUTE_PREFETCHERS.map(async (load) => {
-      if (prefetchedRouteModules.has(load)) return;
-      try {
-        await load();
-        prefetchedRouteModules.add(load);
-      } catch {}
-    }),
+  for (const load of ROUTE_PREFETCHERS) {
+    if (prefetchedRouteModules.has(load)) continue;
+    try {
+      await load();
+      prefetchedRouteModules.add(load);
+    } catch {}
+  }
+}
+
+function shouldSkipRoutePrefetch(): boolean {
+  if (navigator.onLine === false) return true;
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  return Boolean(
+    connection?.saveData ||
+      connection?.effectiveType === "slow-2g" ||
+      connection?.effectiveType === "2g",
   );
 }
 
@@ -156,7 +166,7 @@ function useIdleRoutePrefetch() {
     let cancelled = false;
     const prefetch = () => {
       if (cancelled) return;
-      if (navigator.onLine === false) return;
+      if (shouldSkipRoutePrefetch()) return;
       void prefetchRouteModules();
     };
     const idleWindow = window as unknown as {
@@ -177,7 +187,7 @@ function useIdleRoutePrefetch() {
 
     const schedulePrefetch = () => {
       clearScheduledPrefetch();
-      if (navigator.onLine === false) return;
+      if (shouldSkipRoutePrefetch()) return;
       if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
         idleHandle = idleWindow.requestIdleCallback(prefetch, { timeout: ROUTE_PREFETCH_IDLE_TIMEOUT_MS });
       } else {

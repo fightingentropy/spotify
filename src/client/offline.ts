@@ -129,8 +129,9 @@ type OfflineState = {
 };
 
 const DB_NAME = "spotify_offline_v1";
-const DB_VERSION = 2;
-const DOWNLOAD_STORE = "downloads";
+const DB_VERSION = 3;
+const LEGACY_DOWNLOAD_STORE = "downloads";
+const DOWNLOAD_STORE = "downloads_v2";
 const API_SNAPSHOT_STORE = "api_snapshots";
 const MUTATION_STORE = "mutations";
 const DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT = "accountScope_updatedAt";
@@ -178,6 +179,23 @@ function randomId(): string {
 export function normalizeOfflineAccountScope(scope: string | null | undefined): string {
   const value = scope?.trim();
   return value && value !== "loading" ? value : "anonymous";
+}
+
+function downloadRecordKey(
+  songId: string,
+  scope: string | null | undefined = currentOfflineAccountScope,
+): IDBValidKey {
+  return [normalizeOfflineAccountScope(scope), songId];
+}
+
+function scopedDownloadRecord(
+  record: OfflineDownloadRecord,
+  fallbackScope: string | null | undefined = currentOfflineAccountScope,
+): OfflineDownloadRecord {
+  return {
+    ...record,
+    accountScope: normalizeOfflineAccountScope(record.accountScope ?? fallbackScope),
+  };
 }
 
 function readStoredOfflineAccountScope(): string {
@@ -296,6 +314,47 @@ function ensureDownloadIndexes(store: IDBObjectStore): void {
   }
 }
 
+function rawStoreCount(db: IDBDatabase, storeName: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readonly");
+    const request = tx.objectStore(storeName).count();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error(`Failed to count ${storeName}`));
+    tx.onerror = () => reject(tx.error ?? new Error(`Failed to count ${storeName}`));
+  });
+}
+
+function rawStoreGetAll<T>(db: IDBDatabase, storeName: string): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readonly");
+    const request = tx.objectStore(storeName).getAll();
+    request.onsuccess = () => resolve(request.result as T[]);
+    request.onerror = () => reject(request.error ?? new Error(`Failed to read ${storeName}`));
+    tx.onerror = () => reject(tx.error ?? new Error(`Failed to read ${storeName}`));
+  });
+}
+
+function rawStorePutAll<T>(db: IDBDatabase, storeName: string, values: T[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
+    for (const value of values) store.put(value);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error(`Failed to write ${storeName}`));
+    tx.onabort = () => reject(tx.error ?? new Error(`Failed to write ${storeName}`));
+  });
+}
+
+async function migrateLegacyDownloadStore(db: IDBDatabase): Promise<void> {
+  if (!db.objectStoreNames.contains(LEGACY_DOWNLOAD_STORE) || !db.objectStoreNames.contains(DOWNLOAD_STORE)) return;
+  if ((await rawStoreCount(db, DOWNLOAD_STORE).catch(() => 0)) > 0) return;
+  const legacyRecords = await rawStoreGetAll<OfflineDownloadRecord>(db, LEGACY_DOWNLOAD_STORE).catch(() => []);
+  const migrated = legacyRecords
+    .filter((record) => record && typeof record.songId === "string" && record.songId.length > 0)
+    .map((record) => scopedDownloadRecord(record));
+  if (migrated.length > 0) await rawStorePutAll(db, DOWNLOAD_STORE, migrated);
+}
+
 function openOfflineDb(): Promise<IDBDatabase> {
   if (!hasIndexedDb()) return Promise.reject(new Error("IndexedDB is not available"));
   dbPromise ??= new Promise((resolve, reject) => {
@@ -304,7 +363,7 @@ function openOfflineDb(): Promise<IDBDatabase> {
       const db = request.result;
       let downloadStore: IDBObjectStore | null = null;
       if (!db.objectStoreNames.contains(DOWNLOAD_STORE)) {
-        downloadStore = db.createObjectStore(DOWNLOAD_STORE, { keyPath: "songId" });
+        downloadStore = db.createObjectStore(DOWNLOAD_STORE, { keyPath: ["accountScope", "songId"] });
       } else {
         downloadStore = request.transaction?.objectStore(DOWNLOAD_STORE) ?? null;
       }
@@ -316,8 +375,24 @@ function openOfflineDb(): Promise<IDBDatabase> {
         db.createObjectStore(MUTATION_STORE, { keyPath: "id" });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("Failed to open offline database"));
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      migrateLegacyDownloadStore(db)
+        .catch(() => undefined)
+        .then(() => resolve(db));
+    };
+    request.onerror = () => {
+      dbPromise = null;
+      reject(request.error ?? new Error("Failed to open offline database"));
+    };
+    request.onblocked = () => {
+      dbPromise = null;
+      reject(new Error("Offline database upgrade is blocked by another tab"));
+    };
   });
   return dbPromise;
 }
@@ -480,7 +555,8 @@ async function idbClear(storeName: string): Promise<void> {
 function recordsById(records: OfflineDownloadRecord[]): Record<string, OfflineDownloadRecord> {
   const map: Record<string, OfflineDownloadRecord> = {};
   for (const record of records) {
-    map[record.songId] = record;
+    const scoped = scopedDownloadRecord(record);
+    map[scoped.songId] = scoped;
   }
   return map;
 }
@@ -940,22 +1016,24 @@ async function verifyOrRepairRecord(record: OfflineDownloadRecord): Promise<{
     ...record,
     verifiedAt: now(),
   };
-  await idbPut(DOWNLOAD_STORE, verifiedRecord).catch(() => undefined);
+  await persistRecord(verifiedRecord).catch(() => undefined);
   return { ok: true, record: verifiedRecord };
 }
 
 function setRecordState(record: OfflineDownloadRecord): void {
+  const scoped = scopedDownloadRecord(record);
   useOfflineStore.setState((state) => ({
     records: capRecordsInMemory({
       ...state.records,
-      [record.songId]: record,
+      [scoped.songId]: scoped,
     }),
   }));
 }
 
 async function persistRecord(record: OfflineDownloadRecord): Promise<void> {
-  await idbPut(DOWNLOAD_STORE, record);
-  setRecordState(record);
+  const scoped = scopedDownloadRecord(record);
+  await idbPut(DOWNLOAD_STORE, scoped);
+  setRecordState(scoped);
 }
 
 async function readDownloadRecordsByStatus(
@@ -1017,7 +1095,7 @@ async function readPriorityQueuedDownloadRecord(): Promise<OfflineDownloadRecord
   while (priorityDownloadQueue.length > 0) {
     const songId = priorityDownloadQueue.shift();
     if (!songId) continue;
-    const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, songId).catch(() => undefined);
+    const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, downloadRecordKey(songId)).catch(() => undefined);
     if (!record || record.status !== "queued" || !isOfflineRecordForAccount(record)) continue;
     return record;
   }
@@ -1038,7 +1116,7 @@ async function quarantineForeignQueuedDownloadRecord(
     error: "Download was queued on another device. Tap download to save it here.",
     updatedAt: now(),
   };
-  await idbPut(DOWNLOAD_STORE, quarantined).catch(() => undefined);
+  await idbPut(DOWNLOAD_STORE, scopedDownloadRecord(quarantined)).catch(() => undefined);
   return quarantined;
 }
 
@@ -1064,7 +1142,7 @@ async function requeueInterruptedDownloadRecords(
         error: undefined,
         updatedAt: timestamp,
       };
-      await idbPut(DOWNLOAD_STORE, queued).catch(() => undefined);
+      await idbPut(DOWNLOAD_STORE, scopedDownloadRecord(queued)).catch(() => undefined);
       return queued;
     }),
   );
@@ -1696,7 +1774,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     const queuedSongIds: string[] = [];
     for (const song of songs) {
       if (!canCacheSong(song)) continue;
-      const existing = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, song.id).catch(() => undefined);
+      const existing = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, downloadRecordKey(song.id, accountScope)).catch(() => undefined);
       const current = isOfflineRecordForAccount(existing, accountScope) ? existing : undefined;
       const pinnedBy = Array.from(new Set([...(current?.pinnedBy ?? []), scope]));
       const record: OfflineDownloadRecord = {
@@ -1726,13 +1804,13 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     await get().refreshStorage();
   },
   removeDownload: async (songId) => {
-    const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, songId).catch(() => undefined);
+    const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, downloadRecordKey(songId)).catch(() => undefined);
     if (record && !isOfflineRecordForAccount(record)) return;
     if (record) {
       await deleteCachedUrls(songAssetUrls(record.song));
       await deleteNativeOfflineFiles(record.nativeFiles);
     }
-    await idbDelete(DOWNLOAD_STORE, songId).catch(() => undefined);
+    await idbDelete(DOWNLOAD_STORE, downloadRecordKey(songId)).catch(() => undefined);
     set((state) => {
       const records = { ...state.records };
       delete records[songId];
@@ -1775,7 +1853,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
       records.map(async (record) => {
         await deleteCachedUrls(songAssetUrls(record.song));
         await deleteNativeOfflineFiles(record.nativeFiles);
-        await idbDelete(DOWNLOAD_STORE, record.songId).catch(() => undefined);
+        await idbDelete(DOWNLOAD_STORE, downloadRecordKey(record.songId, record.accountScope)).catch(() => undefined);
       }),
     );
     set({ records: {} });

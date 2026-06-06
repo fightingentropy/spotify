@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-export const DOWNLOAD_QUALITY_PROFILE_KEY = "spotify_download_quality_profile";
-export const DOWNLOAD_PROVIDER_KEY = "spotify_download_provider";
-
-type QualityProfile = "cd" | "hires48" | "max";
-export type DownloadProvider = "auto" | "qobuz" | "tidal";
+import {
+  DOWNLOAD_PROVIDER_KEY,
+  DOWNLOAD_QUALITY_PROFILE_KEY,
+  isDownloadProvider,
+  isDownloadQualityProfile,
+  type DownloadProvider,
+  type DownloadQualityProfile,
+} from "@/lib/download-settings";
 
 const QUALITY_OPTIONS: Array<{
-  value: QualityProfile;
+  value: DownloadQualityProfile;
   label: string;
   note: string;
 }> = [
@@ -52,22 +54,14 @@ const PROVIDER_OPTIONS: Array<{
   },
 ];
 
-function isQualityProfile(value: string): value is QualityProfile {
-  return value === "cd" || value === "hires48" || value === "max";
-}
-
-export function isDownloadProvider(value: string): value is DownloadProvider {
-  return value === "auto" || value === "qobuz" || value === "tidal";
-}
-
 export default function DownloadQualitySettings() {
-  const [qualityProfile, setQualityProfile] = useState<QualityProfile>("max");
+  const [qualityProfile, setQualityProfile] = useState<DownloadQualityProfile>("max");
   const [downloadProvider, setDownloadProvider] = useState<DownloadProvider>("auto");
 
   useEffect(() => {
     try {
       const stored = localStorage.getItem(DOWNLOAD_QUALITY_PROFILE_KEY);
-      if (stored && isQualityProfile(stored)) {
+      if (stored && isDownloadQualityProfile(stored)) {
         setQualityProfile(stored);
       }
       const storedProvider = localStorage.getItem(DOWNLOAD_PROVIDER_KEY);
@@ -94,8 +88,9 @@ export default function DownloadQualitySettings() {
       <h2 className="text-lg font-medium mb-2">Downloads</h2>
       <div className="rounded border border-black/10 dark:border-white/10 p-4 space-y-4">
         <div className="space-y-2">
-          <label className="block text-sm opacity-80">Provider</label>
+          <label htmlFor="download-provider" className="block text-sm opacity-80">Provider</label>
           <select
+            id="download-provider"
             value={downloadProvider}
             onChange={(e) => {
               const next = e.target.value;
@@ -115,12 +110,13 @@ export default function DownloadQualitySettings() {
         </div>
 
         <div className="space-y-2">
-          <label className="block text-sm opacity-80">Quality profile</label>
+          <label htmlFor="download-quality-profile" className="block text-sm opacity-80">Quality profile</label>
           <select
+            id="download-quality-profile"
             value={qualityProfile}
             onChange={(e) => {
               const next = e.target.value;
-              if (isQualityProfile(next)) setQualityProfile(next);
+              if (isDownloadQualityProfile(next)) setQualityProfile(next);
             }}
             className="h-10 w-full md:w-[280px] rounded-xl border border-black/15 dark:border-white/15 bg-transparent px-3"
           >

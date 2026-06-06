@@ -65,6 +65,7 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
         />
         <input
           type="search"
+          aria-label="Search songs"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="What do you want to play?"

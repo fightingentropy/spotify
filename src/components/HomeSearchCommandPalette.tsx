@@ -146,6 +146,9 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       {open ? (
         <div className="fixed inset-0 z-[70] bg-black/70 p-4 backdrop-blur-sm sm:p-8" onClick={() => setOpen(false)}>
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search songs"
             className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-3xl border border-white/15 bg-zinc-950/95 shadow-2xl sm:mt-16"
             onClick={(event) => event.stopPropagation()}
           >
@@ -153,6 +156,11 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
               <Search size={18} className="text-foreground/60" />
               <input
                 ref={inputRef}
+                type="search"
+                aria-label="Search songs"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="What do you want to play?"

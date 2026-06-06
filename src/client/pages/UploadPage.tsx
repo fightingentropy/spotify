@@ -9,8 +9,10 @@ import {
   DOWNLOAD_PROVIDER_KEY,
   DOWNLOAD_QUALITY_PROFILE_KEY,
   isDownloadProvider,
+  isDownloadQualityProfile,
   type DownloadProvider,
-} from "@/components/DownloadQualitySettings";
+  type DownloadQualityProfile,
+} from "@/lib/download-settings";
 import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
 import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
@@ -29,7 +31,6 @@ type SpotifyTrack = {
 };
 
 type ActionStatus = "idle" | "loading" | "success" | "error";
-type QualityProfile = "cd" | "hires48" | "max";
 type OutputFormat = "flac" | "mp3" | "aac" | "ogg" | "opus" | "wav";
 type BatchType = "track" | "album" | "playlist";
 type PendingImportPayload = { lyricsToInclude: string };
@@ -197,7 +198,7 @@ export default function UploadPage() {
   const [lyricsText, setLyricsText] = useState("");
   const [fetchStatus, setFetchStatus] = useState<ActionStatus>("idle");
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
-  const [qualityProfile, setQualityProfile] = useState<QualityProfile>("max");
+  const [qualityProfile, setQualityProfile] = useState<DownloadQualityProfile>("max");
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("flac");
   const [downloadProvider, setDownloadProvider] = useState<DownloadProvider>("auto");
   const [showReplaceModal, setShowReplaceModal] = useState(false);
@@ -239,7 +240,7 @@ export default function UploadPage() {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(DOWNLOAD_QUALITY_PROFILE_KEY);
-      if (stored === "cd" || stored === "hires48" || stored === "max") setQualityProfile(stored);
+      if (stored && isDownloadQualityProfile(stored)) setQualityProfile(stored);
       const storedProvider = localStorage.getItem(DOWNLOAD_PROVIDER_KEY);
       if (storedProvider && isDownloadProvider(storedProvider)) setDownloadProvider(storedProvider);
     } catch {}
@@ -249,12 +250,13 @@ export default function UploadPage() {
     const urlParam = params.get("url");
     const autostart = params.get("autostart") === "1";
     if (cookieParam) writeSpotifyCookie(cookieParam);
-    if (urlParam) setSpotifyUrl(decodeURIComponent(urlParam));
+    if (urlParam) setSpotifyUrl(urlParam);
     if (autostart && urlParam) {
       autoStartRef.current = "download";
-      window.history.replaceState({}, "", "/upload");
     } else if (urlParam) {
       autoStartRef.current = "fetch";
+    }
+    if (cookieParam || urlParam) {
       window.history.replaceState({}, "", "/upload");
     }
   }, []);
@@ -1179,10 +1181,10 @@ export default function UploadPage() {
     <div className="max-w-5xl mx-auto py-12 px-4">
       <h1 className="text-2xl font-semibold mb-6">Add a song</h1>
       <div className="mb-8 inline-flex rounded-2xl border border-white/25 bg-white/[0.02] p-1.5">
-        <button type="button" onClick={() => { setError(null); setMode("spotify"); }} className={`h-10 px-5 rounded-xl text-sm font-medium transition-colors ${mode === "spotify" ? "bg-foreground text-background" : "text-foreground/80 hover:text-foreground"}`}>
+        <button type="button" aria-pressed={mode === "spotify"} onClick={() => { setError(null); setMode("spotify"); }} className={`h-10 px-5 rounded-xl text-sm font-medium transition-colors ${mode === "spotify" ? "bg-foreground text-background" : "text-foreground/80 hover:text-foreground"}`}>
           Spotify link
         </button>
-        <button type="button" onClick={() => { setError(null); setMode("upload"); }} className={`h-10 px-5 rounded-xl text-sm font-medium transition-colors ${mode === "upload" ? "bg-foreground text-background" : "text-foreground/80 hover:text-foreground"}`}>
+        <button type="button" aria-pressed={mode === "upload"} onClick={() => { setError(null); setMode("upload"); }} className={`h-10 px-5 rounded-xl text-sm font-medium transition-colors ${mode === "upload" ? "bg-foreground text-background" : "text-foreground/80 hover:text-foreground"}`}>
           Upload files
         </button>
       </div>
@@ -1191,26 +1193,26 @@ export default function UploadPage() {
         <form onSubmit={onUploadSubmit} className="max-w-2xl rounded-3xl border border-white/20 bg-white/[0.02] p-6 md:p-7 space-y-5">
           <div className="grid gap-5 md:grid-cols-2">
             <div>
-              <label className="block text-sm mb-2 text-foreground/80">Title</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" required />
+              <label htmlFor="upload-title" className="block text-sm mb-2 text-foreground/80">Title</label>
+              <input id="upload-title" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" required />
             </div>
             <div>
-              <label className="block text-sm mb-2 text-foreground/80">Artist</label>
-              <input value={artist} onChange={(e) => setArtist(e.target.value)} className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" required />
+              <label htmlFor="upload-artist" className="block text-sm mb-2 text-foreground/80">Artist</label>
+              <input id="upload-artist" value={artist} onChange={(e) => setArtist(e.target.value)} className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" required />
             </div>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <label className="rounded-2xl border border-dashed border-white/30 bg-black/20 p-4 cursor-pointer hover:border-yellow-500/60 transition-colors">
+            <label className="rounded-2xl border border-dashed border-white/30 bg-black/20 p-4 cursor-pointer transition-colors hover:border-yellow-500/60 focus-within:border-yellow-500/60 focus-within:ring-2 focus-within:ring-yellow-500/50">
               <span className="block text-sm font-medium">Cover image</span>
               <span className="block text-xs text-foreground/60 mt-1">JPG, PNG, WEBP</span>
               <span className="mt-3 inline-block text-xs px-2.5 py-1 rounded-lg bg-white/10">{image ? image.name : "Choose image file"}</span>
-              <input type="file" accept="image/*" onChange={(e) => setImage(e.target.files?.[0] ?? null)} className="hidden" />
+              <input type="file" accept="image/*" aria-label="Cover image file" onChange={(e) => setImage(e.target.files?.[0] ?? null)} className="sr-only" />
             </label>
-            <label className="rounded-2xl border border-dashed border-white/30 bg-black/20 p-4 cursor-pointer hover:border-yellow-500/60 transition-colors">
+            <label className="rounded-2xl border border-dashed border-white/30 bg-black/20 p-4 cursor-pointer transition-colors hover:border-yellow-500/60 focus-within:border-yellow-500/60 focus-within:ring-2 focus-within:ring-yellow-500/50">
               <span className="block text-sm font-medium">Audio file</span>
               <span className="block text-xs text-foreground/60 mt-1">FLAC, MP3, WAV</span>
               <span className="mt-3 inline-block text-xs px-2.5 py-1 rounded-lg bg-white/10">{audio ? audio.name : "Choose audio file"}</span>
-              <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} className="hidden" />
+              <input type="file" accept="audio/*" aria-label="Audio file" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} className="sr-only" />
             </label>
           </div>
           {error && <div className="text-sm text-red-500">{error}</div>}
@@ -1222,8 +1224,8 @@ export default function UploadPage() {
       ) : (
         <div className="space-y-5">
           <div className="flex flex-col md:flex-row gap-3">
-            <input value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="Spotify playlist, album, or Liked Songs URL" />
-            <select value={region} onChange={(e) => setRegion(e.target.value.toUpperCase())} className="w-full md:w-24 border border-white/25 rounded-2xl px-3 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50">
+            <input aria-label="Spotify URL" value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="Spotify playlist, album, or Liked Songs URL" />
+            <select aria-label="Spotify region" value={region} onChange={(e) => setRegion(e.target.value.toUpperCase())} className="w-full md:w-24 border border-white/25 rounded-2xl px-3 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50">
               <option value="US">US</option>
               <option value="GB">GB</option>
               <option value="DE">DE</option>
@@ -1243,8 +1245,9 @@ export default function UploadPage() {
               <h3 className="text-lg font-semibold">Download Settings</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-sm mb-2 text-foreground/80">Output Format</label>
+                  <label htmlFor="upload-output-format" className="block text-sm mb-2 text-foreground/80">Output Format</label>
                   <select
+                    id="upload-output-format"
                     value={requestedOutputFormat}
                     onChange={(e) => setOutputFormat(e.target.value as OutputFormat)}
                     className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
@@ -1258,10 +1261,11 @@ export default function UploadPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm mb-2 text-foreground/80">Quality Profile</label>
+                  <label htmlFor="upload-quality-profile" className="block text-sm mb-2 text-foreground/80">Quality Profile</label>
                   <select
+                    id="upload-quality-profile"
                     value={qualityProfile}
-                    onChange={(e) => setQualityProfile(e.target.value as QualityProfile)}
+                    onChange={(e) => setQualityProfile(e.target.value as DownloadQualityProfile)}
                     className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
                   >
                     <option value="cd">CD Quality (16-bit/44.1kHz)</option>
@@ -1270,8 +1274,9 @@ export default function UploadPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm mb-2 text-foreground/80">Download Provider</label>
+                  <label htmlFor="upload-download-provider" className="block text-sm mb-2 text-foreground/80">Download Provider</label>
                   <select
+                    id="upload-download-provider"
                     value={downloadProvider}
                     onChange={(e) => setDownloadProvider(e.target.value as DownloadProvider)}
                     className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"

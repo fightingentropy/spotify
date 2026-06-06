@@ -74,14 +74,6 @@ type LocalSongEntry = {
   writable: boolean;
 };
 
-export type BrowserLocalSongEdits = {
-  title: string;
-  artist: string;
-  coverFile?: File | null;
-  lyricsFile?: File | null;
-  lyricsText?: string;
-};
-
 export type SaveDownloadedTrackInput = {
   title: string;
   artist: string;
@@ -1176,85 +1168,6 @@ async function ensureWritableFolder(): Promise<BrowserDirectoryHandle> {
     throw new Error("This folder needs write permission to save songs");
   }
   return activeDirectoryHandle;
-}
-
-export async function saveBrowserLocalSongEdits(
-  song: PlayerSong,
-  edits: BrowserLocalSongEdits,
-): Promise<PlayerSong> {
-  const entry = entriesById.get(song.id);
-  if (!entry?.parentDirectoryHandle) {
-    throw new Error("Choose a writable folder before editing local songs");
-  }
-
-  const canWrite = await requestDirectoryPermission(entry.parentDirectoryHandle, "readwrite");
-  if (!canWrite) {
-    throw new Error("This folder needs write permission to save edits");
-  }
-
-  const title = edits.title.trim();
-  const artist = edits.artist.trim();
-  if (!title || !artist) {
-    throw new Error("Title and artist are required");
-  }
-
-  const nextSidecar: LocalSidecar = {
-    ...entry.sidecar,
-    version: 1,
-    title,
-    artist,
-    updatedAt: new Date().toISOString(),
-  };
-
-  let imageUrl = song.imageUrl;
-  let lyricsUrl = song.lyricsUrl;
-
-  if (edits.coverFile) {
-    const ext = extForBlob(edits.coverFile, edits.coverFile.name, ".jpg");
-    const coverName = `${entry.stem}.cover${ext}`;
-    await writeBlobFile(entry.parentDirectoryHandle, coverName, edits.coverFile);
-    nextSidecar.coverFile = coverName;
-    imageUrl = createTrackedObjectUrl(edits.coverFile);
-  }
-
-  if (edits.lyricsFile) {
-    const ext = LYRICS_EXTENSIONS.includes(extensionOf(edits.lyricsFile.name))
-      ? extensionOf(edits.lyricsFile.name)
-      : ".lrc";
-    const lyricsName = `${entry.stem}${ext}`;
-    await writeBlobFile(entry.parentDirectoryHandle, lyricsName, edits.lyricsFile);
-    nextSidecar.lyricsFile = lyricsName;
-    lyricsUrl = createTrackedObjectUrl(edits.lyricsFile);
-  } else if (edits.lyricsText?.trim()) {
-    const lyricsName = `${entry.stem}.lrc`;
-    const fileHandle = await writeTextFile(
-      entry.parentDirectoryHandle,
-      lyricsName,
-      edits.lyricsText.trim(),
-    );
-    nextSidecar.lyricsFile = lyricsName;
-    lyricsUrl = createTrackedObjectUrl(await fileHandle.getFile());
-  }
-
-  await writeTextFile(
-    entry.parentDirectoryHandle,
-    `${entry.stem}.spotify.json`,
-    `${JSON.stringify(nextSidecar, null, 2)}\n`,
-  );
-
-  const updatedSong: PlayerSong = {
-    ...song,
-    title,
-    artist,
-    imageUrl,
-    lyricsUrl,
-    writable: true,
-  };
-  entry.song = updatedSong;
-  entry.sidecar = nextSidecar;
-  entry.writable = true;
-  entriesById.set(song.id, entry);
-  return updatedSong;
 }
 
 async function saveDownloadedTrackToFolder(input: SaveDownloadedTrackInput): Promise<PlayerSong> {

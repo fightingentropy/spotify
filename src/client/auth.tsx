@@ -177,15 +177,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetchSession();
       if (response.status === 401 || response.status === 403) {
-        const cachedUser = readCachedAuthUser();
-        setUser(cachedUser);
-        setStatus(cachedUser ? "authenticated" : "unauthenticated");
+        invalidateApiCache();
+        clearServiceWorkerApiCache();
+        writeCachedAuthUser(null, { signedOut: true });
+        setUser(null);
+        setStatus("unauthenticated");
         return;
       }
       if (!response.ok) throw new Error(`Session check failed with ${response.status}`);
       const data = (await response.json().catch(() => ({}))) as { user?: AuthUser | null };
-      const nextUser = coerceAuthUser(data.user ?? null) ?? readCachedAuthUser();
-      writeCachedAuthUser(nextUser);
+      const nextUser = coerceAuthUser(data.user ?? null);
+      writeCachedAuthUser(nextUser, { signedOut: !nextUser });
       setUser(nextUser);
       setStatus(nextUser ? "authenticated" : "unauthenticated");
     } catch {
@@ -206,9 +208,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const handleApiAuthRequired = () => {
-      const cachedUser = readCachedAuthUser();
-      setUser(cachedUser);
-      setStatus(cachedUser ? "authenticated" : "unauthenticated");
+      invalidateApiCache();
+      clearServiceWorkerApiCache();
+      writeCachedAuthUser(null, { signedOut: true });
+      setUser(null);
+      setStatus("unauthenticated");
     };
     window.addEventListener(API_AUTH_REQUIRED_EVENT, handleApiAuthRequired);
     return () => window.removeEventListener(API_AUTH_REQUIRED_EVENT, handleApiAuthRequired);

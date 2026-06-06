@@ -59,6 +59,14 @@ export default function OfflineSettings() {
         ? TriangleAlert
         : ShieldCheck;
   const VerificationIcon = verificationIcon;
+  const handleClearPlaybackCache = () => {
+    if (!window.confirm("Clear cached playback media?")) return;
+    void clearPlaybackCache();
+  };
+  const handleClearDownloads = () => {
+    if (!window.confirm("Clear all offline downloads from this device?")) return;
+    void clearDownloads();
+  };
 
   return (
     <section className="rounded-lg border border-white/[0.12] bg-white/[0.04] p-4">
@@ -167,7 +175,7 @@ export default function OfflineSettings() {
         </button>
         <button
           type="button"
-          onClick={() => void clearPlaybackCache()}
+          onClick={handleClearPlaybackCache}
           className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white"
         >
           <Trash2 size={16} />
@@ -175,7 +183,7 @@ export default function OfflineSettings() {
         </button>
         <button
           type="button"
-          onClick={() => void clearDownloads()}
+          onClick={handleClearDownloads}
           className="inline-flex h-10 items-center gap-2 rounded-full bg-red-500/15 px-3 text-sm font-medium text-red-200 transition hover:bg-red-500/20"
         >
           <Trash2 size={16} />

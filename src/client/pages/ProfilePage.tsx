@@ -61,7 +61,8 @@ export default function ProfilePage() {
               ref={fileInputRef}
               type="file"
               accept="image/*"
-              className="hidden"
+              aria-label="Profile image file"
+              className="sr-only"
               onChange={(event) => {
                 void handleProfileImageChange(event.currentTarget.files?.[0]);
                 event.currentTarget.value = "";

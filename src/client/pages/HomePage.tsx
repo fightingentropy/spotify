@@ -47,6 +47,7 @@ const HOME_LIST_GRID =
 const HOME_VIRTUALIZATION_MIN_ITEMS = 100;
 const HOME_LIST_ROW_HEIGHT = 88;
 const HOME_VIRTUAL_OVERSCAN_ROWS = 8;
+const HOME_DURATION_PROBE_LIMIT = 6;
 
 function formatDateAdded(dateStr: string | undefined): string {
   if (!dateStr) return "Unknown";
@@ -341,9 +342,9 @@ export default function HomePage() {
     const probeCandidates = enableVirtualList
       ? sortedSongs.slice(
           Math.max(0, listVirtualRange.start - HOME_VIRTUAL_OVERSCAN_ROWS),
-          Math.max(24, listVirtualRange.end),
+          Math.max(HOME_DURATION_PROBE_LIMIT, listVirtualRange.end),
         )
-      : sortedSongs.slice(0, 24);
+      : sortedSongs.slice(0, HOME_DURATION_PROBE_LIMIT);
     for (const song of probeCandidates) {
       const probeSong = resolveHomeSong(song);
       if (!probeSong.audioUrl) continue;
@@ -352,7 +353,7 @@ export default function HomePage() {
       if (durationProbeIdsRef.current.has(song.id)) continue;
       durationProbeIdsRef.current.add(song.id);
       songsToProbe.push(probeSong);
-      if (songsToProbe.length >= 24) break;
+      if (songsToProbe.length >= HOME_DURATION_PROBE_LIMIT) break;
     }
     if (songsToProbe.length === 0) return;
 
@@ -470,57 +471,64 @@ export default function HomePage() {
       <div
         key={song.id}
         ref={(node) => registerWarmNode(node, displaySong)}
-        onClick={() => handlePlaySong(index)}
         onPointerEnter={() => warmSongSoon(displaySong)}
-        onFocus={() => warmSongSoon(displaySong)}
         className={cn(
-          "wf-list-row wf-pressable group grid min-h-[4.75rem] cursor-pointer grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
+          "wf-list-row group grid min-h-[4.75rem] grid-cols-[2.25rem_minmax(0,1fr)_3.75rem] items-center gap-3 rounded-md px-3 py-2 transition md:-mx-1 md:min-h-[5.5rem] md:px-1 xl:gap-4",
           HOME_LIST_GRID,
           active ? "bg-white/[0.11]" : "hover:bg-white/[0.07]",
         )}
       >
-        <div
-          className={cn(
-            "flex h-11 items-center justify-center text-[18px] tabular-nums text-white/[0.68]",
-            active && "text-[#1ed760]",
-          )}
+        <button
+          type="button"
+          aria-label={active && isPlaying ? `Pause ${displaySong.title}` : `Play ${displaySong.title}`}
+          aria-pressed={active && isPlaying}
+          onClick={() => handlePlaySong(index)}
+          onFocus={() => warmSongSoon(displaySong)}
+          className="wf-pressable col-span-2 grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-3 rounded-md bg-transparent text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] md:grid-cols-[3rem_minmax(0,1fr)] xl:grid-cols-[4.25rem_minmax(0,1fr)] xl:gap-4"
         >
-          {active && isPlaying ? (
-            <Pause size={19} fill="currentColor" />
-          ) : (
-            <>
-              <span className="group-hover:hidden">{index + 1}</span>
-              <Play size={18} fill="currentColor" className="hidden translate-x-0.5 text-white group-hover:block" />
-            </>
-          )}
-        </div>
+          <span
+            className={cn(
+              "flex h-11 items-center justify-center text-[18px] tabular-nums text-white/[0.68]",
+              active && "text-[#1ed760]",
+            )}
+          >
+            {active && isPlaying ? (
+              <Pause size={19} fill="currentColor" />
+            ) : (
+              <>
+                <span className="group-hover:hidden">{index + 1}</span>
+                <Play size={18} fill="currentColor" className="hidden translate-x-0.5 text-white group-hover:block" />
+              </>
+            )}
+          </span>
 
-        <div className="flex min-w-0 items-center gap-5">
-	          <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
-	            <CoverImage
-	              src={displaySong.imageUrl}
-	              alt={displaySong.title}
-              fill
-              sizes="48px"
-              className="wf-song-cover object-cover"
-              loading={index < 8 ? "eager" : "lazy"}
-            />
-          </div>
-          <div className="min-w-0">
-            <div
-              className={cn(
-                "truncate text-[20px] font-medium leading-7 text-white",
-                active && "text-[#1ed760]",
-              )}
-            >
-	              {displaySong.title}
-            </div>
-            <div className="truncate text-[18px] leading-7 text-white/[0.66]">{artists}</div>
-          </div>
-        </div>
+          <span className="flex min-w-0 items-center gap-5">
+            <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
+              <CoverImage
+                src={displaySong.imageUrl}
+                alt={displaySong.title}
+                fill
+                sizes="48px"
+                className="wf-song-cover object-cover"
+                loading={index < 8 ? "eager" : "lazy"}
+              />
+            </span>
+            <span className="min-w-0">
+              <span
+                className={cn(
+                  "block truncate text-[20px] font-medium leading-7 text-white",
+                  active && "text-[#1ed760]",
+                )}
+              >
+                {displaySong.title}
+              </span>
+              <span className="block truncate text-[18px] leading-7 text-white/[0.66]">{artists}</span>
+            </span>
+          </span>
+        </button>
 
         <div className="hidden min-w-0 items-center text-[18px] text-white/[0.66] md:flex">
-	          <span className="truncate">{getSongAlbum(displaySong)}</span>
+          <span className="truncate">{getSongAlbum(displaySong)}</span>
         </div>
 
         <div className="hidden items-center text-[18px] text-white/[0.66] md:flex">
@@ -538,7 +546,7 @@ export default function HomePage() {
         </div>
 
         <div className="flex justify-end text-[18px] tabular-nums text-white/[0.66] md:justify-center md:text-center">
-	          {getSongDuration(displaySong, durationLookup[song.id])}
+          {getSongDuration(displaySong, durationLookup[song.id])}
         </div>
 
         <div className="hidden justify-end md:flex">
@@ -673,55 +681,45 @@ export default function HomePage() {
               </div>
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]">
-	                {sortedSongs.map((song, index) => {
-	                  const displaySong = resolveHomeSong(song);
-	                  const active = currentSongId === song.id;
-	                  const liked = !!likedLookup[song.id];
-	                  const likePending = !!pendingLikes[song.id];
+                {sortedSongs.map((song, index) => {
+                  const displaySong = resolveHomeSong(song);
+                  const active = currentSongId === song.id;
+                  const liked = !!likedLookup[song.id];
+                  const likePending = !!pendingLikes[song.id];
 
                   return (
                     <div
                       key={song.id}
-	                      ref={(node) => registerWarmNode(node, displaySong)}
-                      role="button"
-                      tabIndex={0}
+                      ref={(node) => registerWarmNode(node, displaySong)}
                       style={{
                         contentVisibility: "auto",
                         containIntrinsicSize: "18rem",
                       }}
-                      onClick={() => handlePlaySong(index)}
-	                      onPointerEnter={() => warmSongSoon(displaySong)}
-	                      onFocus={() => warmSongSoon(displaySong)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          handlePlaySong(index);
-                        }
-                      }}
-                      aria-pressed={active && isPlaying}
+                      onPointerEnter={() => warmSongSoon(displaySong)}
+                      onFocus={() => warmSongSoon(displaySong)}
                       className={cn(
-                        "wf-song-card wf-pressable group cursor-pointer rounded-md p-3 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760]",
+                        "wf-song-card group rounded-md p-3 transition",
                         active ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
                       )}
                     >
-	                      <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
-		                        <CoverImage
-	                          src={displaySong.imageUrl}
-	                          alt={displaySong.title}
+                      <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+                        <CoverImage
+                          src={displaySong.imageUrl}
+                          alt={displaySong.title}
                           fill
                           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 180px"
                           className="wf-song-cover object-cover"
-	                          loading={index < 8 ? "eager" : "lazy"}
-	                        />
-	                        <Suspense fallback={null}>
-	                          <OfflineSongDownloadButton
-	                            song={song}
-	                            className="wf-control-button absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 sm:opacity-0 sm:group-hover:opacity-100"
-	                          />
-	                        </Suspense>
-	                        <button
+                          loading={index < 8 ? "eager" : "lazy"}
+                        />
+                        <Suspense fallback={null}>
+                          <OfflineSongDownloadButton
+                            song={song}
+                            className="wf-control-button absolute left-3 top-3 bg-black/40 text-white/90 opacity-100 backdrop-blur hover:bg-black/60 focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                          />
+                        </Suspense>
+                        <button
                           type="button"
-	                          aria-label={active && isPlaying ? `Pause ${displaySong.title}` : `Play ${displaySong.title}`}
+                          aria-label={active && isPlaying ? `Pause ${displaySong.title}` : `Play ${displaySong.title}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             handlePlaySong(index);
@@ -729,7 +727,7 @@ export default function HomePage() {
                           className={cn(
                             "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]",
                             "wf-control-button",
-                            active ? "opacity-100" : "opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0",
+                            active ? "opacity-100" : "opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 focus-visible:opacity-100 focus-visible:translate-y-0",
                           )}
                         >
                           {active && isPlaying ? (
@@ -739,11 +737,11 @@ export default function HomePage() {
                           )}
                         </button>
                       </div>
-	                      <div className="mt-3 min-w-0">
-	                        <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
-	                          {displaySong.title}
-	                        </div>
-	                        <div className="truncate text-[14px] leading-5 text-white/[0.62]">{displaySong.artist || "Unknown Artist"}</div>
+                      <div className="mt-3 min-w-0">
+                        <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
+                          {displaySong.title}
+                        </div>
+                        <div className="truncate text-[14px] leading-5 text-white/[0.62]">{displaySong.artist || "Unknown Artist"}</div>
                       </div>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <div className="min-w-0 truncate text-[13px] text-white/[0.46]">{formatDateAdded(song.createdAt)}</div>
