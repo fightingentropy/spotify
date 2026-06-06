@@ -9,7 +9,7 @@ import { cn, formatTime } from "@/lib/utils";
 import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
-import { isOfflinePlaybackSong, isRadioSong } from "@/lib/player-song";
+import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
@@ -138,17 +138,18 @@ function PlayerBar(): React.ReactElement | null {
   const currentSongId = playbackSong?.id ?? null;
   const currentSongIsBrowserLocal = isBrowserLocalSong(playbackSong);
   const currentSongIsRadio = isRadioSong(playbackSong);
+  const currentSongIsPodcast = isPodcastSong(playbackSong);
   const currentSongIsOffline = isOfflinePlaybackSong(playbackSong);
   const songIsLiked = currentSongId ? !!likedLookup[currentSongId] : false;
   const likePending = currentSongId ? !!pendingLookup[currentSongId] : false;
 
   const handleToggleLike = useCallback(async () => {
-    if (!currentSongId || !likesHydrated || likePending || currentSongIsRadio) return;
+    if (!currentSongId || !likesHydrated || likePending || currentSongIsRadio || currentSongIsPodcast) return;
     const result = await toggleLike(currentSongId, !songIsLiked, currentSong ?? undefined);
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
-  }, [currentSong, currentSongId, currentSongIsRadio, likesHydrated, likePending, toggleLike, songIsLiked, navigate]);
+  }, [currentSong, currentSongId, currentSongIsPodcast, currentSongIsRadio, likesHydrated, likePending, toggleLike, songIsLiked, navigate]);
 
   // Dual audio elements for real crossfade
   const audioARef = useRef<HTMLAudioElement | null>(null);
@@ -423,8 +424,10 @@ function PlayerBar(): React.ReactElement | null {
   });
 
   useEffect(() => {
-    if (!currentSongIsRadio && !currentSongIsOffline) requestMediaCache(playbackSong);
-  }, [playbackSong?.id, playbackSong?.audioUrl, playbackSong?.imageUrl, currentSongIsOffline, currentSongIsRadio]);
+    if (!currentSongIsRadio && !currentSongIsPodcast && !currentSongIsOffline) {
+      requestMediaCache(playbackSong);
+    }
+  }, [playbackSong?.id, playbackSong?.audioUrl, playbackSong?.imageUrl, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio]);
 
   useEffect(() => {
     return () => {
@@ -565,7 +568,7 @@ function PlayerBar(): React.ReactElement | null {
   }, [accountScope, authSettled, pause, setSong, setQueue]);
 
   useEffect(() => {
-    if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsOffline) return;
+    if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast || currentSongIsOffline) return;
 
     let cancelled = false;
     const songId = currentSongId;
@@ -587,7 +590,7 @@ function PlayerBar(): React.ReactElement | null {
     return () => {
       cancelled = true;
     };
-  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsRadio, replaceSong]);
+  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, replaceSong]);
 
   useEffect(() => {
     if (!currentSongId) {
@@ -843,9 +846,9 @@ function PlayerBar(): React.ReactElement | null {
 
   const handleActiveAudioError = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     if (event.currentTarget !== getActiveAudio()) return;
-    if (currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsOffline) return;
+    if (currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast || currentSongIsOffline) return;
     notePlaybackNetworkFailure();
-  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsRadio, getActiveAudio]);
+  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, getActiveAudio]);
 
   const handleTogglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -1056,7 +1059,7 @@ function PlayerBar(): React.ReactElement | null {
               <div className="text-[13px] leading-5 text-white/[0.62] truncate">{playbackSong.artist}</div>
             </div>
           </button>
-          {!currentSongIsRadio ? (
+          {!currentSongIsRadio && !currentSongIsPodcast ? (
             <button
               type="button"
               aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
@@ -1098,7 +1101,7 @@ function PlayerBar(): React.ReactElement | null {
             <div className="truncate text-[15px] font-medium leading-5 text-white">{playbackSong.title}</div>
             <div className="truncate text-[13px] leading-5 text-white/[0.62]">{playbackSong.artist}</div>
           </div>
-          {!currentSongIsRadio ? (
+          {!currentSongIsRadio && !currentSongIsPodcast ? (
             <button
               type="button"
               aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}

@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4, RadioTower } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4, Podcast, RadioTower } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
-import { isRadioSong } from "@/lib/player-song";
+import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type LyricsState = {
@@ -45,6 +45,8 @@ export default function NowPlayingSidebar() {
     [currentSong, offlineRecords],
   );
   const liveStream = isRadioSong(displaySong);
+  const podcastEpisode = isPodcastSong(displaySong);
+  const podcastDescription = displaySong?.description?.trim() ?? "";
 
   const [collapsed, setCollapsed] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
@@ -169,6 +171,25 @@ export default function NowPlayingSidebar() {
                     </div>
                   </div>
                 </div>
+              </div>
+            ) : podcastEpisode ? (
+              <div className="rounded-md border border-white/[0.12] bg-white/[0.03] p-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[5px] bg-fuchsia-500/15 text-fuchsia-200">
+                    <Podcast size={18} />
+                  </div>
+                  <div>
+                    <div className="font-medium text-[16px] text-white">Podcast Episode</div>
+                    <div className="text-[13px] leading-5 text-white/[0.58]">
+                      {isPlaying ? "Playing now" : "Paused"}
+                    </div>
+                  </div>
+                </div>
+                {podcastDescription ? (
+                  <p className="mt-3 line-clamp-5 text-[13px] leading-5 text-white/[0.64]">
+                    {podcastDescription}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <>

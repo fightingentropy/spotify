@@ -8,6 +8,7 @@ import {
   Heart,
   Pause,
   Play,
+  Podcast,
   Repeat,
   Shuffle,
   SkipBack,
@@ -17,7 +18,7 @@ import { useNavigate } from "react-router-dom";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
-import { isRadioSong } from "@/lib/player-song";
+import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
@@ -86,8 +87,11 @@ export default function NowPlayingSheet({
   const likesHydrated = useLikesStore((state) => state.hydrated);
 
   const liveStream = isRadioSong(song);
+  const podcastEpisode = isPodcastSong(song);
+  const showLibraryActions = !liveStream && !podcastEpisode;
   const songIsLiked = !!likedLookup[song.id];
   const likePending = !!pendingLookup[song.id];
+  const podcastDescription = song.description?.trim() ?? "";
 
   const [showLyrics, setShowLyrics] = useState(false);
   const [lyricsState, setLyricsState] = useState<LyricsState>({
@@ -164,7 +168,7 @@ export default function NowPlayingSheet({
   }, [open]);
 
   async function handleToggleLike() {
-    if (liveStream || !likesHydrated || likePending) return;
+    if (!showLibraryActions || !likesHydrated || likePending) return;
     const result = await toggleLike(song.id, !songIsLiked, song);
     if (!result.ok && result.status === 401) {
       navigate("/signin");
@@ -238,7 +242,7 @@ export default function NowPlayingSheet({
               </button>
               <div className="text-xs uppercase tracking-wide opacity-70">Now Playing</div>
               <div className="-mr-1 flex items-center gap-1">
-                {!liveStream ? (
+                {showLibraryActions ? (
                   <>
                     <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
                     <button
@@ -366,47 +370,62 @@ export default function NowPlayingSheet({
               </div>
             </div>
 
-            {!liveStream ? (
-            <div className="mt-6 space-y-4 lg:mt-5">
-              <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="font-medium">Lyrics</div>
-                  <button
-                    type="button"
-                    onClick={() => setShowLyrics((value) => !value)}
-                    className="wf-control-button inline-flex items-center gap-2 h-9 px-3 rounded-full border border-black/15 dark:border-white/20 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
-                  >
-                    <FileText size={14} />
-                    {showLyrics ? "Hide lyrics" : "Show lyrics"}
-                  </button>
-                </div>
-
-                {showLyrics && (
-                  <div className="rounded-lg bg-black/5 dark:bg-white/5 p-3 whitespace-pre-wrap text-sm max-h-48 overflow-auto">
-                    {lyricsState.status === "idle" && "No lyrics available for this song."}
-                    {lyricsState.status === "loading" && "Loading lyrics..."}
-                    {lyricsState.status === "error" && "Unable to load lyrics."}
-                    {lyricsState.status === "ready" &&
-                      (lyricsState.text || "No lyrics available for this song.")}
+            {showLibraryActions ? (
+              <div className="mt-6 space-y-4 lg:mt-5">
+                <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium">Lyrics</div>
+                    <button
+                      type="button"
+                      onClick={() => setShowLyrics((value) => !value)}
+                      className="wf-control-button inline-flex items-center gap-2 h-9 px-3 rounded-full border border-black/15 dark:border-white/20 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+                    >
+                      <FileText size={14} />
+                      {showLyrics ? "Hide lyrics" : "Show lyrics"}
+                    </button>
                   </div>
-                )}
-              </div>
 
-              <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 hidden lg:block">
-                <div className="font-medium mb-3">Credits</div>
-                <div className="space-y-3">
-                  {credits.map((credit) => (
-                    <div key={`${credit.name}-${credit.role}`} className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-medium">{credit.name}</div>
-                        <div className="text-sm opacity-70">{credit.role}</div>
-                      </div>
-                      <CheckCircle2 size={16} className="opacity-50 mt-1" />
+                  {showLyrics && (
+                    <div className="rounded-lg bg-black/5 dark:bg-white/5 p-3 whitespace-pre-wrap text-sm max-h-48 overflow-auto">
+                      {lyricsState.status === "idle" && "No lyrics available for this song."}
+                      {lyricsState.status === "loading" && "Loading lyrics..."}
+                      {lyricsState.status === "error" && "Unable to load lyrics."}
+                      {lyricsState.status === "ready" &&
+                        (lyricsState.text || "No lyrics available for this song.")}
                     </div>
-                  ))}
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 hidden lg:block">
+                  <div className="font-medium mb-3">Credits</div>
+                  <div className="space-y-3">
+                    {credits.map((credit) => (
+                      <div key={`${credit.name}-${credit.role}`} className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{credit.name}</div>
+                          <div className="text-sm opacity-70">{credit.role}</div>
+                        </div>
+                        <CheckCircle2 size={16} className="opacity-50 mt-1" />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : podcastEpisode ? (
+              <div className="mt-6 rounded-xl border border-black/10 p-4 dark:border-white/10 lg:mt-5">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-fuchsia-200">
+                    <Podcast size={18} />
+                  </div>
+                  <div>
+                    <div className="font-medium">Podcast Episode</div>
+                    <div className="text-sm opacity-70">{song.artist}</div>
+                  </div>
+                </div>
+                {podcastDescription ? (
+                  <p className="mt-3 line-clamp-4 text-sm leading-6 opacity-75">{podcastDescription}</p>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </div>

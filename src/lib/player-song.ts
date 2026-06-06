@@ -7,6 +7,11 @@ export function isRadioSong(song: PlayerSong | null | undefined): boolean {
   return song.source === "radio" || song.id.startsWith("radio:");
 }
 
+export function isPodcastSong(song: PlayerSong | null | undefined): boolean {
+  if (!song) return false;
+  return song.source === "podcast" || song.id.startsWith("podcast:");
+}
+
 function urlBase(): string {
   return typeof window !== "undefined" ? window.location.origin : "http://localhost";
 }

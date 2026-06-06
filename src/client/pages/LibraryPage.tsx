@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Download, Heart, ListMusic, RadioTower } from "lucide-react";
+import { Download, Heart, ListMusic, Podcast, RadioTower } from "lucide-react";
 import { useApiData, withAccountScope, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 
@@ -61,6 +61,16 @@ export default function LibraryPage() {
             <div>
               <div className="font-semibold">Radio Stations</div>
               <div className="text-sm opacity-70">Dromos 89.8 and BBC Radio 1</div>
+            </div>
+          </Link>
+
+          <Link to="/podcasts" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-fuchsia-200">
+              <Podcast size={24} />
+            </div>
+            <div>
+              <div className="font-semibold">Podcasts</div>
+              <div className="text-sm opacity-70">Huberman Lab</div>
             </div>
           </Link>
 
