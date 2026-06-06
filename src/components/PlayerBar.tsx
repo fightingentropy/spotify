@@ -10,6 +10,7 @@ import { ChevronDown, ChevronUp, Heart, Pause, Play, SkipBack, SkipForward, Shuf
 import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-song";
+import { isPersistablePlayerSong } from "@/lib/player-persistence";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
@@ -43,15 +44,6 @@ function requestMediaCache(song: PlayerSong | null): void {
   navigator.serviceWorker.ready
     .then((registration) => registration.active?.postMessage(message))
     .catch(() => {});
-}
-
-function isPersistablePlayerSong(song: PlayerSong | null | undefined): song is PlayerSong {
-  return Boolean(
-    song &&
-      !isBrowserLocalSong(song) &&
-      !isRadioSong(song) &&
-      !isPodcastSong(song),
-  );
 }
 
 function finiteMediaDuration(value: number): number | null {
