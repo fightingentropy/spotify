@@ -38,7 +38,6 @@ function parseCredits(artist: string): Array<{ name: string; role: string }> {
 
 export default function NowPlayingSidebar() {
   const currentSong = usePlayerStore((state) => state.currentSong);
-  const isPlaying = usePlayerStore((state) => state.isPlaying);
   const offlineRecords = useOfflineStore((state) => state.records);
   const displaySong = useMemo(
     () => (currentSong ? resolveOfflinePlaybackSong(currentSong) : null),
@@ -153,9 +152,6 @@ export default function NowPlayingSidebar() {
             <div>
               <div className="text-[22px] font-semibold leading-tight text-white">{displaySong.title}</div>
               <div className="text-[16px] leading-6 text-white/[0.68] mt-1">{displaySong.artist}</div>
-              <div className="text-[13px] leading-5 text-white/[0.55] mt-1">
-                {isPlaying ? "Playing" : "Paused"}
-              </div>
             </div>
 
             {liveStream ? (
@@ -166,9 +162,6 @@ export default function NowPlayingSidebar() {
                   </div>
                   <div>
                     <div className="font-medium text-[16px] text-white">Live Radio</div>
-                    <div className="text-[13px] leading-5 text-white/[0.58]">
-                      {isPlaying ? "Streaming now" : "Paused"}
-                    </div>
                   </div>
                 </div>
               </div>
@@ -180,9 +173,6 @@ export default function NowPlayingSidebar() {
                   </div>
                   <div>
                     <div className="font-medium text-[16px] text-white">Podcast Episode</div>
-                    <div className="text-[13px] leading-5 text-white/[0.58]">
-                      {isPlaying ? "Playing now" : "Paused"}
-                    </div>
                   </div>
                 </div>
                 {podcastDescription ? (

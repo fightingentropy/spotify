@@ -158,6 +158,7 @@ function PlayerBar(): React.ReactElement | null {
   const currentSongIsOffline = isOfflinePlaybackSong(playbackSong);
   const songIsLiked = currentSongId ? !!likedLookup[currentSongId] : false;
   const likePending = currentSongId ? !!pendingLookup[currentSongId] : false;
+  const playbackDuration = finiteMediaDuration(playbackSong?.duration ?? 0);
 
   const handleToggleLike = useCallback(async () => {
     if (!currentSongId || !likesHydrated || likePending || currentSongIsRadio || currentSongIsPodcast) return;
@@ -423,7 +424,11 @@ function PlayerBar(): React.ReactElement | null {
       return;
     }
 
-    const seekDuration = finiteMediaDuration(duration) ?? finiteMediaDuration(request.audio.duration) ?? request.duration;
+    const seekDuration =
+      finiteMediaDuration(duration) ??
+      finiteMediaDuration(request.audio.duration) ??
+      playbackDuration ??
+      request.duration;
     const nextTime = Math.max(0, Math.min(seekDuration, request.time));
     const nextRequest = {
       ...request,
@@ -448,7 +453,7 @@ function PlayerBar(): React.ReactElement | null {
     }
 
     queueStickySeek(nextRequest);
-  }, [clearStickySeek, duration, getActiveAudio, queueStickySeek, resumeActivePlayback]);
+  }, [clearStickySeek, duration, getActiveAudio, playbackDuration, queueStickySeek, resumeActivePlayback]);
 
   useEffect(() => {
     retryStickySeekRef.current = retryStickySeek;
@@ -484,7 +489,7 @@ function PlayerBar(): React.ReactElement | null {
   const onSeek = useCallback((value: number) => {
     const active = getActiveAudio();
     if (!active || !Number.isFinite(value)) return;
-    const seekDuration = finiteMediaDuration(duration) ?? finiteMediaDuration(active.duration);
+    const seekDuration = finiteMediaDuration(duration) ?? finiteMediaDuration(active.duration) ?? playbackDuration;
     if (seekDuration == null) return;
     const nextTime = Math.max(0, Math.min(seekDuration, value));
     lastSeekTargetRef.current = nextTime;
@@ -505,7 +510,7 @@ function PlayerBar(): React.ReactElement | null {
         lastSeekTargetRef.current = null;
       }
     }, 90);
-  }, [duration, getActiveAudio, performSeek]);
+  }, [duration, getActiveAudio, performSeek, playbackDuration]);
 
   useMediaSession({
     song: playbackSong,
@@ -878,9 +883,11 @@ function PlayerBar(): React.ReactElement | null {
             advanceToIndex(nextIndexToCommit);
             setActiveIdx(activeIdx === 0 ? 1 : 0);
             // Update duration from incoming element if known
-            if (Number.isFinite(incoming.duration)) {
-              setDuration(incoming.duration || 0);
-            }
+            setDuration(
+              finiteMediaDuration(incoming.duration) ??
+                finiteMediaDuration(nextPlaybackSong.duration ?? 0) ??
+                0,
+            );
             suppressAutoLoadRef.current = false;
             crossfadingRef.current = false;
           }
@@ -984,7 +991,7 @@ function PlayerBar(): React.ReactElement | null {
     function seekBy(seconds: number) {
       const audio = getActiveAudio();
       if (!audio) return;
-      const total = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration);
+      const total = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration) ?? playbackDuration;
       if (total == null) return;
       const baseTime = lastSeekTargetRef.current ?? audio.currentTime ?? 0;
       const nextTime = Math.max(0, Math.min(total, baseTime + seconds));
@@ -1030,7 +1037,7 @@ function PlayerBar(): React.ReactElement | null {
     const options = { capture: true };
     window.addEventListener("keydown", onKeyDown, options);
     return () => window.removeEventListener("keydown", onKeyDown, options);
-  }, [next, previous, duration, handleTogglePlayback, getActiveAudio, onSeek]);
+  }, [next, previous, duration, handleTogglePlayback, getActiveAudio, onSeek, playbackDuration]);
 
   const audioElements = (
     <>
@@ -1042,9 +1049,10 @@ function PlayerBar(): React.ReactElement | null {
         onLoadedMetadata={(e) => {
           const audio = e.currentTarget;
           if (audio !== getActiveAudio()) return;
-          setDuration(finiteMediaDuration(audio.duration) ?? 0);
+          const mediaDuration = finiteMediaDuration(audio.duration) ?? playbackDuration;
+          setDuration(mediaDuration ?? 0);
           const pending = savedSeekRef.current;
-          const seekDuration = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration);
+          const seekDuration = mediaDuration ?? finiteMediaDuration(duration);
           if (typeof pending === "number" && seekDuration != null) {
             const clamped = Math.max(0, Math.min(seekDuration, pending));
             performSeek(audio, clamped, seekDuration);
@@ -1090,9 +1098,10 @@ function PlayerBar(): React.ReactElement | null {
         onLoadedMetadata={(e) => {
           const audio = e.currentTarget;
           if (audio !== getActiveAudio()) return;
-          setDuration(finiteMediaDuration(audio.duration) ?? 0);
+          const mediaDuration = finiteMediaDuration(audio.duration) ?? playbackDuration;
+          setDuration(mediaDuration ?? 0);
           const pending = savedSeekRef.current;
-          const seekDuration = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration);
+          const seekDuration = mediaDuration ?? finiteMediaDuration(duration);
           if (typeof pending === "number" && seekDuration != null) {
             const clamped = Math.max(0, Math.min(seekDuration, pending));
             performSeek(audio, clamped, seekDuration);
