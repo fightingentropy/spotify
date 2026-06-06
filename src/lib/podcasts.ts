@@ -48,6 +48,19 @@ export const PODCAST_SHOWS: PodcastShow[] = [
       "https://megaphone.imgix.net/podcasts/a62f84c0-f8b6-11ed-a4fc-fb9e7841d45b/image/76ed638554a4be965517200d1cd5f30d.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
     accentClassName: "from-[#f97316] via-[#facc15] to-[#7c3aed]",
   },
+  {
+    id: "flagrant",
+    title: "Flagrant",
+    author: "Andrew Schulz",
+    subtitle: "Unfiltered comedy and culture",
+    description:
+      "Unfiltered comedy, culture, and unruly conversations with Andrew Schulz, AlexxMedia, Mark Gagnon, and guests.",
+    feedUrl: "https://feeds.megaphone.fm/APPI6857213837",
+    websiteUrl: "https://soundcloud.com/flagrantpodcast",
+    imageUrl:
+      "https://megaphone.imgix.net/podcasts/0adac72a-8012-11ef-9b16-bffe28b27ef7/image/84f5c3e24f7864f2fd9f7fc858aa2889.png?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
+    accentClassName: "from-[#fb7185] via-[#f97316] to-[#22c55e]",
+  },
 ];
 
 export const HUBERMAN_PODCAST = PODCAST_SHOWS[0];
