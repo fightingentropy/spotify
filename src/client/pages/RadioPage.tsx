@@ -75,11 +75,6 @@ export default function RadioPage() {
                   <Radio size={11} />
                   Live
                 </div>
-                {playing ? (
-                  <div className="absolute right-2 top-2 rounded-full bg-emerald-500 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-black">
-                    On Air
-                  </div>
-                ) : null}
                 <div className="absolute inset-x-2 bottom-2">
                   <h2 className="truncate text-[15px] font-semibold leading-5 text-white drop-shadow sm:text-base">
                     {station.title}
