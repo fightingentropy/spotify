@@ -1403,12 +1403,24 @@ function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
   return false;
 }
 
+const MAC_MINI_USER_CONTEXT_PATHS = new Set([
+  "/api/music/source",
+  "/api/home",
+  "/api/search-index",
+  "/api/library",
+  "/api/liked",
+  "/api/likes",
+  "/api/songs",
+]);
+
+export function shouldForwardMacMiniUserForPathname(pathname: string): boolean {
+  if (MAC_MINI_USER_CONTEXT_PATHS.has(pathname)) return true;
+  if (pathname.startsWith("/api/playlist/")) return true;
+  return pathname.startsWith("/api/songs/") && !pathname.startsWith("/api/songs/spotify");
+}
+
 function shouldForwardMacMiniUser(c: Context<AppEnv>): boolean {
-  const pathname = macMiniProxyPathname(c);
-  if (["/api/home", "/api/search-index", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
-    return true;
-  }
-  return pathname.startsWith("/api/playlist/");
+  return shouldForwardMacMiniUserForPathname(macMiniProxyPathname(c));
 }
 
 function isMacMiniMutation(c: Context<AppEnv>): boolean {
