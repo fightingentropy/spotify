@@ -188,11 +188,6 @@ export default function PodcastsPage() {
                   <Podcast size={11} />
                   Show
                 </div>
-                {selected ? (
-                  <div className="absolute right-2 top-2 rounded-full bg-fuchsia-400 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-black">
-                    Open
-                  </div>
-                ) : null}
                 <div className="absolute inset-x-2 bottom-2">
                   <h2 className="truncate text-[15px] font-semibold leading-5 text-white drop-shadow sm:text-base">
                     {podcastShow.title}
