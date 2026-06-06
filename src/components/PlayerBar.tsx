@@ -50,6 +50,10 @@ function finiteMediaDuration(value: number): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+function seekIsCloseEnough(actual: number, target: number): boolean {
+  return Number.isFinite(actual) && Math.abs(actual - target) <= SEEK_LANDING_TOLERANCE_SECONDS;
+}
+
 function isHlsPlaylistSrc(src: string): boolean {
   return /\.m3u8(?:[?#]|$)/i.test(src);
 }
@@ -77,8 +81,19 @@ type HlsConstructor = {
   isSupported: () => boolean;
 };
 
+type StickySeekRequest = {
+  audio: HTMLAudioElement;
+  time: number;
+  duration: number;
+  resumePlayback: boolean;
+  attempts: number;
+};
+
 let hlsConstructorPromise: Promise<HlsConstructor | null> | null = null;
 const NowPlayingSheet = lazy(() => import("@/components/NowPlayingSheet"));
+const SEEK_LANDING_TOLERANCE_SECONDS = 0.75;
+const STICKY_SEEK_RETRY_MS = 180;
+const MAX_STICKY_SEEK_ATTEMPTS = 30;
 
 function loadHlsConstructor(): Promise<HlsConstructor | null> {
   hlsConstructorPromise ??= import("hls.js/light")
@@ -174,6 +189,9 @@ function PlayerBar(): React.ReactElement | null {
   const resumeAfterSeekRef = useRef<boolean>(false);
   const pendingSeekTimeoutRef = useRef<number | null>(null);
   const pendingSeekRef = useRef<{ audio: HTMLAudioElement; time: number; duration: number } | null>(null);
+  const stickySeekRef = useRef<StickySeekRequest | null>(null);
+  const stickySeekTimeoutRef = useRef<number | null>(null);
+  const retryStickySeekRef = useRef<() => void>(() => {});
   const lastSeekTargetRef = useRef<number | null>(null);
   const isPlayingRef = useRef<boolean>(isPlaying);
   const playRequestIdRef = useRef<number>(0);
@@ -308,15 +326,24 @@ function PlayerBar(): React.ReactElement | null {
     cancel?.();
   }, []);
 
+  const clearStickySeek = useCallback(() => {
+    if (stickySeekTimeoutRef.current != null) {
+      window.clearTimeout(stickySeekTimeoutRef.current);
+      stickySeekTimeoutRef.current = null;
+    }
+    stickySeekRef.current = null;
+  }, []);
+
   const resetPendingSeek = useCallback(() => {
     if (pendingSeekTimeoutRef.current != null) {
       window.clearTimeout(pendingSeekTimeoutRef.current);
       pendingSeekTimeoutRef.current = null;
     }
     pendingSeekRef.current = null;
+    clearStickySeek();
     lastSeekTargetRef.current = null;
     resumeAfterSeekRef.current = false;
-  }, []);
+  }, [clearStickySeek]);
 
   const resetPlaybackClock = useCallback((nextDuration = 0) => {
     resetPendingSeek();
@@ -364,15 +391,80 @@ function PlayerBar(): React.ReactElement | null {
     });
   }, [getActiveAudio, playAudio]);
 
+  const scheduleStickySeekRetry = useCallback((delay = STICKY_SEEK_RETRY_MS) => {
+    if (stickySeekTimeoutRef.current != null) {
+      window.clearTimeout(stickySeekTimeoutRef.current);
+    }
+    stickySeekTimeoutRef.current = window.setTimeout(() => {
+      stickySeekTimeoutRef.current = null;
+      retryStickySeekRef.current();
+    }, delay);
+  }, []);
+
+  const queueStickySeek = useCallback((request: StickySeekRequest, delay = STICKY_SEEK_RETRY_MS) => {
+    stickySeekRef.current = request;
+    setCurrentTime(request.time);
+    scheduleStickySeekRetry(delay);
+  }, [scheduleStickySeekRetry]);
+
+  const retryStickySeek = useCallback(() => {
+    const request = stickySeekRef.current;
+    if (!request) return;
+    if (request.audio !== getActiveAudio()) {
+      if (lastSeekTargetRef.current === request.time) lastSeekTargetRef.current = null;
+      resumeAfterSeekRef.current = false;
+      clearStickySeek();
+      return;
+    }
+    if (request.attempts >= MAX_STICKY_SEEK_ATTEMPTS) {
+      if (lastSeekTargetRef.current === request.time) lastSeekTargetRef.current = null;
+      resumeAfterSeekRef.current = false;
+      clearStickySeek();
+      return;
+    }
+
+    const seekDuration = finiteMediaDuration(duration) ?? finiteMediaDuration(request.audio.duration) ?? request.duration;
+    const nextTime = Math.max(0, Math.min(seekDuration, request.time));
+    const nextRequest = {
+      ...request,
+      time: nextTime,
+      duration: seekDuration,
+      attempts: request.attempts + 1,
+    };
+
+    try {
+      request.audio.currentTime = nextTime;
+    } catch {
+      queueStickySeek(nextRequest);
+      return;
+    }
+
+    setCurrentTime(nextTime);
+    if (seekIsCloseEnough(request.audio.currentTime, nextTime)) {
+      clearStickySeek();
+      if (lastSeekTargetRef.current === nextTime) lastSeekTargetRef.current = null;
+      if (request.resumePlayback && isPlayingRef.current) resumeActivePlayback(request.audio);
+      return;
+    }
+
+    queueStickySeek(nextRequest);
+  }, [clearStickySeek, duration, getActiveAudio, queueStickySeek, resumeActivePlayback]);
+
+  useEffect(() => {
+    retryStickySeekRef.current = retryStickySeek;
+  }, [retryStickySeek]);
+
   const performSeek = useCallback((active: HTMLAudioElement, nextTime: number, seekDuration: number) => {
     if (active !== getActiveAudio()) return;
     if (crossfadingRef.current) cancelActiveCrossfade();
     const inactive = getInactiveAudio();
-    resumeAfterSeekRef.current = isPlayingRef.current;
+    const resumePlayback = isPlayingRef.current;
+    resumeAfterSeekRef.current = resumePlayback;
+    clearStickySeek();
     try {
       active.currentTime = nextTime;
     } catch {
-      resumeAfterSeekRef.current = false;
+      queueStickySeek({ audio: active, time: nextTime, duration: seekDuration, resumePlayback, attempts: 0 });
       return;
     }
     if (crossfadingRef.current && inactive) {
@@ -382,8 +474,12 @@ function PlayerBar(): React.ReactElement | null {
       } catch {}
     }
     setCurrentTime(nextTime);
+    if (!seekIsCloseEnough(active.currentTime, nextTime)) {
+      queueStickySeek({ audio: active, time: nextTime, duration: seekDuration, resumePlayback, attempts: 0 });
+      return;
+    }
     if (resumeAfterSeekRef.current) resumeActivePlayback(active);
-  }, [cancelActiveCrossfade, getActiveAudio, getInactiveAudio, resumeActivePlayback]);
+  }, [cancelActiveCrossfade, clearStickySeek, getActiveAudio, getInactiveAudio, queueStickySeek, resumeActivePlayback]);
 
   const onSeek = useCallback((value: number) => {
     const active = getActiveAudio();
@@ -404,7 +500,8 @@ function PlayerBar(): React.ReactElement | null {
       pendingSeekRef.current = null;
       if (!pending) return;
       performSeek(pending.audio, pending.time, pending.duration);
-      if (lastSeekTargetRef.current === pending.time) {
+      const sticky = stickySeekRef.current;
+      if (lastSeekTargetRef.current === pending.time && !(sticky?.audio === pending.audio && sticky.time === pending.time)) {
         lastSeekTargetRef.current = null;
       }
     }, 90);
@@ -448,6 +545,9 @@ function PlayerBar(): React.ReactElement | null {
     return () => {
       if (pendingSeekTimeoutRef.current != null) {
         window.clearTimeout(pendingSeekTimeoutRef.current);
+      }
+      if (stickySeekTimeoutRef.current != null) {
+        window.clearTimeout(stickySeekTimeoutRef.current);
       }
       if (nowPlayingOpenFrameRef.current != null) {
         window.cancelAnimationFrame(nowPlayingOpenFrameRef.current);
@@ -841,6 +941,12 @@ function PlayerBar(): React.ReactElement | null {
   const handleActiveAudioResumePoint = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     const audio = event.currentTarget;
     if (audio !== getActiveAudio()) return;
+    retryStickySeekRef.current();
+    const sticky = stickySeekRef.current;
+    if (sticky?.audio === audio && !seekIsCloseEnough(audio.currentTime, sticky.time)) {
+      setCurrentTime(sticky.time);
+      return;
+    }
     setCurrentTime(audio.currentTime || 0);
     if (resumeAfterSeekRef.current) resumeActivePlayback(audio);
   }, [getActiveAudio, resumeActivePlayback]);
@@ -938,22 +1044,30 @@ function PlayerBar(): React.ReactElement | null {
           if (audio !== getActiveAudio()) return;
           setDuration(finiteMediaDuration(audio.duration) ?? 0);
           const pending = savedSeekRef.current;
-          const seekDuration = finiteMediaDuration(audio.duration);
+          const seekDuration = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration);
           if (typeof pending === "number" && seekDuration != null) {
             const clamped = Math.max(0, Math.min(seekDuration, pending));
-            audio.currentTime = clamped;
-            setCurrentTime(clamped);
+            performSeek(audio, clamped, seekDuration);
             savedSeekRef.current = null;
           }
+          retryStickySeekRef.current();
           audio.volume = isMuted ? 0 : volume;
         }}
         onTimeUpdate={(e) => {
           if (e.currentTarget === getActiveAudio()) {
+            const sticky = stickySeekRef.current;
+            if (sticky?.audio === e.currentTarget && !seekIsCloseEnough(e.currentTarget.currentTime, sticky.time)) {
+              setCurrentTime(sticky.time);
+              return;
+            }
             setCurrentTime(currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0);
           }
         }}
+        onLoadedData={handleActiveAudioResumePoint}
+        onDurationChange={handleActiveAudioResumePoint}
         onSeeked={handleActiveAudioResumePoint}
         onCanPlay={handleActiveAudioResumePoint}
+        onCanPlayThrough={handleActiveAudioResumePoint}
         onPlaying={handleActiveAudioPlaying}
         onError={handleActiveAudioError}
         onEnded={(e) => {
@@ -978,22 +1092,30 @@ function PlayerBar(): React.ReactElement | null {
           if (audio !== getActiveAudio()) return;
           setDuration(finiteMediaDuration(audio.duration) ?? 0);
           const pending = savedSeekRef.current;
-          const seekDuration = finiteMediaDuration(audio.duration);
+          const seekDuration = finiteMediaDuration(audio.duration) ?? finiteMediaDuration(duration);
           if (typeof pending === "number" && seekDuration != null) {
             const clamped = Math.max(0, Math.min(seekDuration, pending));
-            audio.currentTime = clamped;
-            setCurrentTime(clamped);
+            performSeek(audio, clamped, seekDuration);
             savedSeekRef.current = null;
           }
+          retryStickySeekRef.current();
           audio.volume = isMuted ? 0 : volume;
         }}
         onTimeUpdate={(e) => {
           if (e.currentTarget === getActiveAudio()) {
+            const sticky = stickySeekRef.current;
+            if (sticky?.audio === e.currentTarget && !seekIsCloseEnough(e.currentTarget.currentTime, sticky.time)) {
+              setCurrentTime(sticky.time);
+              return;
+            }
             setCurrentTime(currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0);
           }
         }}
+        onLoadedData={handleActiveAudioResumePoint}
+        onDurationChange={handleActiveAudioResumePoint}
         onSeeked={handleActiveAudioResumePoint}
         onCanPlay={handleActiveAudioResumePoint}
+        onCanPlayThrough={handleActiveAudioResumePoint}
         onPlaying={handleActiveAudioPlaying}
         onError={handleActiveAudioError}
         onEnded={(e) => {
