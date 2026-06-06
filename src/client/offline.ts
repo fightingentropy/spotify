@@ -156,9 +156,11 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 let hydrateStarted = false;
 let listenersAttached = false;
 let downloadPumpRunning = false;
+let downloadPumpRerunRequested = false;
 let syncRunning = false;
 let prefetchRunning = false;
 let warmPlaybackPumpRunning = false;
+const priorityDownloadQueue: string[] = [];
 const warmPlaybackQueue: string[] = [];
 const warmPlaybackSeen = new Map<string, number>();
 let currentOfflineAccountScope = readStoredOfflineAccountScope();
@@ -1003,6 +1005,29 @@ function canProcessDownloadOnThisDevice(record: OfflineDownloadRecord): boolean 
   return record.deviceId === getOfflineDeviceId();
 }
 
+function enqueuePriorityDownloadIds(songIds: string[]): void {
+  for (const songId of songIds) {
+    const existingIndex = priorityDownloadQueue.indexOf(songId);
+    if (existingIndex >= 0) priorityDownloadQueue.splice(existingIndex, 1);
+    priorityDownloadQueue.push(songId);
+  }
+}
+
+async function readPriorityQueuedDownloadRecord(): Promise<OfflineDownloadRecord | null> {
+  while (priorityDownloadQueue.length > 0) {
+    const songId = priorityDownloadQueue.shift();
+    if (!songId) continue;
+    const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, songId).catch(() => undefined);
+    if (!record || record.status !== "queued" || !isOfflineRecordForAccount(record)) continue;
+    return record;
+  }
+  return null;
+}
+
+async function readNextQueuedDownloadRecord(): Promise<OfflineDownloadRecord | null> {
+  return (await readPriorityQueuedDownloadRecord()) ?? readFirstDownloadRecordByStatus("queued", "prev");
+}
+
 async function quarantineForeignQueuedDownloadRecord(
   record: OfflineDownloadRecord,
 ): Promise<OfflineDownloadRecord> {
@@ -1054,14 +1079,17 @@ async function recoverInterruptedDownloads(force = false): Promise<void> {
 }
 
 async function processDownloadQueue(): Promise<void> {
-  if (downloadPumpRunning) return;
+  if (downloadPumpRunning) {
+    downloadPumpRerunRequested = true;
+    return;
+  }
   if (isNetworkUnavailable()) return;
   downloadPumpRunning = true;
   try {
     await requeueInterruptedDownloadRecords(await readDownloadRecordsByStatus("downloading", 80, "next"));
     let quarantinedForeignQueuedRecords = 0;
     for (;;) {
-      const record = await readFirstDownloadRecordByStatus("queued", "prev");
+      const record = await readNextQueuedDownloadRecord();
       if (!record) break;
       if (isNetworkUnavailable()) break;
       if (!canProcessDownloadOnThisDevice(record)) {
@@ -1151,6 +1179,10 @@ async function processDownloadQueue(): Promise<void> {
     }
   } finally {
     downloadPumpRunning = false;
+    if (downloadPumpRerunRequested && !isNetworkUnavailable()) {
+      downloadPumpRerunRequested = false;
+      void processDownloadQueue();
+    }
   }
 }
 
@@ -1661,6 +1693,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     const timestamp = now();
     const accountScope = getOfflineAccountScope();
     const deviceId = getOfflineDeviceId();
+    const queuedSongIds: string[] = [];
     for (const song of songs) {
       if (!canCacheSong(song)) continue;
       const existing = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, song.id).catch(() => undefined);
@@ -1686,7 +1719,9 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
         verifiedAt: current?.verifiedAt,
       };
       await persistRecord(record);
+      if (record.status === "queued") queuedSongIds.push(record.songId);
     }
+    enqueuePriorityDownloadIds(queuedSongIds);
     void processDownloadQueue();
     await get().refreshStorage();
   },

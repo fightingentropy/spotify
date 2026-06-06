@@ -78,12 +78,14 @@ function scopeProgress(
 
 export function OfflineSongDownloadButton({ song, className }: OfflineSongDownloadButtonProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const hydrate = useOfflineStore((state) => state.hydrate);
   const record = useOfflineStore((state) => state.records[song.id]);
   const queueDownloads = useOfflineStore((state) => state.queueDownloads);
   const removeDownload = useOfflineStore((state) => state.removeDownload);
   const status = getSongDownloadState(record);
-  const busy = status === "queued" || status === "downloading";
+  const busy = actionPending || status === "queued" || status === "downloading";
   const progress = busy ? Math.max(0, Math.min(1, record?.progress ?? 0)) : 0;
   const progressPercent = Math.round(progress * 100);
 
@@ -119,7 +121,16 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
       setConfirmOpen(true);
       return;
     }
-    await queueDownloads([song], `song:${song.id}`);
+    setActionError(null);
+    setActionPending(true);
+    try {
+      await queueDownloads([song], `song:${song.id}`);
+    } catch (error) {
+      console.error("Failed to queue offline download", error);
+      setActionError(error instanceof Error ? error.message : "Could not start download");
+    } finally {
+      setActionPending(false);
+    }
   }
 
   async function handleRemoveDownload(event: MouseEvent<HTMLButtonElement>) {
@@ -131,7 +142,9 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
   const title =
     status === "downloaded"
       ? "Remove offline download"
-      : status === "failed"
+      : actionError
+        ? actionError
+        : status === "failed"
         ? "Retry offline download"
         : busy
           ? `Downloading ${progressPercent}%`
@@ -156,7 +169,7 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
           "grid h-9 w-9 shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
           status === "downloaded"
             ? "text-emerald-500"
-            : status === "failed"
+            : status === "failed" || actionError
               ? "text-red-300"
               : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
           busy && "cursor-wait text-emerald-400",
