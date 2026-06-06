@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import {
-  HUBERMAN_PODCAST,
   PODCAST_SHOWS,
   parsePodcastFeed,
   type PodcastEpisode,
@@ -57,7 +56,11 @@ function EpisodeSkeletonRows() {
 }
 
 export default function PodcastsPage() {
-  const show = HUBERMAN_PODCAST;
+  const [selectedShowId, setSelectedShowId] = useState(PODCAST_SHOWS[0]?.id ?? "");
+  const show = useMemo(
+    () => PODCAST_SHOWS.find((podcastShow) => podcastShow.id === selectedShowId) ?? PODCAST_SHOWS[0],
+    [selectedShowId],
+  );
   const [episodes, setEpisodes] = useState<PodcastEpisode[]>([]);
   const [status, setStatus] = useState<FeedStatus>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +74,7 @@ export default function PodcastsPage() {
 
   const loadFeed = useCallback(
     async (signal?: AbortSignal) => {
+      if (!show) return;
       setStatus("loading");
       setError(null);
 
@@ -92,6 +96,8 @@ export default function PodcastsPage() {
   );
 
   useEffect(() => {
+    setEpisodes([]);
+    setLoadedAt(null);
     const controller = new AbortController();
     void loadFeed(controller.signal);
     return () => controller.abort();
@@ -132,7 +138,7 @@ export default function PodcastsPage() {
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold">Podcasts</h1>
               <div className="mt-1 text-sm text-white/[0.62]">
-                {PODCAST_SHOWS.length} show
+                {PODCAST_SHOWS.length} shows
               </div>
             </div>
           </div>
@@ -147,6 +153,44 @@ export default function PodcastsPage() {
           >
             <RefreshCw size={18} className={cn(status === "loading" && "animate-spin")} />
           </button>
+        </div>
+
+        <div className="mb-6 grid gap-2 sm:grid-cols-2">
+          {PODCAST_SHOWS.map((podcastShow) => {
+            const selected = podcastShow.id === show.id;
+            return (
+              <button
+                key={podcastShow.id}
+                type="button"
+                onClick={() => setSelectedShowId(podcastShow.id)}
+                aria-pressed={selected}
+                className={cn(
+                  "wf-list-row wf-pressable flex min-h-[68px] items-center gap-3 rounded-lg border px-3 py-2 text-left transition",
+                  selected
+                    ? "border-emerald-500/45 bg-white/[0.08]"
+                    : "border-white/[0.1] bg-white/[0.03] hover:bg-white/[0.06]",
+                )}
+              >
+                <CoverImage
+                  src={podcastShow.imageUrl}
+                  alt={podcastShow.title}
+                  width={48}
+                  height={48}
+                  loading="eager"
+                  className="h-12 w-12 shrink-0 rounded-md object-cover"
+                  sizes="48px"
+                />
+                <div className="min-w-0">
+                  <div className="truncate text-[15px] font-semibold leading-5 text-white">
+                    {podcastShow.title}
+                  </div>
+                  <div className="mt-0.5 truncate text-[13px] leading-5 text-white/[0.62]">
+                    {podcastShow.author}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <section className="mb-7 overflow-hidden rounded-lg border border-white/[0.12] bg-white/[0.04]">

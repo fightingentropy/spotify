@@ -35,6 +35,19 @@ export const PODCAST_SHOWS: PodcastShow[] = [
       "https://megaphone.imgix.net/podcasts/042e6144-725e-11ec-a75d-c38f702aecad/image/ee4f0b7b466ca35620792970d9bce2d2.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
     accentClassName: "from-[#1ed760] via-[#06b6d4] to-[#f97316]",
   },
+  {
+    id: "modern-wisdom",
+    title: "Modern Wisdom",
+    author: "Chris Williamson",
+    subtitle: "Lessons from the greatest thinkers on the planet",
+    description:
+      "Life lessons, ideas, and tactics for navigating modern life with Chris Williamson and guests.",
+    feedUrl: "https://feeds.megaphone.fm/SIXMSB5088139739",
+    websiteUrl: "https://chriswillx.com/podcast/",
+    imageUrl:
+      "https://megaphone.imgix.net/podcasts/a62f84c0-f8b6-11ed-a4fc-fb9e7841d45b/image/76ed638554a4be965517200d1cd5f30d.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
+    accentClassName: "from-[#f97316] via-[#facc15] to-[#7c3aed]",
+  },
 ];
 
 export const HUBERMAN_PODCAST = PODCAST_SHOWS[0];

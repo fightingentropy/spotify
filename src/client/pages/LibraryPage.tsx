@@ -70,7 +70,7 @@ export default function LibraryPage() {
             </div>
             <div>
               <div className="font-semibold">Podcasts</div>
-              <div className="text-sm opacity-70">Huberman Lab</div>
+              <div className="text-sm opacity-70">Huberman Lab and Modern Wisdom</div>
             </div>
           </Link>
 
