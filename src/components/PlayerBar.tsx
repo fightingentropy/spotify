@@ -1157,7 +1157,7 @@ function PlayerBar(): React.ReactElement | null {
             <button aria-label="Previous" onClick={previous} className="wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
               <SkipBack size={18} />
             </button>
-            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={handleTogglePlayback} className="wf-control-button h-9 w-9 rounded-full grid place-items-center bg-white text-black transition hover:scale-105">
+            <button aria-label={isPlaying ? "Pause" : "Play"} onClick={handleTogglePlayback} className="wf-control-button h-9 w-9 rounded-full grid place-items-center bg-white text-black transition">
               {isPlaying ? <Pause size={18} /> : <Play size={18} className="translate-x-[1px]" />}
             </button>
             <button aria-label="Next" onClick={next} className="wf-control-button p-2 rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white">
