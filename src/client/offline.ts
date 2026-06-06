@@ -139,10 +139,12 @@ type RemoteOfflineDownloadPage = {
 };
 
 const DB_NAME = "spotify_offline_v1";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const DOWNLOAD_STORE = "downloads";
 const API_SNAPSHOT_STORE = "api_snapshots";
 const MUTATION_STORE = "mutations";
+const DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT = "accountScope_updatedAt";
+const DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT = "accountScope_status_updatedAt";
 export const OFFLINE_MEDIA_CACHE = "spotify-media-v1";
 export const OFFLINE_PLAYBACK_CACHE = "spotify-playback-v1";
 const OFFLINE_ACCOUNT_SCOPE_STORAGE_KEY = "spotify_offline_account_scope";
@@ -160,6 +162,8 @@ const REMOTE_DOWNLOAD_SYNC_TIMEOUT_MS = 8_000;
 const REMOTE_DOWNLOAD_PAGE_SIZE = 100;
 const REMOTE_DOWNLOAD_SYNC_BATCH_SIZE = 25;
 const REMOTE_DOWNLOAD_BATCH_PAUSE_MS = 25;
+const HYDRATE_DOWNLOAD_RECORD_LIMIT = 160;
+const MAX_DOWNLOAD_RECORDS_IN_MEMORY = 420;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let hydrateStarted = false;
@@ -255,6 +259,21 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
+function scheduleBackgroundOfflineWork(callback: () => void): void {
+  if (typeof window === "undefined") {
+    callback();
+    return;
+  }
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+  };
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(callback, { timeout: 4_000 });
+    return;
+  }
+  window.setTimeout(callback, 1_000);
+}
+
 function hasIndexedDb(): boolean {
   return typeof indexedDB !== "undefined";
 }
@@ -263,15 +282,28 @@ function hasCacheStorage(): boolean {
   return typeof caches !== "undefined";
 }
 
+function ensureDownloadIndexes(store: IDBObjectStore): void {
+  if (!store.indexNames.contains(DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT)) {
+    store.createIndex(DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT, ["accountScope", "updatedAt"]);
+  }
+  if (!store.indexNames.contains(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT)) {
+    store.createIndex(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT, ["accountScope", "status", "updatedAt"]);
+  }
+}
+
 function openOfflineDb(): Promise<IDBDatabase> {
   if (!hasIndexedDb()) return Promise.reject(new Error("IndexedDB is not available"));
   dbPromise ??= new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      let downloadStore: IDBObjectStore | null = null;
       if (!db.objectStoreNames.contains(DOWNLOAD_STORE)) {
-        db.createObjectStore(DOWNLOAD_STORE, { keyPath: "songId" });
+        downloadStore = db.createObjectStore(DOWNLOAD_STORE, { keyPath: "songId" });
+      } else {
+        downloadStore = request.transaction?.objectStore(DOWNLOAD_STORE) ?? null;
       }
+      if (downloadStore) ensureDownloadIndexes(downloadStore);
       if (!db.objectStoreNames.contains(API_SNAPSHOT_STORE)) {
         db.createObjectStore(API_SNAPSHOT_STORE, { keyPath: "url" });
       }
@@ -294,6 +326,108 @@ async function idbGetAll<T>(storeName: string): Promise<T[]> {
     request.onerror = () => reject(request.error ?? new Error(`Failed to read ${storeName}`));
     tx.onerror = () => reject(tx.error ?? new Error(`Failed to read ${storeName}`));
   });
+}
+
+type DownloadRecordPageOptions = {
+  scope?: string | null;
+  status?: OfflineDownloadStatus;
+  offset?: number;
+  limit?: number;
+  direction?: IDBCursorDirection;
+};
+
+export type OfflineDownloadRecordPage = {
+  records: OfflineDownloadRecord[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+};
+
+function downloadRangeForAccount(
+  scope: string,
+  status?: OfflineDownloadStatus,
+): IDBKeyRange {
+  const normalizedScope = normalizeOfflineAccountScope(scope);
+  return status
+    ? IDBKeyRange.bound(
+        [normalizedScope, status, 0],
+        [normalizedScope, status, Number.MAX_SAFE_INTEGER],
+      )
+    : IDBKeyRange.bound(
+        [normalizedScope, 0],
+        [normalizedScope, Number.MAX_SAFE_INTEGER],
+      );
+}
+
+async function countDownloadRecordsForAccount(options: DownloadRecordPageOptions = {}): Promise<number> {
+  const db = await openOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DOWNLOAD_STORE, "readonly");
+    const store = tx.objectStore(DOWNLOAD_STORE);
+    const index = store.index(
+      options.status ? DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT : DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT,
+    );
+    const request = index.count(
+      downloadRangeForAccount(options.scope ?? currentOfflineAccountScope, options.status),
+    );
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Failed to count downloads"));
+    tx.onerror = () => reject(tx.error ?? new Error("Failed to count downloads"));
+  });
+}
+
+async function readDownloadRecordsForAccount(
+  options: DownloadRecordPageOptions = {},
+): Promise<OfflineDownloadRecordPage> {
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
+  const direction = options.direction ?? "prev";
+  const scope = options.scope ?? currentOfflineAccountScope;
+
+  const db = await openOfflineDb();
+  const total = await countDownloadRecordsForAccount({ scope, status: options.status });
+  const records = await new Promise<OfflineDownloadRecord[]>((resolve, reject) => {
+    const tx = db.transaction(DOWNLOAD_STORE, "readonly");
+    const store = tx.objectStore(DOWNLOAD_STORE);
+    const index = store.index(
+      options.status ? DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT : DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT,
+    );
+    const request = index.openCursor(downloadRangeForAccount(scope, options.status), direction);
+    const page: OfflineDownloadRecord[] = [];
+    let skipped = 0;
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor || page.length >= limit) {
+        resolve(page);
+        return;
+      }
+      if (skipped < offset) {
+        skipped += 1;
+        cursor.continue();
+        return;
+      }
+
+      const record = cursor.value as OfflineDownloadRecord;
+      if (isOfflineRecordForAccount(record, scope)) page.push(record);
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error ?? new Error("Failed to read downloads"));
+    tx.onerror = () => reject(tx.error ?? new Error("Failed to read downloads"));
+  });
+
+  return {
+    records,
+    total,
+    offset,
+    limit,
+    hasMore: offset + records.length < total,
+  };
+}
+
+export async function readDownloadedRecordsPage(options: Omit<DownloadRecordPageOptions, "status"> = {}): Promise<OfflineDownloadRecordPage> {
+  return readDownloadRecordsForAccount({ ...options, status: "downloaded" });
 }
 
 async function idbGet<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
@@ -344,6 +478,26 @@ function recordsById(records: OfflineDownloadRecord[]): Record<string, OfflineDo
     map[record.songId] = record;
   }
   return map;
+}
+
+function capRecordsInMemory(records: Record<string, OfflineDownloadRecord>): Record<string, OfflineDownloadRecord> {
+  const values = Object.values(records);
+  if (values.length <= MAX_DOWNLOAD_RECORDS_IN_MEMORY) return records;
+  return recordsById(
+    values
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, MAX_DOWNLOAD_RECORDS_IN_MEMORY),
+  );
+}
+
+export function mergeOfflineDownloadRecords(records: OfflineDownloadRecord[]): void {
+  if (records.length === 0) return;
+  useOfflineStore.setState((state) => ({
+    records: capRecordsInMemory({
+      ...state.records,
+      ...recordsById(records),
+    }),
+  }));
 }
 
 function uniqueStrings(values: Array<string | undefined | null>): string[] {
@@ -830,10 +984,10 @@ async function verifyOrRepairRecord(record: OfflineDownloadRecord): Promise<{
 
 function setRecordState(record: OfflineDownloadRecord): void {
   useOfflineStore.setState((state) => ({
-    records: {
+    records: capRecordsInMemory({
       ...state.records,
       [record.songId]: record,
-    },
+    }),
   }));
 }
 
@@ -907,10 +1061,19 @@ async function syncLocalDownloadPreferences(): Promise<void> {
   if (remoteDownloadSyncRunning) return;
   remoteDownloadSyncRunning = true;
   try {
-    const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
-    for (let index = 0; index < records.length; index += REMOTE_DOWNLOAD_SYNC_BATCH_SIZE) {
-      await upsertRemoteDownloadPreferenceBatch(records.slice(index, index + REMOTE_DOWNLOAD_SYNC_BATCH_SIZE));
-      if (index + REMOTE_DOWNLOAD_SYNC_BATCH_SIZE < records.length) {
+    let offset = 0;
+    for (;;) {
+      const page = await readDownloadRecordsForAccount({
+        scope: accountScope,
+        offset,
+        limit: REMOTE_DOWNLOAD_SYNC_BATCH_SIZE,
+        direction: "prev",
+      });
+      if (page.records.length === 0) break;
+      await upsertRemoteDownloadPreferenceBatch(page.records);
+      offset += page.records.length;
+      if (!page.hasMore) break;
+      if (page.hasMore) {
         await sleep(REMOTE_DOWNLOAD_BATCH_PAUSE_MS);
       }
     }
@@ -946,8 +1109,6 @@ async function restoreRemoteDownloadPreferences(): Promise<void> {
   remoteDownloadRestoreRunning = true;
   try {
     restoredRemoteDownloadScopes.add(accountScope);
-    const existing = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
-    const byId = recordsById(existing);
     let offset = 0;
     let restoredAny = false;
     for (;;) {
@@ -957,7 +1118,8 @@ async function restoreRemoteDownloadPreferences(): Promise<void> {
       for (const remoteDownload of page.downloads) {
         const { song } = remoteDownload;
         if (!canCacheSong(song)) continue;
-        const current = byId[song.id];
+        const existingRecord = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, song.id).catch(() => undefined);
+        const current = isOfflineRecordForAccount(existingRecord, accountScope) ? existingRecord : undefined;
         const pinnedBy = normalizeDownloadScopes(
           [...(current?.pinnedBy ?? []), ...remoteDownload.pinnedBy],
           song.id,
@@ -978,7 +1140,6 @@ async function restoreRemoteDownloadPreferences(): Promise<void> {
           updatedAt: timestamp,
           lastAccessedAt: current?.lastAccessedAt ?? timestamp,
         };
-        byId[song.id] = record;
         restoredAny = true;
         await persistRecord(record);
       }
@@ -998,6 +1159,49 @@ async function restoreRemoteDownloadPreferences(): Promise<void> {
 async function restoreThenSyncRemoteDownloadPreferences(): Promise<void> {
   await restoreRemoteDownloadPreferences();
   await syncLocalDownloadPreferences();
+}
+
+async function readDownloadRecordsByStatus(
+  status: OfflineDownloadStatus,
+  limit: number,
+  direction: IDBCursorDirection = "prev",
+): Promise<OfflineDownloadRecord[]> {
+  return (
+    await readDownloadRecordsForAccount({
+      status,
+      limit,
+      direction,
+    }).catch(() => ({
+      records: [] as OfflineDownloadRecord[],
+      total: 0,
+      offset: 0,
+      limit,
+      hasMore: false,
+    }))
+  ).records;
+}
+
+async function readFirstDownloadRecordByStatus(
+  status: OfflineDownloadStatus,
+  direction: IDBCursorDirection = "next",
+): Promise<OfflineDownloadRecord | null> {
+  const records = await readDownloadRecordsByStatus(status, 1, direction);
+  return records[0] ?? null;
+}
+
+async function readHydrateDownloadRecords(): Promise<OfflineDownloadRecord[]> {
+  const [active, failed, downloaded] = await Promise.all([
+    Promise.all([
+      readDownloadRecordsByStatus("downloading", 40, "next"),
+      readDownloadRecordsByStatus("queued", 40, "next"),
+    ]).then((groups) => groups.flat()),
+    readDownloadRecordsByStatus("failed", 40, "prev"),
+    readDownloadRecordsByStatus("downloaded", HYDRATE_DOWNLOAD_RECORD_LIMIT, "prev"),
+  ]);
+  const byId = recordsById([...active, ...failed, ...downloaded]);
+  return Object.values(byId)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_DOWNLOAD_RECORDS_IN_MEMORY);
 }
 
 async function requeueInterruptedDownloadRecords(
@@ -1025,9 +1229,9 @@ async function requeueInterruptedDownloadRecords(
 
 async function recoverInterruptedDownloads(force = false): Promise<void> {
   if (downloadPumpRunning) return;
-  const records = await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []);
-  const nextRecords = await requeueInterruptedDownloadRecords(currentAccountRecords(records), force);
-  useOfflineStore.setState({ records: recordsById(nextRecords) });
+  const records = await readDownloadRecordsByStatus("downloading", 80, "next");
+  const nextRecords = await requeueInterruptedDownloadRecords(records, force);
+  mergeOfflineDownloadRecords(nextRecords);
 }
 
 async function processDownloadQueue(): Promise<void> {
@@ -1035,13 +1239,9 @@ async function processDownloadQueue(): Promise<void> {
   if (isNetworkUnavailable()) return;
   downloadPumpRunning = true;
   try {
-    const initialRecords = currentAccountRecords(
-      await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []),
-    );
-    await requeueInterruptedDownloadRecords(initialRecords);
+    await requeueInterruptedDownloadRecords(await readDownloadRecordsByStatus("downloading", 80, "next"));
     for (;;) {
-      const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE));
-      const record = records.find((item) => item.status === "queued");
+      const record = await readFirstDownloadRecordByStatus("queued", "next");
       if (!record) break;
       if (isNetworkUnavailable()) break;
 
@@ -1128,9 +1328,9 @@ async function processDownloadQueue(): Promise<void> {
 }
 
 async function refreshDownloadRecordsForCurrentAccount(): Promise<void> {
-  const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
+  const records = await readHydrateDownloadRecords();
   const nextRecords = await requeueInterruptedDownloadRecords(records, true);
-  useOfflineStore.setState({ records: recordsById(nextRecords) });
+  useOfflineStore.setState({ records: capRecordsInMemory(recordsById(nextRecords)) });
 }
 
 export function setOfflineAccountScope(scope: string | null | undefined): void {
@@ -1527,6 +1727,13 @@ export function resolveOfflinePlaybackSong(song: PlayerSong | null | undefined):
   if (!song || isBrowserLocalSong(song) || isOfflinePlaybackSong(song)) return song;
   const record = useOfflineStore.getState().records[song.id];
   if (!isOfflineRecordForAccount(record) || record.status !== "downloaded") return song;
+  return resolveOfflineDownloadRecordSong(record, song);
+}
+
+export function resolveOfflineDownloadRecordSong(
+  record: OfflineDownloadRecord,
+  song: PlayerSong = record.song,
+): PlayerSong {
   const nativeAudioUrl = nativeOfflineAssetWebUrl(record.nativeFiles?.audio);
   if (nativeAudioUrl) {
     return {
@@ -1609,35 +1816,36 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     hydrateStarted = true;
     attachBrowserListeners();
     const [storedRecords, pendingMutations, storage, persistentStorage] = await Promise.all([
-      idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []),
+      readHydrateDownloadRecords().catch(() => []),
       mutationCount(),
       estimateStorage(),
       requestPersistentStorage(),
     ]);
-    const records = await requeueInterruptedDownloadRecords(currentAccountRecords(storedRecords), true);
+    const records = await requeueInterruptedDownloadRecords(storedRecords, true);
     set({
       hydrated: true,
       online: typeof navigator === "undefined" ? true : navigator.onLine,
-      records: recordsById(records),
+      records: capRecordsInMemory(recordsById(records)),
       pendingMutations,
       storageUsage: storage.usage,
       storageQuota: storage.quota,
       persistentStorage,
       nativeStorage: isNativeOfflineStorageAvailable(),
     });
-    void restoreThenSyncRemoteDownloadPreferences();
-    void processDownloadQueue();
-    void syncOfflineMutations();
+    scheduleBackgroundOfflineWork(() => {
+      void restoreThenSyncRemoteDownloadPreferences();
+      void processDownloadQueue();
+      void syncOfflineMutations();
+    });
   },
   queueDownloads: async (songs, scope) => {
     await get().hydrate();
     const timestamp = now();
     const accountScope = getOfflineAccountScope();
-    const existing = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
-    const byId = recordsById(existing);
     for (const song of songs) {
       if (!canCacheSong(song)) continue;
-      const current = byId[song.id];
+      const existing = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, song.id).catch(() => undefined);
+      const current = isOfflineRecordForAccount(existing, accountScope) ? existing : undefined;
       const pinnedBy = Array.from(new Set([...(current?.pinnedBy ?? []), scope]));
       const record: OfflineDownloadRecord = {
         songId: song.id,
