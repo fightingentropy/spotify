@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  ArrowDown,
+  ArrowUp,
   Check,
   CheckCircle2,
   Clock3,
@@ -40,8 +42,10 @@ type HomeSong = PlayerSong & {
 };
 
 type HomeViewMode = "list" | "grid";
+type HomeDateSortMode = "date_desc" | "date_asc";
 
 const HOME_VIEW_MODE_KEY = "spotify_home_view_mode";
+const HOME_DATE_SORT_KEY = "spotify_home_date_sort";
 const HOME_LIST_GRID =
   "md:grid-cols-[3rem_minmax(0,2.1fr)_minmax(0,1.05fr)_minmax(7.75rem,0.78fr)_2.75rem_5rem_2.25rem] xl:grid-cols-[4.25rem_minmax(0,2.4fr)_minmax(0,1.15fr)_minmax(8rem,0.9fr)_3rem_5.25rem_2.5rem]";
 const HOME_VIRTUALIZATION_MIN_ITEMS = 100;
@@ -174,6 +178,7 @@ export default function HomePage() {
   const navigate = useNavigate();
   const { user, status } = useAuth();
   const [viewMode, setViewMode] = useState<HomeViewMode>("list");
+  const [dateSortMode, setDateSortMode] = useState<HomeDateSortMode>("date_desc");
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
@@ -215,6 +220,10 @@ export default function HomePage() {
       const stored = localStorage.getItem(HOME_VIEW_MODE_KEY);
       if (stored === "list" || stored === "grid") {
         setViewMode(stored);
+      }
+      const storedDateSort = localStorage.getItem(HOME_DATE_SORT_KEY);
+      if (storedDateSort === "date_desc" || storedDateSort === "date_asc") {
+        setDateSortMode(storedDateSort);
       }
     } catch {}
   }, []);
@@ -271,9 +280,9 @@ export default function HomePage() {
       const rightTime = Date.parse(right.createdAt || "");
       const a = Number.isFinite(leftTime) ? leftTime : 0;
       const b = Number.isFinite(rightTime) ? rightTime : 0;
-      return b - a;
+      return dateSortMode === "date_desc" ? b - a : a - b;
     });
-  }, [data.songs]);
+  }, [data.songs, dateSortMode]);
 
   const enableVirtualList =
     viewMode === "list" && sortedSongs.length >= HOME_VIRTUALIZATION_MIN_ITEMS;
@@ -444,6 +453,14 @@ export default function HomePage() {
     setViewMode(nextMode);
     try {
       localStorage.setItem(HOME_VIEW_MODE_KEY, nextMode);
+    } catch {}
+  };
+
+  const toggleDateSortMode = () => {
+    const nextMode: HomeDateSortMode = dateSortMode === "date_desc" ? "date_asc" : "date_desc";
+    setDateSortMode(nextMode);
+    try {
+      localStorage.setItem(HOME_DATE_SORT_KEY, nextMode);
     } catch {}
   };
 
@@ -652,7 +669,28 @@ export default function HomePage() {
               <div className="text-center">#</div>
               <div>Title</div>
               <div>Album</div>
-              <div>Date added</div>
+              <button
+                type="button"
+                aria-label={
+                  dateSortMode === "date_desc"
+                    ? "Sort by date added oldest first"
+                    : "Sort by date added newest first"
+                }
+                title={
+                  dateSortMode === "date_desc"
+                    ? "Sort by date added oldest first"
+                    : "Sort by date added newest first"
+                }
+                onClick={toggleDateSortMode}
+                className="wf-control-button inline-flex w-fit items-center gap-1.5 rounded-md bg-transparent text-left transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+              >
+                <span>Date added</span>
+                {dateSortMode === "date_desc" ? (
+                  <ArrowDown size={15} strokeWidth={2.5} />
+                ) : (
+                  <ArrowUp size={15} strokeWidth={2.5} />
+                )}
+              </button>
               <div />
               <div className="flex justify-center">
                 <Clock3 size={23} />
