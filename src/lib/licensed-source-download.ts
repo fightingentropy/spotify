@@ -119,6 +119,32 @@ async function fetchWithTimeout(
   }
 }
 
+function retryAfterMs(response: Response, fallbackMs: number): number {
+  const raw = response.headers.get("retry-after") || "";
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(10_000, Math.max(1_000, seconds * 1000));
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.min(10_000, Math.max(1_000, dateMs - Date.now()));
+  return fallbackMs;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchMediaWithRetries(url: string, init: RequestInit): Promise<Response> {
+  let lastResponse: Response | null = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetchWithTimeout(url, init);
+    if (response.status !== 429 && response.status !== 503) return response;
+    lastResponse = response;
+    if (attempt === 3) return response;
+    await response.arrayBuffer().catch(() => undefined);
+    await wait(retryAfterMs(response, (attempt + 1) * 1500));
+  }
+  return lastResponse ?? fetchWithTimeout(url, init);
+}
+
 export async function resolveLicensedSourceStreamUrl(options: {
   endpointUrl: string;
   apiKey?: string;
@@ -300,7 +326,7 @@ export async function materializeLicensedSourceStream(
   options?: { maxBytes?: number; userAgent?: string },
 ): Promise<Response> {
   if (stream.kind === "url") {
-    return fetchWithTimeout(stream.streamUrl, {
+    return fetchMediaWithRetries(stream.streamUrl, {
       method: "GET",
       headers: {
         ...stream.headers,

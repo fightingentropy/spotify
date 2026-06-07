@@ -1602,6 +1602,61 @@ function ffmpegDecryptionKey(value: string): string {
   return /^[0-9a-fA-F]{32}$/.test(candidate) ? candidate : value.trim();
 }
 
+function wantsFlacOutput(stream: LicensedSourceStream): boolean {
+  return stream.outputFormat?.trim().toLowerCase() === "flac";
+}
+
+function bytesAreFlac(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 4 && String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === "fLaC";
+}
+
+async function materializeLicensedSourceResponseAsFlac(response: Response): Promise<Response> {
+  if (!response.ok) {
+    throw new LicensedSourceDownloadError(`Licensed source audio returned ${response.status}`, response.status);
+  }
+  const sourceBytes = new Uint8Array(await response.arrayBuffer());
+  if (sourceBytes.byteLength > MAX_AUDIO_BYTES) {
+    throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+  }
+  if (bytesAreFlac(sourceBytes)) {
+    return new Response(sourceBytes, {
+      headers: {
+        "content-type": "audio/flac",
+        "content-length": String(sourceBytes.byteLength),
+      },
+    });
+  }
+
+  const tempDir = await mkdtemp(resolve(tmpdir(), "spotify-licensed-"));
+  const sourcePath = resolve(tempDir, "source.bin");
+  const outputPath = resolve(tempDir, "output.flac");
+  try {
+    await writeFile(sourcePath, sourceBytes);
+    await runFfmpeg([
+      "-i",
+      sourcePath,
+      "-vn",
+      "-map_metadata",
+      "-1",
+      "-compression_level",
+      "8",
+      outputPath,
+    ]);
+    const outputBytes = await readFile(outputPath);
+    if (outputBytes.byteLength > MAX_AUDIO_BYTES) {
+      throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+    }
+    return new Response(outputBytes, {
+      headers: {
+        "content-type": "audio/flac",
+        "content-length": String(outputBytes.byteLength),
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 async function materializeEncryptedLicensedSourceStream(
   stream: LicensedSourceStream,
   userAgent?: string,
@@ -1672,12 +1727,15 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
           maxBytes: MAX_AUDIO_BYTES,
           userAgent,
         });
-    if (!response.ok || !response.body) return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
+    const outputResponse = !licensedStream.decryptionKey && wantsFlacOutput(licensedStream)
+      ? await materializeLicensedSourceResponseAsFlac(response)
+      : response;
+    if (!outputResponse.ok || !outputResponse.body) return json({ error: `Audio server returned ${outputResponse.status}` }, { status: 502 });
     const headers = new Headers();
-    headers.set("content-type", response.headers.get("content-type") || "audio/flac");
-    const length = response.headers.get("content-length");
+    headers.set("content-type", outputResponse.headers.get("content-type") || "audio/flac");
+    const length = outputResponse.headers.get("content-length");
     if (length) headers.set("content-length", length);
-    return new Response(response.body, { headers });
+    return new Response(outputResponse.body, { headers });
   } catch (error) {
     if (error instanceof LicensedSourceDownloadError) {
       return json({ error: error.message }, { status: error.status });

@@ -13,6 +13,7 @@ import type { PlayerSong } from "@/types/player";
 import {
   QobuzDownloadError,
   resolveQobuzAvailability,
+  resolveQobuzTrackId,
   resolveQobuzStreamUrl as resolveQobuzProviderStreamUrl,
   type QobuzCredentials,
 } from "@/lib/qobuz-download";
@@ -1483,7 +1484,6 @@ async function validateMinimumQualityResponse(
   if (candidate.minimumQuality !== "lossless") return response;
   const contentType = `${response.headers.get("content-type") || candidate.contentType || ""}`.toLowerCase();
   const contentTypeInfo = classifyAudioContentType(contentType);
-  if (contentTypeInfo.quality === "lossless") return response;
   if (contentTypeInfo.quality === "lossy") {
     return `${candidate.service} returned a lossy ${audioCodecLabel(contentTypeInfo)} stream`;
   }
@@ -1493,7 +1493,7 @@ async function validateMinimumQualityResponse(
 
   const buffer = await response.arrayBuffer();
   if (buffer.byteLength > MAX_AUDIO_BYTES) return "Audio file is too large";
-  const byteInfo = classifyAudioBytes(buffer, contentType);
+  const byteInfo = classifyAudioBytes(buffer);
   if (byteInfo.quality === "lossless") {
     return new Response(buffer, {
       status: response.status,
@@ -1604,6 +1604,79 @@ function appleMusicTrackIdFromSongLinkPayload(songLinkPayload: Record<string, un
   }
 }
 
+type ItunesSongSearchResult = {
+  trackId?: number | string;
+  trackName?: string;
+  artistName?: string;
+  collectionName?: string;
+  trackTimeMillis?: number | string;
+};
+
+function normalizeProviderMatchValue(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function scoreAppleMusicSearchResult(result: ItunesSongSearchResult, payload: SongPayload): number {
+  const title = normalizeProviderMatchValue(toStringValue(payload.title));
+  const artist = normalizeProviderMatchValue(toStringValue(payload.artist));
+  const album = normalizeProviderMatchValue(toStringValue(payload.album));
+  const resultTitle = normalizeProviderMatchValue(toStringValue(result.trackName));
+  const resultArtist = normalizeProviderMatchValue(toStringValue(result.artistName));
+  const resultAlbum = normalizeProviderMatchValue(toStringValue(result.collectionName));
+  const durationMs = toNumberValue(payload.durationMs);
+  const resultDurationMs = toNumberValue(result.trackTimeMillis);
+  let score = 0;
+
+  if (title && resultTitle === title) score += 100;
+  else if (title && (resultTitle.includes(title) || title.includes(resultTitle))) score += 55;
+  if (artist && resultArtist === artist) score += 80;
+  else if (artist && (resultArtist.includes(artist) || artist.includes(resultArtist))) score += 40;
+  if (album && resultAlbum === album) score += 35;
+  else if (album && (resultAlbum.includes(album) || album.includes(resultAlbum))) score += 15;
+  if (durationMs != null && resultDurationMs != null) {
+    const diff = Math.abs(durationMs - resultDurationMs);
+    if (diff <= 2_500) score += 35;
+    else if (diff <= 7_500) score += 15;
+  }
+  return score;
+}
+
+async function resolveAppleMusicTrackIdFromPayload(payload: SongPayload): Promise<string> {
+  const title = toStringValue(payload.title);
+  const artist = toStringValue(payload.artist);
+  const term = [title, artist].filter(Boolean).join(" ");
+  if (!term) return "";
+  const url = new URL("https://itunes.apple.com/search");
+  url.searchParams.set("media", "music");
+  url.searchParams.set("entity", "song");
+  url.searchParams.set("limit", "10");
+  url.searchParams.set("country", toStringValue(payload.region).toUpperCase() || "US");
+  url.searchParams.set("term", term);
+
+  const response = await fetchWithTimeout(url.toString(), SPOTIFY_REQUEST_TIMEOUT_MS).catch(() => null);
+  if (!response?.ok) return "";
+  const searchPayload = toObject(await response.json().catch(() => null));
+  const results = Array.isArray(searchPayload?.results) ? searchPayload.results : [];
+  const best = results
+    .map((candidate) => {
+      const result = toObject(candidate) as ItunesSongSearchResult | null;
+      return result ? { result, score: scoreAppleMusicSearchResult(result, payload) } : null;
+    })
+    .filter((item): item is { result: ItunesSongSearchResult; score: number } => Boolean(item))
+    .sort((left, right) => right.score - left.score)[0];
+  const id =
+    typeof best?.result.trackId === "number" && Number.isFinite(best.result.trackId)
+      ? `${best.result.trackId}`
+      : toStringValue(best?.result.trackId);
+  return best && best.score >= 140 && /^\d+$/.test(id) ? id : "";
+}
+
 function amazonAsinFromValue(value: string): string {
   let decoded = value;
   try {
@@ -1646,7 +1719,7 @@ function qobuzSpotbyeQualities(payload: SongPayload): string[] {
   const explicit = toStringValue(payload.quality);
   if (explicit) return [explicit];
   const profile = toStringValue(payload.qualityProfile).toLowerCase();
-  return profile === "cd" ? ["16", "6"] : ["24", "16", "6"];
+  return profile === "cd" ? ["16"] : ["24", "16"];
 }
 
 function tidalSpotbyeQualities(payload: SongPayload): string[] {
@@ -1665,22 +1738,23 @@ function amazonSpotbyeQualities(service: DownloadProviderService, payload: SongP
 
 function deezerSpotbyeQualities(payload: SongPayload): string[] {
   const explicit = toStringValue(payload.quality);
-  return explicit ? [explicit] : ["flac"];
+  return explicit ? [explicit] : ["16"];
 }
 
 function appleSpotbyeQualities(payload: SongPayload): string[] {
   const explicit = toStringValue(payload.quality);
-  return explicit ? [explicit] : ["atmos", "lossless"];
+  return explicit ? [explicit] : [];
 }
 
 async function spotiflacApiDlProviderBodies(options: {
+  env: CloudflareEnv;
   kind: SpotiFlacApiDlProviderKind;
   service: DownloadProviderService;
   trackId: string;
   songLinkPayload: Record<string, unknown>;
   payload: SongPayload;
 }): Promise<Array<Record<string, unknown>>> {
-  const { kind, service, trackId, songLinkPayload, payload } = options;
+  const { env, kind, service, trackId, songLinkPayload, payload } = options;
   if (kind === "tidal") {
     const tidalTrackId = tidalTrackIdFromSongLinkPayload(songLinkPayload);
     return tidalTrackId
@@ -1689,7 +1763,15 @@ async function spotiflacApiDlProviderBodies(options: {
   }
 
   if (kind === "qobuz") {
-    const qobuzTrackId = qobuzTrackIdFromSongLinkPayload(songLinkPayload);
+    const qobuzTrackId =
+      qobuzTrackIdFromSongLinkPayload(songLinkPayload) ||
+      await resolveQobuzTrackId({
+        isrc: await resolveDeezerIsrc(songLinkPayload).catch(() => ""),
+        title: toStringValue(payload.title),
+        artist: toStringValue(payload.artist),
+        album: toStringValue(payload.album),
+        credentials: qobuzCredentialsFromEnv(env),
+      }).catch(() => "");
     return qobuzTrackId
       ? qobuzSpotbyeQualities(payload).map((quality) => ({ id: qobuzTrackId, quality }))
       : [];
@@ -1706,7 +1788,7 @@ async function spotiflacApiDlProviderBodies(options: {
   }
 
   if (kind === "deezer") {
-    const ids = uniqueStrings([parseDeezerTrackId(songLinkPayload), trackId]);
+    const ids = uniqueStrings([parseDeezerTrackId(songLinkPayload)]);
     const bodies: Array<Record<string, unknown>> = [];
     for (const id of ids) {
       for (const quality of deezerSpotbyeQualities(payload)) bodies.push({ id, quality });
@@ -1715,10 +1797,15 @@ async function spotiflacApiDlProviderBodies(options: {
     return uniqueProviderBodies(bodies);
   }
 
-  const ids = uniqueStrings([appleMusicTrackIdFromSongLinkPayload(songLinkPayload), trackId]);
+  const ids = uniqueStrings([
+    appleMusicTrackIdFromSongLinkPayload(songLinkPayload),
+    await resolveAppleMusicTrackIdFromPayload(payload).catch(() => ""),
+  ]);
   const bodies: Array<Record<string, unknown>> = [];
   for (const id of ids) {
-    for (const quality of appleSpotbyeQualities(payload)) bodies.push({ id, quality });
+    const qualities = appleSpotbyeQualities(payload);
+    if (qualities.length === 0) bodies.push({ id });
+    for (const quality of qualities) bodies.push({ id, quality });
     bodies.push({ id });
   }
   return uniqueProviderBodies(bodies);
@@ -1747,6 +1834,7 @@ async function resolveConfiguredLicensedProviderDownload(
       let bodies = providerBodyCache.get(bodyCacheKey);
       if (!bodies) {
         bodies = await spotiflacApiDlProviderBodies({
+          env,
           kind: apiDlKind,
           service,
           trackId,

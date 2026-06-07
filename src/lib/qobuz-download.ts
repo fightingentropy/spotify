@@ -446,6 +446,21 @@ export async function resolveQobuzTrack(options: {
   throw new QobuzDownloadError(lastError || "Could not resolve Qobuz track", 400);
 }
 
+export async function resolveQobuzTrackId(options: {
+  isrc?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  credentials?: QobuzCredentials;
+}): Promise<string> {
+  const track = await resolveQobuzTrack(options);
+  const trackId = qobuzTrackId(track);
+  if (!trackId) {
+    throw new QobuzDownloadError("Qobuz track ID is missing", 400);
+  }
+  return trackId;
+}
+
 function qobuzURLLooksStreamable(raw: string): boolean {
   const candidate = raw.trim().replaceAll("\\/", "/");
   if (!candidate) {
