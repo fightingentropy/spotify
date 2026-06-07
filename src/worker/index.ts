@@ -1266,6 +1266,13 @@ const DEFAULT_SPOTIFLAC_CONFIGURED_PROVIDER_URLS: Partial<Record<DownloadProvide
   deezer_x: ["https://dzr-x.spotbye.qzz.io/api/dl"],
   apple: ["https://am.spotbye.qzz.io/api/dl"],
 };
+const DEFAULT_SPOTIFLAC_STATUS_URL = "https://spotbye.qzz.io/api/status";
+const SPOTIFLAC_STATUS_CACHE_MS = 30_000;
+let spotiflacStatusCache: {
+  expiresAt: number;
+  url: string;
+  promise: Promise<Record<string, string> | null>;
+} | null = null;
 
 function normalizeProviderService(value: string): DownloadProviderService | "" {
   const normalized = value.trim().toLowerCase().replaceAll("-", "_");
@@ -1294,6 +1301,70 @@ function providerEnvStem(service: DownloadProviderService): string {
 function isSpotiFlacApiDlHost(hostname: string): boolean {
   return /^(?:tdl|qbz|amz|dzr)-[a-zx]\.spotbye\.qzz\.io$/i.test(hostname) ||
     hostname === "am.spotbye.qzz.io";
+}
+
+export function spotiflacStatusKeyForEndpoint(endpointUrl: string): string {
+  try {
+    const url = new URL(endpointUrl);
+    if (url.hostname === "am.spotbye.qzz.io") return "apple";
+    const match = url.hostname.match(/^(tdl|qbz|amz|dzr)-([a-ex])\.spotbye\.qzz\.io$/i);
+    if (!match) return "";
+    const provider = {
+      tdl: "tidal",
+      qbz: "qobuz",
+      amz: "amazon",
+      dzr: "deezer",
+    }[match[1]?.toLowerCase() || ""];
+    const slot = match[2]?.toLowerCase() || "";
+    return provider && slot ? `${provider}_${slot}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function spotiflacStatusChecksEnabled(env: CloudflareEnv): boolean {
+  const raw = envString(env, "SPOTIFLAC_STATUS_CHECKS").toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
+}
+
+async function spotiflacStatus(env: CloudflareEnv): Promise<Record<string, string> | null> {
+  if (!spotiflacStatusChecksEnabled(env)) return null;
+  const url = envString(env, "SPOTIFLAC_STATUS_URL") || DEFAULT_SPOTIFLAC_STATUS_URL;
+  const now = Date.now();
+  if (spotiflacStatusCache && spotiflacStatusCache.url === url && spotiflacStatusCache.expiresAt > now) {
+    return spotiflacStatusCache.promise;
+  }
+  const promise = (async () => {
+    try {
+      const response = await fetchWithTimeout(url, 5_000, {
+        headers: {
+          accept: "application/json",
+          "user-agent": "Mozilla/5.0",
+        },
+      });
+      if (!response.ok) return null;
+      const payload = toObject(await response.json().catch(() => null));
+      const rawStatus = toObject(payload?.status);
+      if (!rawStatus) return null;
+      const out: Record<string, string> = {};
+      for (const [key, value] of Object.entries(rawStatus)) {
+        const normalized = toStringValue(value).toLowerCase();
+        if (key && normalized) out[key] = normalized;
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  })();
+  spotiflacStatusCache = { expiresAt: now + SPOTIFLAC_STATUS_CACHE_MS, url, promise };
+  return promise;
+}
+
+function spotiflacEndpointIsDown(status: Record<string, string> | null, endpointUrl: string): string {
+  const key = spotiflacStatusKeyForEndpoint(endpointUrl);
+  if (!key || !status) return "";
+  const state = status[key];
+  return state && state !== "up" ? `${key} is ${state}` : "";
 }
 
 function normalizeSpotiFlacProviderUrl(raw: string): string {
@@ -1732,7 +1803,7 @@ function tidalSpotbyeQualities(payload: SongPayload): string[] {
 function amazonSpotbyeQualities(service: DownloadProviderService, payload: SongPayload): string[] {
   const explicit = toStringValue(payload.quality);
   if (explicit) return [explicit];
-  if (service === "amazon_x") return ["atmos", "16"];
+  if (service === "amazon_x") return ["16", "atmos"];
   return ["16"];
 }
 
@@ -1826,7 +1897,14 @@ async function resolveConfiguredLicensedProviderDownload(
   const errors: string[] = [];
   const candidates: ResolvedAudioDownloadCandidate[] = [];
   const providerBodyCache = new Map<string, Array<Record<string, unknown>>>();
+  const status = await spotiflacStatus(env);
   for (const endpointUrl of endpoints) {
+    const downReason = spotiflacEndpointIsDown(status, endpointUrl);
+    if (downReason) {
+      errors.push(downReason);
+      continue;
+    }
+
     const providerBodies: Array<Record<string, unknown> | undefined> = [];
     const apiDlKind = spotiflacApiDlProviderKind(endpointUrl);
     if (apiDlKind) {
@@ -2480,6 +2558,40 @@ async function fetchResolvedAudioDownloadForRequest(
   throw new ApiError(`No downloadable provider fallback succeeded: ${errors.join(" | ")}`, 502);
 }
 
+function resolvedDownloadCandidates(resolved?: ResolvedAudioDownload): ResolvedAudioDownloadCandidate[] {
+  return resolved ? [resolved, ...(resolved.fallbacks ?? [])] : [];
+}
+
+function metadataString(metadata: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = toStringValue(metadata[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function lyricsTextFromResolvedDownload(resolved?: ResolvedAudioDownload): string {
+  for (const candidate of resolvedDownloadCandidates(resolved)) {
+    const metadata = candidate.licensedStream?.metadata;
+    if (!metadata) continue;
+    const lyrics =
+      metadataString(metadata, "lyrics", "lyric", "lrc", "syncedLyrics", "unsyncedLyrics") ||
+      metadataString(toObject(metadata.lyrics) ?? {}, "synced", "unsynced", "text");
+    if (lyrics) return lyrics;
+  }
+  return "";
+}
+
+function coverUrlFromResolvedDownload(resolved?: ResolvedAudioDownload): string {
+  for (const candidate of resolvedDownloadCandidates(resolved)) {
+    const metadata = candidate.licensedStream?.metadata;
+    if (!metadata) continue;
+    const cover = metadataString(metadata, "cover", "coverUrl", "imageUrl", "artworkUrl");
+    if (cover && parseHttpUrl(cover)) return cover;
+  }
+  return "";
+}
+
 function appendMacMiniSongFields(
   form: FormData,
   payload: SongPayload,
@@ -2490,15 +2602,16 @@ function appendMacMiniSongFields(
     duration: number | null;
     replaceExisting: boolean;
   },
+  resolved?: ResolvedAudioDownload,
 ) {
   form.set("title", values.title);
   form.set("artist", values.artist);
   if (values.album) form.set("album", values.album);
   const durationMs = toNumberValue(payload.durationMs) ?? (values.duration ? values.duration * 1000 : undefined);
   if (typeof durationMs === "number") form.set("durationMs", String(durationMs));
-  const imageUrl = toStringValue(payload.imageUrl);
+  const imageUrl = toStringValue(payload.imageUrl) || coverUrlFromResolvedDownload(resolved);
   if (imageUrl) form.set("imageUrl", imageUrl);
-  const lyricsText = toStringValue(payload.lyricsText);
+  const lyricsText = toStringValue(payload.lyricsText) || lyricsTextFromResolvedDownload(resolved);
   if (lyricsText) form.set("lyricsText", lyricsText);
   if (values.replaceExisting) form.set("replaceExisting", "true");
 }
@@ -3056,7 +3169,7 @@ app.post("/api/songs", async (c) => {
         const response = await fetchResolvedAudioDownloadForRequest(c, user, resolved);
         if (!response.ok || !response.body) throw new ApiError(`Audio server returned ${response.status}`, 502);
         const form = new FormData();
-        appendMacMiniSongFields(form, payload, { title, artist, album, duration, replaceExisting });
+        appendMacMiniSongFields(form, payload, { title, artist, album, duration, replaceExisting }, resolved);
         form.set("audio", await audioFileFromResolvedResponse(response, resolved, title, artist));
         return postFormToMacMini(c, user, form);
       }
@@ -3097,8 +3210,13 @@ app.post("/api/songs", async (c) => {
       const audioKey = `${buildOrganizedMusicBasePath(title, artist)}/audio/${crypto.randomUUID()}${ext}`;
       await putStream(c.env, audioKey, response.body, responseType);
       audioUrl = toApiFileUrl(audioKey);
-      imageUrl = await uploadRemoteCover(c.env, title, artist, toStringValue(payload.imageUrl));
-      lyricsText = toStringValue(payload.lyricsText);
+      imageUrl = await uploadRemoteCover(
+        c.env,
+        title,
+        artist,
+        toStringValue(payload.imageUrl) || coverUrlFromResolvedDownload(resolved),
+      );
+      lyricsText = toStringValue(payload.lyricsText) || lyricsTextFromResolvedDownload(resolved);
     } else {
       const remoteAudioUrl = toStringValue(payload.audioUrl);
       const remoteAudio = parseHttpUrl(remoteAudioUrl);

@@ -72,6 +72,47 @@ function headersFromValue(value: unknown): Record<string, string> {
   return out;
 }
 
+function withHeaderIfMissing(headers: Record<string, string>, key: string, value: string): Record<string, string> {
+  if (!value) return headers;
+  const normalizedKey = key.toLowerCase();
+  if (Object.keys(headers).some((header) => header.toLowerCase() === normalizedKey)) return headers;
+  return { ...headers, [normalizedKey]: value };
+}
+
+function providerMetadata(payload: JsonObject, data: JsonObject, audio: JsonObject, stream: JsonObject): JsonObject {
+  const metadata = {
+    ...(toObject(payload.metadata) ?? {}),
+    ...(toObject(data.metadata) ?? {}),
+  };
+  const lyrics = firstString(
+    payload.lyric,
+    data.lyric,
+    audio.lyric,
+    stream.lyric,
+    payload.lyrics,
+    data.lyrics,
+    audio.lyrics,
+    stream.lyrics,
+    payload.lrc,
+    data.lrc,
+    payload.syncedLyrics,
+    data.syncedLyrics,
+  );
+  const captchaToken = firstString(
+    payload.captcha,
+    data.captcha,
+    audio.captcha,
+    stream.captcha,
+    payload.captchaToken,
+    data.captchaToken,
+    payload.token,
+    data.token,
+  );
+  if (lyrics && !toStringValue(metadata.lyrics)) metadata.lyrics = lyrics;
+  if (captchaToken) metadata.captchaToken = captchaToken;
+  return metadata;
+}
+
 function decodeBase64Text(value: string): string {
   if (!value) return "";
   try {
@@ -247,21 +288,24 @@ export async function resolveLicensedSourceStreamUrl(options: {
   const decryptionKey = firstString(payload.key, data.key, audio.key, stream.key, payload.decryptionKey, data.decryptionKey);
   const codec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format);
   const outputFormat = options.outputFormat || "";
+  const metadata = providerMetadata(payload, data, audio, stream);
+  let streamHeaders = {
+    ...headersFromValue(payload.headers),
+    ...headersFromValue(data.headers),
+    ...headersFromValue(audio.headers),
+    ...headersFromValue(stream.headers),
+  };
+  streamHeaders = withHeaderIfMissing(streamHeaders, "x-captcha-token", toStringValue(metadata.captchaToken));
 
   return {
     kind: looksLikeDash ? "dash" : "url",
     streamUrl: parsedStreamUrl.toString(),
-    headers: {
-      ...headersFromValue(payload.headers),
-      ...headersFromValue(data.headers),
-      ...headersFromValue(audio.headers),
-      ...headersFromValue(stream.headers),
-    },
+    headers: streamHeaders,
     contentType,
     ...(decryptionKey ? { decryptionKey } : {}),
     ...(codec ? { codec } : {}),
     ...(outputFormat ? { outputFormat } : {}),
-    metadata: toObject(payload.metadata) ?? toObject(data.metadata) ?? {},
+    metadata,
     dash: looksLikeDash
       ? {
           manifestXml,

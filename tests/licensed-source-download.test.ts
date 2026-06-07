@@ -76,6 +76,31 @@ describe("licensed source downloader", () => {
     expect(stream.streamUrl).toBe("https://media.example.test/signed.flac");
   });
 
+  test("preserves provider captcha and lyrics metadata", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({
+        url: "https://amz.squid.wtf/api/stream?asin=B0CLX29FHD&country=US&tier=hd",
+        key: "e610cf6f4921905ed2fce0f1977b50c0",
+        captcha: "captcha-token",
+        lyric: "[00:00.00] synced lyrics",
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const stream = await resolveLicensedSourceStreamUrl({
+      endpointUrl: "https://amz-x.spotbye.qzz.io/api/dl",
+      spotifyId: "spotify-track",
+      spotifyUrl: "https://open.spotify.com/track/spotify-track",
+      body: { country: "US", id: "B0CLX29FHD", quality: "16" },
+    });
+
+    expect(stream.decryptionKey).toBe("e610cf6f4921905ed2fce0f1977b50c0");
+    expect(stream.headers["x-captcha-token"]).toBe("captcha-token");
+    expect(stream.metadata.lyrics).toBe("[00:00.00] synced lyrics");
+    expect(stream.metadata.captchaToken).toBe("captcha-token");
+  });
+
   test("fails clearly when the provider is not configured", async () => {
     await expect(resolveLicensedSourceStreamUrl({
       endpointUrl: "",
