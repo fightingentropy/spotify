@@ -1,9 +1,11 @@
 import { createHash, createHmac } from "node:crypto";
+import { execFile } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { createWriteStream, existsSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { isIP } from "node:net";
 import {
+  mkdtemp,
   mkdir,
   readFile,
   readdir,
@@ -13,10 +15,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { promisify } from "node:util";
 import { parseFile } from "music-metadata";
 import type { IAudioMetadata } from "music-metadata";
 import {
@@ -25,6 +28,8 @@ import {
   type LicensedSourceStream,
 } from "../lib/licensed-source-download";
 import type { PlayerSong } from "../types/player";
+
+const execFileAsync = promisify(execFile);
 
 type LocalSongEntry = {
   song: PlayerSong;
@@ -1574,6 +1579,80 @@ async function handleRemoteSongUpload(payload: {
   return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
+function ffmpegPath(): string {
+  return process.env.FFMPEG_PATH?.trim() || "ffmpeg";
+}
+
+async function runFfmpeg(args: string[]): Promise<void> {
+  try {
+    await execFileAsync(ffmpegPath(), ["-y", "-hide_banner", "-loglevel", "error", ...args], {
+      maxBuffer: 1024 * 1024,
+    });
+  } catch {
+    throw new LicensedSourceDownloadError("Licensed source materialization failed", 502);
+  }
+}
+
+function ffmpegDecryptionKey(value: string): string {
+  const parts = value
+    .split(":")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const candidate = parts.length > 1 ? parts[parts.length - 1] : parts[0] || "";
+  return /^[0-9a-fA-F]{32}$/.test(candidate) ? candidate : value.trim();
+}
+
+async function materializeEncryptedLicensedSourceStream(
+  stream: LicensedSourceStream,
+  userAgent?: string,
+): Promise<Response> {
+  const response = await fetch(stream.streamUrl, {
+    redirect: "follow",
+    headers: {
+      ...stream.headers,
+      "user-agent": userAgent || stream.headers["user-agent"] || "spotify/1.0 (+https://spotify.fightingentropy.org)",
+    },
+  });
+  if (!response.ok) {
+    throw new LicensedSourceDownloadError(`Licensed source audio returned ${response.status}`, response.status);
+  }
+  const encryptedBytes = new Uint8Array(await response.arrayBuffer());
+  if (encryptedBytes.byteLength > MAX_AUDIO_BYTES) {
+    throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+  }
+
+  const tempDir = await mkdtemp(resolve(tmpdir(), "spotify-licensed-"));
+  const encryptedPath = resolve(tempDir, "source.mp4");
+  const outputPath = resolve(tempDir, "output.flac");
+  try {
+    await writeFile(encryptedPath, encryptedBytes);
+    await runFfmpeg([
+      "-decryption_key",
+      ffmpegDecryptionKey(stream.decryptionKey || ""),
+      "-i",
+      encryptedPath,
+      "-vn",
+      "-map_metadata",
+      "-1",
+      "-compression_level",
+      "8",
+      outputPath,
+    ]);
+    const outputBytes = await readFile(outputPath);
+    if (outputBytes.byteLength > MAX_AUDIO_BYTES) {
+      throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+    }
+    return new Response(outputBytes, {
+      headers: {
+        "content-type": "audio/flac",
+        "content-length": String(outputBytes.byteLength),
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 async function handleLicensedSourceMaterialize(request: Request): Promise<Response> {
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
   const payload = await readJsonBody<{
@@ -1585,13 +1664,17 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
     return json({ error: "Licensed source stream is required" }, { status: 400 });
   }
   try {
-    const response = await materializeLicensedSourceStream(stream as LicensedSourceStream, {
-      maxBytes: MAX_AUDIO_BYTES,
-      userAgent: typeof payload?.userAgent === "string" ? payload.userAgent : undefined,
-    });
+    const licensedStream = stream as LicensedSourceStream;
+    const userAgent = typeof payload?.userAgent === "string" ? payload.userAgent : undefined;
+    const response = licensedStream.decryptionKey
+      ? await materializeEncryptedLicensedSourceStream(licensedStream, userAgent)
+      : await materializeLicensedSourceStream(licensedStream, {
+          maxBytes: MAX_AUDIO_BYTES,
+          userAgent,
+        });
     if (!response.ok || !response.body) return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
     const headers = new Headers();
-    headers.set("content-type", response.headers.get("content-type") || "audio/mp4");
+    headers.set("content-type", response.headers.get("content-type") || "audio/flac");
     const length = response.headers.get("content-length");
     if (length) headers.set("content-length", length);
     return new Response(response.body, { headers });

@@ -56,6 +56,7 @@ describe("licensed source downloader", () => {
       streamUrl: "https://media.example.test/song.flac",
       headers: { "x-provider-token": "stream-token" },
       contentType: "audio/flac",
+      outputFormat: "flac",
       metadata: {},
       dash: undefined,
     });

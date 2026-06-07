@@ -8,6 +8,9 @@ export type LicensedSourceStream = {
   streamUrl: string;
   headers: Record<string, string>;
   contentType: string;
+  decryptionKey?: string;
+  codec?: string;
+  outputFormat?: string;
   metadata: JsonObject;
   dash?: LicensedSourceDash;
 };
@@ -215,6 +218,9 @@ export async function resolveLicensedSourceStreamUrl(options: {
     contentType.includes("dash") ||
     parsedStreamUrl.pathname.toLowerCase().endsWith(".mpd") ||
     firstString(data.manifestUrl, payload.mpdUri).startsWith("http");
+  const decryptionKey = firstString(payload.key, data.key, audio.key, stream.key, payload.decryptionKey, data.decryptionKey);
+  const codec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format);
+  const outputFormat = options.outputFormat || "";
 
   return {
     kind: looksLikeDash ? "dash" : "url",
@@ -226,6 +232,9 @@ export async function resolveLicensedSourceStreamUrl(options: {
       ...headersFromValue(stream.headers),
     },
     contentType,
+    ...(decryptionKey ? { decryptionKey } : {}),
+    ...(codec ? { codec } : {}),
+    ...(outputFormat ? { outputFormat } : {}),
     metadata: toObject(payload.metadata) ?? toObject(data.metadata) ?? {},
     dash: looksLikeDash
       ? {

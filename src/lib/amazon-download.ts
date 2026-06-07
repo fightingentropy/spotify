@@ -199,6 +199,13 @@ async function resolveAmazonAsin(spotifyId: string, region: string): Promise<str
   throw new AmazonDownloadError(`Could not resolve Amazon Music ASIN: ${errors.join(" | ")}`, 404);
 }
 
+export async function resolveAmazonAsinFromSpotify(options: {
+  spotifyId: string;
+  region?: string;
+}): Promise<string> {
+  return resolveAmazonAsin(options.spotifyId, (options.region || "US").toUpperCase());
+}
+
 async function resolveZarzAmazonStream(asin: string): Promise<AmazonStream> {
   const url = new URL(AMAZON_ZARZ_MEDIA_URL);
   url.searchParams.set("asin", asin);

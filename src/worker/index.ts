@@ -28,6 +28,7 @@ import {
 } from "@/lib/licensed-source-download";
 import {
   AmazonDownloadError,
+  resolveAmazonAsinFromSpotify,
   resolveAmazonStreamUrl,
 } from "@/lib/amazon-download";
 import { classifyAudioBytes, classifyAudioContentType, type AudioCodecInfo } from "@/lib/audio-codec-detect";
@@ -1244,6 +1245,27 @@ const DEFAULT_SPOTIFLAC_PROVIDER_ORDER: DownloadProviderService[] = [
   "apple",
 ];
 
+const DEFAULT_SPOTIFLAC_CONFIGURED_PROVIDER_URLS: Partial<Record<DownloadProviderService, string[]>> = {
+  amazon: [
+    "https://amz-a.spotbye.qzz.io/api/dl",
+    "https://amz-b.spotbye.qzz.io/api/dl",
+    "https://amz-c.spotbye.qzz.io/api/dl",
+    "https://amz-d.spotbye.qzz.io/api/dl",
+    "https://amz-e.spotbye.qzz.io/api/dl",
+  ],
+  amazon_x: ["https://amz-x.spotbye.qzz.io/api/dl"],
+  qobuz_x: ["https://qbz-x.spotbye.qzz.io/api/dl"],
+  deezer: [
+    "https://dzr-a.spotbye.qzz.io/api/dl",
+    "https://dzr-b.spotbye.qzz.io/api/dl",
+    "https://dzr-c.spotbye.qzz.io/api/dl",
+    "https://dzr-d.spotbye.qzz.io/api/dl",
+    "https://dzr-e.spotbye.qzz.io/api/dl",
+  ],
+  deezer_x: ["https://dzr-x.spotbye.qzz.io/api/dl"],
+  apple: ["https://am.spotbye.qzz.io/api/dl"],
+};
+
 function normalizeProviderService(value: string): DownloadProviderService | "" {
   const normalized = value.trim().toLowerCase().replaceAll("-", "_");
   return DEFAULT_SPOTIFLAC_PROVIDER_ORDER.includes(normalized as DownloadProviderService) ||
@@ -1268,16 +1290,17 @@ function providerEnvStem(service: DownloadProviderService): string {
   return service.toUpperCase();
 }
 
+function isSpotiFlacApiDlHost(hostname: string): boolean {
+  return /^(?:tdl|qbz|amz|dzr)-[a-zx]\.spotbye\.qzz\.io$/i.test(hostname) ||
+    hostname === "am.spotbye.qzz.io";
+}
+
 function normalizeSpotiFlacProviderUrl(raw: string): string {
   const value = raw.trim();
   if (!value) return "";
   try {
     const url = new URL(value);
-    if (
-      (url.pathname === "" || url.pathname === "/") &&
-      (/^tdl-[a-z]\.spotbye\.qzz\.io$/i.test(url.hostname) ||
-        /^qbz-[a-z]\.spotbye\.qzz\.io$/i.test(url.hostname))
-    ) {
+    if ((url.pathname === "" || url.pathname === "/") && isSpotiFlacApiDlHost(url.hostname)) {
       url.pathname = "/api/dl";
     }
     return url.toString();
@@ -1307,6 +1330,7 @@ function configuredProviderUrls(env: CloudflareEnv, service: DownloadProviderSer
     const legacy = licensedSourceProviderEndpoint(env);
     if (legacy && licensedSourceProviderUsesTidalId(legacy)) urls.push(legacy);
   }
+  urls.push(...(DEFAULT_SPOTIFLAC_CONFIGURED_PROVIDER_URLS[service] ?? []));
 
   return Array.from(new Set(urls.map(normalizeSpotiFlacProviderUrl).filter(Boolean)));
 }
@@ -1533,11 +1557,171 @@ function licensedSourceProviderQualities(endpoint: string, payload: SongPayload)
   return profile === "cd" ? ["LOSSLESS"] : ["HI_RES_LOSSLESS", "LOSSLESS"];
 }
 
+type SpotiFlacApiDlProviderKind = "tidal" | "qobuz" | "amazon" | "deezer" | "apple";
+
+function spotiflacApiDlProviderKind(endpoint: string): SpotiFlacApiDlProviderKind | "" {
+  try {
+    const url = new URL(endpoint);
+    if (url.pathname !== "/api/dl") return "";
+    if (/^tdl-[a-z]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "tidal";
+    if (/^qbz-[a-zx]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "qobuz";
+    if (/^amz-[a-zx]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "amazon";
+    if (/^dzr-[a-zx]\.spotbye\.qzz\.io$/i.test(url.hostname)) return "deezer";
+    if (url.hostname === "am.spotbye.qzz.io") return "apple";
+  } catch {}
+  return "";
+}
+
 function tidalTrackIdFromSongLinkPayload(songLinkPayload: Record<string, unknown>): string {
   const tidal = getPlatformLink(songLinkPayload, "tidal");
   const entityTrackId = tidal ? parsePlatformId(tidal.entityUniqueId, "TIDAL_SONG::") : "";
   const urlTrackId = tidal?.url ? parseTrackIdFromUrl(tidal.url) : "";
   return entityTrackId || urlTrackId || "";
+}
+
+function qobuzTrackIdFromSongLinkPayload(songLinkPayload: Record<string, unknown>): string {
+  const qobuz = getPlatformLink(songLinkPayload, "qobuz");
+  const entityTrackId = qobuz ? parsePlatformId(qobuz.entityUniqueId, "QOBUZ_SONG::") : "";
+  const urlTrackId = qobuz?.url?.match(/\/track\/(\d+)/i)?.[1] ?? "";
+  const id = entityTrackId || urlTrackId || "";
+  return /^\d+$/.test(id) ? id : "";
+}
+
+function appleMusicTrackIdFromSongLinkPayload(songLinkPayload: Record<string, unknown>): string {
+  const apple = getPlatformLink(songLinkPayload, "appleMusic") || getPlatformLink(songLinkPayload, "itunes");
+  const entityTrackId =
+    (apple ? parsePlatformId(apple.entityUniqueId, "APPLE_MUSIC_SONG::") : "") ||
+    (apple ? parsePlatformId(apple.entityUniqueId, "ITUNES_SONG::") : "");
+  if (/^\d+$/.test(entityTrackId)) return entityTrackId;
+  if (!apple?.url) return "";
+  try {
+    const url = new URL(apple.url);
+    const queryId = url.searchParams.get("i") || "";
+    if (/^\d+$/.test(queryId)) return queryId;
+    return url.pathname.match(/\/(\d+)(?:$|\/)/)?.[1] ?? "";
+  } catch {
+    return apple.url.match(/\/(\d+)(?:$|[?#/])/)?.[1] ?? "";
+  }
+}
+
+function amazonAsinFromValue(value: string): string {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {}
+  return (
+    decoded.match(/(?:trackAsin=|tracks\/)([A-Z0-9]{10})/)?.[1] ??
+    decoded.match(/\b(B[0-9A-Z]{9})\b/)?.[1] ??
+    ""
+  );
+}
+
+function amazonAsinFromSongLinkPayload(songLinkPayload: Record<string, unknown>): string {
+  const amazon = getPlatformLink(songLinkPayload, "amazonMusic") || getPlatformLink(songLinkPayload, "amazon");
+  const entityTrackId =
+    (amazon ? parsePlatformId(amazon.entityUniqueId, "AMAZON_SONG::") : "") ||
+    (amazon ? parsePlatformId(amazon.entityUniqueId, "AMAZON_MUSIC_SONG::") : "");
+  const entityAsin = amazonAsinFromValue(entityTrackId);
+  if (entityAsin) return entityAsin;
+  return amazon?.url ? amazonAsinFromValue(amazon.url) : "";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function uniqueProviderBodies(bodies: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const body of bodies) {
+    const key = JSON.stringify(body);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(body);
+  }
+  return out;
+}
+
+function qobuzSpotbyeQualities(payload: SongPayload): string[] {
+  const explicit = toStringValue(payload.quality);
+  if (explicit) return [explicit];
+  const profile = toStringValue(payload.qualityProfile).toLowerCase();
+  return profile === "cd" ? ["16", "6"] : ["24", "16", "6"];
+}
+
+function tidalSpotbyeQualities(payload: SongPayload): string[] {
+  const explicit = toStringValue(payload.quality);
+  if (explicit) return [explicit];
+  const profile = toStringValue(payload.qualityProfile).toLowerCase();
+  return profile === "cd" ? ["16"] : ["24", "16"];
+}
+
+function amazonSpotbyeQualities(service: DownloadProviderService, payload: SongPayload): string[] {
+  const explicit = toStringValue(payload.quality);
+  if (explicit) return [explicit];
+  if (service === "amazon_x") return ["atmos", "16"];
+  return ["16"];
+}
+
+function deezerSpotbyeQualities(payload: SongPayload): string[] {
+  const explicit = toStringValue(payload.quality);
+  return explicit ? [explicit] : ["flac"];
+}
+
+function appleSpotbyeQualities(payload: SongPayload): string[] {
+  const explicit = toStringValue(payload.quality);
+  return explicit ? [explicit] : ["atmos", "lossless"];
+}
+
+async function spotiflacApiDlProviderBodies(options: {
+  kind: SpotiFlacApiDlProviderKind;
+  service: DownloadProviderService;
+  trackId: string;
+  songLinkPayload: Record<string, unknown>;
+  payload: SongPayload;
+}): Promise<Array<Record<string, unknown>>> {
+  const { kind, service, trackId, songLinkPayload, payload } = options;
+  if (kind === "tidal") {
+    const tidalTrackId = tidalTrackIdFromSongLinkPayload(songLinkPayload);
+    return tidalTrackId
+      ? tidalSpotbyeQualities(payload).map((quality) => ({ id: tidalTrackId, quality }))
+      : [];
+  }
+
+  if (kind === "qobuz") {
+    const qobuzTrackId = qobuzTrackIdFromSongLinkPayload(songLinkPayload);
+    return qobuzTrackId
+      ? qobuzSpotbyeQualities(payload).map((quality) => ({ id: qobuzTrackId, quality }))
+      : [];
+  }
+
+  if (kind === "amazon") {
+    const region = toStringValue(payload.region).toUpperCase() || "US";
+    const asin =
+      amazonAsinFromSongLinkPayload(songLinkPayload) ||
+      await resolveAmazonAsinFromSpotify({ spotifyId: trackId, region }).catch(() => "");
+    return asin
+      ? amazonSpotbyeQualities(service, payload).map((quality) => ({ country: region, id: asin, quality }))
+      : [];
+  }
+
+  if (kind === "deezer") {
+    const ids = uniqueStrings([parseDeezerTrackId(songLinkPayload), trackId]);
+    const bodies: Array<Record<string, unknown>> = [];
+    for (const id of ids) {
+      for (const quality of deezerSpotbyeQualities(payload)) bodies.push({ id, quality });
+      bodies.push({ id });
+    }
+    return uniqueProviderBodies(bodies);
+  }
+
+  const ids = uniqueStrings([appleMusicTrackIdFromSongLinkPayload(songLinkPayload), trackId]);
+  const bodies: Array<Record<string, unknown>> = [];
+  for (const id of ids) {
+    for (const quality of appleSpotbyeQualities(payload)) bodies.push({ id, quality });
+    bodies.push({ id });
+  }
+  return uniqueProviderBodies(bodies);
 }
 
 async function resolveConfiguredLicensedProviderDownload(
@@ -1554,9 +1738,29 @@ async function resolveConfiguredLicensedProviderDownload(
 
   const errors: string[] = [];
   const candidates: ResolvedAudioDownloadCandidate[] = [];
+  const providerBodyCache = new Map<string, Array<Record<string, unknown>>>();
   for (const endpointUrl of endpoints) {
     const providerBodies: Array<Record<string, unknown> | undefined> = [];
-    if (licensedSourceProviderUsesTidalId(endpointUrl)) {
+    const apiDlKind = spotiflacApiDlProviderKind(endpointUrl);
+    if (apiDlKind) {
+      const bodyCacheKey = `${service}:${apiDlKind}`;
+      let bodies = providerBodyCache.get(bodyCacheKey);
+      if (!bodies) {
+        bodies = await spotiflacApiDlProviderBodies({
+          kind: apiDlKind,
+          service,
+          trackId,
+          songLinkPayload,
+          payload,
+        });
+        providerBodyCache.set(bodyCacheKey, bodies);
+      }
+      if (bodies.length === 0) {
+        errors.push(`${service} needs a ${apiDlKind} track ID`);
+        continue;
+      }
+      providerBodies.push(...bodies);
+    } else if (licensedSourceProviderUsesTidalId(endpointUrl)) {
       const tidalTrackId = tidalTrackIdFromSongLinkPayload(songLinkPayload);
       if (!tidalTrackId) {
         errors.push(`${service} needs a Tidal track ID`);
