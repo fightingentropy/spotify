@@ -8,9 +8,6 @@ import { useAuth } from "@/client/auth";
 import {
   DOWNLOAD_PROVIDER_KEY,
   DOWNLOAD_QUALITY_PROFILE_KEY,
-  isDownloadProvider,
-  isDownloadQualityProfile,
-  type DownloadProvider,
   type DownloadQualityProfile,
 } from "@/lib/download-settings";
 import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
@@ -224,14 +221,13 @@ export default function UploadPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [spotifyUrl, setSpotifyUrl] = useState("");
-  const [region, setRegion] = useState("US");
+  const region = "US";
   const [spotifyTrack, setSpotifyTrack] = useState<SpotifyTrack | null>(null);
   const [lyricsText, setLyricsText] = useState("");
   const [fetchStatus, setFetchStatus] = useState<ActionStatus>("idle");
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
-  const [qualityProfile, setQualityProfile] = useState<DownloadQualityProfile>("max");
+  const qualityProfile: DownloadQualityProfile = "max";
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("flac");
-  const [downloadProvider, setDownloadProvider] = useState<DownloadProvider>("auto");
   const [showReplaceModal, setShowReplaceModal] = useState(false);
   const [replaceModalMessage, setReplaceModalMessage] = useState("");
   const [pendingImportPayload, setPendingImportPayload] = useState<PendingImportPayload | null>(null);
@@ -270,10 +266,8 @@ export default function UploadPage() {
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(DOWNLOAD_QUALITY_PROFILE_KEY);
-      if (stored && isDownloadQualityProfile(stored)) setQualityProfile(stored);
-      const storedProvider = localStorage.getItem(DOWNLOAD_PROVIDER_KEY);
-      if (storedProvider && isDownloadProvider(storedProvider)) setDownloadProvider(storedProvider);
+      localStorage.removeItem(DOWNLOAD_QUALITY_PROFILE_KEY);
+      localStorage.removeItem(DOWNLOAD_PROVIDER_KEY);
     } catch {}
 
     const params = new URLSearchParams(window.location.search);
@@ -506,7 +500,6 @@ export default function UploadPage() {
       qualityProfile,
       outputFormat: "flac",
     };
-    if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
     return payload;
   }
@@ -684,7 +677,6 @@ export default function UploadPage() {
       qualityProfile,
       outputFormat: "flac",
     };
-    if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
     if (replaceExisting) payload.replaceExisting = "true";
     const res = await fetch("/api/songs", {
@@ -946,7 +938,6 @@ export default function UploadPage() {
       qualityProfile,
       outputFormat: "flac",
     };
-    if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
     if (replaceExisting) payload.replaceExisting = "true";
     const res = await fetch("/api/songs", {
@@ -990,7 +981,6 @@ export default function UploadPage() {
       imageUrl: spotifyTrack.imageUrl,
       qualityProfile,
     };
-    if (downloadProvider !== "auto") payload.service = downloadProvider;
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
     return payload;
   }
@@ -1291,14 +1281,6 @@ export default function UploadPage() {
         <div className="space-y-5">
           <div className="flex flex-col md:flex-row gap-3">
             <input aria-label="Spotify URL" value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="Spotify playlist, album, or Liked Songs URL" />
-            <select aria-label="Spotify region" value={region} onChange={(e) => setRegion(e.target.value.toUpperCase())} className="w-full md:w-24 border border-white/25 rounded-2xl px-3 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50">
-              <option value="US">US</option>
-              <option value="GB">GB</option>
-              <option value="DE">DE</option>
-              <option value="FR">FR</option>
-              <option value="ES">ES</option>
-              <option value="IT">IT</option>
-            </select>
             <button type="button" onClick={handleFetchSpotify} disabled={fetchStatus === "loading" || !spotifyUrl.trim()} className="h-11 px-5 rounded-2xl bg-yellow-500 text-black font-medium disabled:opacity-50 inline-flex items-center gap-2">
               {fetchStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
               Fetch
@@ -1324,36 +1306,6 @@ export default function UploadPage() {
                     {canUseBrowserOutputConversion && getSupportedFormats().includes("ogg") && <option value="ogg">OGG Vorbis</option>}
                     {canUseBrowserOutputConversion && getSupportedFormats().includes("opus") && <option value="opus">Opus</option>}
                     {canUseBrowserOutputConversion && getSupportedFormats().includes("wav") && <option value="wav">WAV (Uncompressed)</option>}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="upload-quality-profile" className="block text-sm mb-2 text-foreground/80">Quality Profile</label>
-                  <select
-                    id="upload-quality-profile"
-                    value={qualityProfile}
-                    onChange={(e) => setQualityProfile(e.target.value as DownloadQualityProfile)}
-                    className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
-                  >
-                    <option value="cd">CD Quality (16-bit/44.1kHz)</option>
-                    <option value="hires48">Hi-Res (24-bit/48kHz)</option>
-                    <option value="max">Maximum Available</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="upload-download-provider" className="block text-sm mb-2 text-foreground/80">Download Provider</label>
-                  <select
-                    id="upload-download-provider"
-                    value={downloadProvider}
-                    onChange={(e) => setDownloadProvider(e.target.value as DownloadProvider)}
-                    className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
-                  >
-                    <option value="auto">Auto (Best Available)</option>
-                    <option value="licensed">Licensed Source</option>
-                    <option value="tidal">Tidal</option>
-                    <option value="qobuz">Qobuz</option>
-                    <option value="amazon">Amazon Music</option>
-                    <option value="deezer">Deezer</option>
-                    <option value="apple">Apple Music</option>
                   </select>
                 </div>
               </div>

@@ -1,5 +1,4 @@
 import CrossfadeSettings from "@/components/CrossfadeSettings";
-import DownloadQualitySettings from "@/components/DownloadQualitySettings";
 import OfflineSettings from "@/components/OfflineSettings";
 
 export default function SettingsPage() {
@@ -9,7 +8,6 @@ export default function SettingsPage() {
         <h1 className="mb-6 text-2xl font-semibold">Settings</h1>
         <OfflineSettings />
         <CrossfadeSettings />
-        <DownloadQualitySettings />
       </div>
     </div>
   );
