@@ -1145,7 +1145,7 @@ function PlayerBar(): React.ReactElement | null {
       if (!(target instanceof HTMLElement)) return false;
       return (
         target.isContentEditable ||
-        target instanceof HTMLInputElement ||
+        (target instanceof HTMLInputElement && target.type.toLowerCase() !== "range") ||
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement
       );
@@ -1163,6 +1163,12 @@ function PlayerBar(): React.ReactElement | null {
       const baseTime = lastSeekTargetRef.current ?? audio.currentTime ?? 0;
       const nextTime = Math.max(0, Math.min(total, baseTime + seconds));
       onSeek(nextTime);
+    }
+
+    function clearRangeShortcutFocus(target: EventTarget | null) {
+      if (target instanceof HTMLInputElement && target.type.toLowerCase() === "range") {
+        target.blur();
+      }
     }
 
     function onKeyDown(e: KeyboardEvent) {
@@ -1192,12 +1198,14 @@ function PlayerBar(): React.ReactElement | null {
       if (e.key === "ArrowRight") {
         e.preventDefault();
         e.stopPropagation();
+        clearRangeShortcutFocus(e.target);
         seekBy(5);
         return;
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         e.stopPropagation();
+        clearRangeShortcutFocus(e.target);
         seekBy(-5);
       }
     }
