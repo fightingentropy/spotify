@@ -83,3 +83,13 @@ export type OfflineDownloadRow = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+export type PlaybackStateRow = {
+  id: string;
+  userId: string;
+  deviceId: string | null;
+  stateJson: string;
+  clientUpdatedAt: number;
+  createdAt: Date;
+  updatedAt: Date;
+};

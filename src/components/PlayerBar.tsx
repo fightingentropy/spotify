@@ -11,9 +11,18 @@ import { CoverImage } from "@/components/CoverImage";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
+import type { PlaybackStateSnapshot } from "@/lib/playback-state";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { useMediaSession } from "@/lib/use-media-session";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
+import {
+  fetchServerPlaybackState,
+  getPlaybackDeviceId,
+  readLocalPlaybackState,
+  removeLocalPlaybackState,
+  writeLocalPlaybackState,
+  writeServerPlaybackState,
+} from "@/client/playback-state";
 import {
   notePlaybackNetworkFailure,
   notePlaybackNetworkSuccess,
@@ -52,6 +61,15 @@ function finiteMediaDuration(value: number): number | null {
 
 function seekIsCloseEnough(actual: number, target: number): boolean {
   return Number.isFinite(actual) && Math.abs(actual - target) <= SEEK_LANDING_TOLERANCE_SECONDS;
+}
+
+function playbackStateSyncSignature(state: PlaybackStateSnapshot): string {
+  return JSON.stringify({
+    ...state,
+    currentTime: Math.floor(state.currentTime),
+    deviceId: "",
+    updatedAt: 0,
+  });
 }
 
 function isHlsPlaylistSrc(src: string): boolean {
@@ -199,6 +217,12 @@ function PlayerBar(): React.ReactElement | null {
   const volumeRef = useRef<number>(volume);
   const mutedRef = useRef<boolean>(isMuted);
   const restoredPlayerStateRef = useRef(false);
+  const playbackSyncReadyRef = useRef(false);
+  const applyingSyncedPlaybackStateRef = useRef(false);
+  const playbackStateUpdatedAtRef = useRef(0);
+  const pendingPlaybackSyncTimeoutRef = useRef<number | null>(null);
+  const lastSyncedPlaybackStateSignatureRef = useRef("");
+  const playbackDeviceIdRef = useRef("");
   const accountScopeRef = useRef<string | null>(null);
 
   const savedSeekRef = useRef<number | null>(null);
@@ -229,6 +253,80 @@ function PlayerBar(): React.ReactElement | null {
   useEffect(() => {
     void hydrateOffline();
   }, [hydrateOffline]);
+
+  const getPlaybackStateDeviceId = useCallback(() => {
+    if (!playbackDeviceIdRef.current) playbackDeviceIdRef.current = getPlaybackDeviceId();
+    return playbackDeviceIdRef.current;
+  }, []);
+
+  const buildPlaybackStateSnapshot = useCallback((updatedAt: number): PlaybackStateSnapshot | null => {
+    if (!isPersistablePlayerSong(currentSong)) return null;
+    const persistableQueue = queue.filter(isPersistablePlayerSong);
+    const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
+    if (persistableIndex < 0) return null;
+    const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
+    const time = Math.max(0, active?.currentTime ?? currentTime);
+    return {
+      version: 1,
+      accountScope,
+      queue: persistableQueue,
+      currentIndex: persistableIndex,
+      song: currentSong,
+      currentTime: time,
+      isPlaying,
+      updatedAt,
+      deviceId: getPlaybackStateDeviceId(),
+    };
+  }, [accountScope, activeIdx, currentSong, currentTime, getPlaybackStateDeviceId, isPlaying, queue]);
+
+  const saveCurrentPlaybackStateToLocal = useCallback((): PlaybackStateSnapshot | null => {
+    const updatedAt = playbackStateUpdatedAtRef.current || Date.now();
+    const state = buildPlaybackStateSnapshot(updatedAt);
+    if (!state) {
+      removeLocalPlaybackState();
+      return null;
+    }
+    writeLocalPlaybackState(state);
+    return state;
+  }, [buildPlaybackStateSnapshot]);
+
+  const applyPlaybackStateSnapshot = useCallback((state: PlaybackStateSnapshot) => {
+    const restoredQueue = state.queue.filter(isPersistablePlayerSong);
+    const restoredSongId = state.queue[state.currentIndex]?.id ?? state.song.id;
+    const idxFromSong = restoredQueue.findIndex((song) => song.id === restoredSongId);
+    const idxFromStateSong = restoredQueue.findIndex((song) => song.id === state.song.id);
+    const idx =
+      idxFromSong >= 0
+        ? idxFromSong
+        : idxFromStateSong >= 0
+          ? idxFromStateSong
+          : Math.max(0, Math.min(restoredQueue.length - 1, state.currentIndex));
+
+    applyingSyncedPlaybackStateRef.current = true;
+    playbackStateUpdatedAtRef.current = state.updatedAt;
+    writeLocalPlaybackState(state);
+    if (restoredQueue.length > 0) {
+      setQueue(restoredQueue, idx);
+    } else {
+      setSong(state.song);
+    }
+    pause();
+    savedSeekRef.current = state.currentTime;
+    setCurrentTime(state.currentTime);
+    window.setTimeout(() => {
+      applyingSyncedPlaybackStateRef.current = false;
+    }, 500);
+  }, [pause, setQueue, setSong]);
+
+  const touchPlaybackStateTimestamp = useCallback((state: PlaybackStateSnapshot): PlaybackStateSnapshot => {
+    const updatedAt = Math.max(Date.now(), playbackStateUpdatedAtRef.current + 1, state.updatedAt + 1);
+    playbackStateUpdatedAtRef.current = updatedAt;
+    return {
+      ...state,
+      updatedAt,
+      deviceId: getPlaybackStateDeviceId(),
+    };
+  }, [getPlaybackStateDeviceId]);
 
   const closeNowPlaying = useCallback(() => {
     if (nowPlayingOpenFrameRef.current != null) {
@@ -554,6 +652,9 @@ function PlayerBar(): React.ReactElement | null {
       if (stickySeekTimeoutRef.current != null) {
         window.clearTimeout(stickySeekTimeoutRef.current);
       }
+      if (pendingPlaybackSyncTimeoutRef.current != null) {
+        window.clearTimeout(pendingPlaybackSyncTimeoutRef.current);
+      }
       if (nowPlayingOpenFrameRef.current != null) {
         window.cancelAnimationFrame(nowPlayingOpenFrameRef.current);
       }
@@ -633,45 +734,60 @@ function PlayerBar(): React.ReactElement | null {
   // Restore last played queue/song and time on client mount to avoid SSR mismatches
   useEffect(() => {
     if (!authSettled || restoredPlayerStateRef.current) return;
-    try {
-      const raw = localStorage.getItem("spotify_player_state");
-      if (!raw) return;
-      const data = JSON.parse(raw) as
-        | {
-            accountScope?: string;
-            queue?: PlayerSong[];
-            currentIndex?: number;
-            song?: PlayerSong;
-            currentTime?: number;
-            isPlaying?: boolean;
-          }
-        | null;
-      if (typeof data?.accountScope !== "string") return;
-      if (normalizeOfflineAccountScope(data.accountScope) !== accountScope) return;
-      restoredPlayerStateRef.current = true;
-      if (data?.queue && Array.isArray(data.queue) && typeof data.currentIndex === "number") {
-        const restoredQueue = data.queue.filter(isPersistablePlayerSong);
-        const restoredSongId = data.queue[data.currentIndex]?.id;
-        const idxFromSong = restoredQueue.findIndex((song) => song.id === restoredSongId);
-        const idx = idxFromSong >= 0 ? idxFromSong : Math.max(0, Math.min(restoredQueue.length - 1, data.currentIndex));
-        if (restoredQueue.length === 0) return;
-        setQueue(restoredQueue, idx);
-        // Always start paused on fresh load to avoid autoplay restrictions
-        pause();
-        if (typeof data.currentTime === "number") {
-          savedSeekRef.current = data.currentTime;
-          setCurrentTime(data.currentTime);
+    restoredPlayerStateRef.current = true;
+    let cancelled = false;
+    const localState = readLocalPlaybackState();
+    const scopedLocalState =
+      localState && normalizeOfflineAccountScope(localState.accountScope) === accountScope
+        ? localState
+        : null;
+    if (scopedLocalState) applyPlaybackStateSnapshot(scopedLocalState);
+
+    async function restoreSyncedPlaybackState() {
+      let serverState: PlaybackStateSnapshot | null = null;
+      try {
+        const fetched = await fetchServerPlaybackState();
+        if (fetched && normalizeOfflineAccountScope(fetched.accountScope) === accountScope) {
+          serverState = fetched;
         }
-      } else if (isPersistablePlayerSong(data?.song)) {
-        setSong(data.song);
-        pause();
-        if (typeof data.currentTime === "number") {
-          savedSeekRef.current = data.currentTime;
-          setCurrentTime(data.currentTime);
+      } catch {}
+      if (cancelled) return;
+
+      const localUpdatedAt = scopedLocalState?.updatedAt ?? 0;
+      if (serverState && serverState.updatedAt >= localUpdatedAt) {
+        applyPlaybackStateSnapshot(serverState);
+        lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(serverState);
+        playbackSyncReadyRef.current = true;
+        return;
+      }
+
+      if (scopedLocalState) {
+        const localStateToPublish = touchPlaybackStateTimestamp({
+          ...scopedLocalState,
+          isPlaying: false,
+        });
+        writeLocalPlaybackState(localStateToPublish);
+        try {
+          const acceptedState = await writeServerPlaybackState(localStateToPublish);
+          if (acceptedState && acceptedState.updatedAt > localStateToPublish.updatedAt) {
+            applyPlaybackStateSnapshot(acceptedState);
+            lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(acceptedState);
+          } else {
+            lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(localStateToPublish);
+          }
+        } catch {
+          lastSyncedPlaybackStateSignatureRef.current = "";
         }
       }
-    } catch {}
-  }, [accountScope, authSettled, pause, setSong, setQueue]);
+
+      playbackSyncReadyRef.current = true;
+    }
+
+    void restoreSyncedPlaybackState();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountScope, applyPlaybackStateSnapshot, authSettled, touchPlaybackStateTimestamp]);
 
   useEffect(() => {
     if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast || currentSongIsOffline) return;
@@ -909,32 +1025,68 @@ function PlayerBar(): React.ReactElement | null {
     };
   }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, queue, repeatMode, resolvePlaybackSong, shuffle, shuffleRemaining]);
 
+  const publishPlaybackState = useCallback(async (options?: { keepalive?: boolean }) => {
+    if (!playbackSyncReadyRef.current || applyingSyncedPlaybackStateRef.current) return;
+    const updatedAt = Math.max(Date.now(), playbackStateUpdatedAtRef.current + 1);
+    const state = buildPlaybackStateSnapshot(updatedAt);
+    if (!state) {
+      removeLocalPlaybackState();
+      return;
+    }
+    const stateSignature = playbackStateSyncSignature(state);
+    if (stateSignature === lastSyncedPlaybackStateSignatureRef.current) return;
+    playbackStateUpdatedAtRef.current = state.updatedAt;
+    writeLocalPlaybackState(state);
+    try {
+      const acceptedState = await writeServerPlaybackState(state, options);
+      if (acceptedState && acceptedState.updatedAt > state.updatedAt) {
+        applyPlaybackStateSnapshot(acceptedState);
+        lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(acceptedState);
+        return;
+      }
+      lastSyncedPlaybackStateSignatureRef.current = stateSignature;
+    } catch {}
+  }, [applyPlaybackStateSnapshot, buildPlaybackStateSnapshot]);
+
+  const schedulePlaybackStateSync = useCallback((delayMs = 1_000) => {
+    if (!playbackSyncReadyRef.current || applyingSyncedPlaybackStateRef.current) return;
+    if (pendingPlaybackSyncTimeoutRef.current != null) {
+      window.clearTimeout(pendingPlaybackSyncTimeoutRef.current);
+    }
+    pendingPlaybackSyncTimeoutRef.current = window.setTimeout(() => {
+      pendingPlaybackSyncTimeoutRef.current = null;
+      void publishPlaybackState();
+    }, delayMs);
+  }, [publishPlaybackState]);
+
+  useEffect(() => {
+    if (!currentSong) return;
+    schedulePlaybackStateSync(isPlaying ? 1_000 : 700);
+  }, [currentIndex, currentSong?.id, isPlaying, queue, schedulePlaybackStateSync]);
+
+  useEffect(() => {
+    if (!currentSong || isPlaying) return;
+    schedulePlaybackStateSync(900);
+  }, [currentSong?.id, currentTime, isPlaying, schedulePlaybackStateSync]);
+
+  useEffect(() => {
+    if (!currentSong || !isPlaying) return;
+    const intervalId = window.setInterval(() => {
+      schedulePlaybackStateSync(0);
+    }, 8_000);
+    return () => window.clearInterval(intervalId);
+  }, [currentSong?.id, isPlaying, schedulePlaybackStateSync]);
+
   // Save queue/song and playback position right before page unload
   useEffect(() => {
     function saveState() {
-      try {
-        if (!isPersistablePlayerSong(currentSong)) {
-          localStorage.removeItem("spotify_player_state");
-          return;
-        }
-        const persistableQueue = queue.filter(isPersistablePlayerSong);
-        const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
-        if (persistableIndex < 0) {
-          localStorage.removeItem("spotify_player_state");
-          return;
-        }
-        const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
-        const time = active?.currentTime ?? currentTime;
-        const payload = {
-          accountScope,
-          queue: persistableQueue,
-          currentIndex: persistableIndex,
-          song: currentSong,
-          currentTime: time,
-          isPlaying,
-        };
-        localStorage.setItem("spotify_player_state", JSON.stringify(payload));
-      } catch {}
+      if (pendingPlaybackSyncTimeoutRef.current != null) {
+        window.clearTimeout(pendingPlaybackSyncTimeoutRef.current);
+        pendingPlaybackSyncTimeoutRef.current = null;
+        void publishPlaybackState({ keepalive: true });
+        return;
+      }
+      saveCurrentPlaybackStateToLocal();
     }
 
     window.addEventListener("beforeunload", saveState);
@@ -943,7 +1095,7 @@ function PlayerBar(): React.ReactElement | null {
       window.removeEventListener("beforeunload", saveState);
       window.removeEventListener("pagehide", saveState);
     };
-  }, [accountScope, queue, currentIndex, currentSong, currentTime, isPlaying, activeIdx]);
+  }, [publishPlaybackState, saveCurrentPlaybackStateToLocal]);
 
   const handleActiveAudioResumePoint = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     const audio = event.currentTarget;
@@ -982,10 +1134,25 @@ function PlayerBar(): React.ReactElement | null {
 
   // Global keyboard shortcuts (always register to keep hook order stable)
   useEffect(() => {
-    function isTypingTarget(target: EventTarget | null): boolean {
+    function shouldPreserveSpaceKeyTarget(target: EventTarget | null): boolean {
       if (!(target instanceof HTMLElement)) return false;
-      const tag = target.tagName.toLowerCase();
-      return tag === "input" || tag === "textarea" || target.isContentEditable;
+      if (target.isContentEditable) return true;
+      if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+      return target instanceof HTMLInputElement && target.type.toLowerCase() !== "range";
+    }
+
+    function shouldPreserveArrowKeyTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      return (
+        target.isContentEditable ||
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      );
+    }
+
+    function isSpaceKey(e: KeyboardEvent): boolean {
+      return e.code === "Space" || e.key === " " || e.key === "Spacebar";
     }
 
     function seekBy(seconds: number) {
@@ -999,14 +1166,15 @@ function PlayerBar(): React.ReactElement | null {
     }
 
     function onKeyDown(e: KeyboardEvent) {
-      if (isTypingTarget(e.target)) return;
       // Spacebar toggles play/pause
-      if ((e.code === "Space" || e.key === " " || e.key === "Spacebar") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (isSpaceKey(e) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (shouldPreserveSpaceKeyTarget(e.target)) return;
         e.preventDefault();
         e.stopPropagation();
-        handleTogglePlayback();
+        if (!e.repeat) handleTogglePlayback();
         return;
       }
+      if (shouldPreserveArrowKeyTarget(e.target)) return;
       // Meta + Arrow for previous/next track
       if (e.metaKey && e.key === "ArrowRight") {
         e.preventDefault();
@@ -1034,9 +1202,20 @@ function PlayerBar(): React.ReactElement | null {
       }
     }
 
+    function onKeyUp(e: KeyboardEvent) {
+      if (isSpaceKey(e) && !e.metaKey && !e.ctrlKey && !e.altKey && !shouldPreserveSpaceKeyTarget(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+
     const options = { capture: true };
     window.addEventListener("keydown", onKeyDown, options);
-    return () => window.removeEventListener("keydown", onKeyDown, options);
+    window.addEventListener("keyup", onKeyUp, options);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, options);
+      window.removeEventListener("keyup", onKeyUp, options);
+    };
   }, [next, previous, duration, handleTogglePlayback, getActiveAudio, onSeek, playbackDuration]);
 
   const audioElements = (

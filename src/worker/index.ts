@@ -3,7 +3,9 @@ import { deleteCookie, setCookie } from "hono/cookie";
 import { compare, hash } from "bcryptjs";
 import { basename, extname, join } from "node:path";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
-import type { OfflineDownloadRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
+import type { OfflineDownloadRow, PlaybackStateRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
+import { PLAYBACK_STATE_VERSION, type PlaybackStateSnapshot } from "@/lib/playback-state";
+import { PODCAST_SHOWS } from "@/lib/podcasts";
 import { buildSql, statementReturnsRows, type SqlRow, type SqlTag, type TemplateValue } from "@/lib/sql-tag";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { inferContentTypeFromKey, normalizeStorageKey } from "@/lib/storage-keys";
@@ -111,6 +113,10 @@ type OfflineDownloadDeletePayload = {
   clearAll?: unknown;
   songId?: unknown;
   scope?: unknown;
+};
+
+type PlaybackStateWritePayload = {
+  state?: unknown;
 };
 
 type ResolvedAudioDownload = {
@@ -309,6 +315,8 @@ function coercePlayerSongPayload(value: unknown): PlayerSong | null {
   if (!id || !title || !artist || !audioUrl) return null;
   const imageUrl = toStringValue(payload.imageUrl) || "/apple-icon.png";
   const lyricsUrl = toStringValue(payload.lyricsUrl);
+  const description = toStringValue(payload.description);
+  const link = toStringValue(payload.link);
   const album = toStringValue(payload.album);
   const createdAt = toStringValue(payload.createdAt);
   const source = toStringValue(payload.source);
@@ -324,6 +332,8 @@ function coercePlayerSongPayload(value: unknown): PlayerSong | null {
     imageUrl,
     audioUrl,
     lyricsUrl: lyricsUrl || undefined,
+    description: description || undefined,
+    link: link || undefined,
     duration: duration ?? undefined,
     audioBitDepth: audioBitDepth ?? undefined,
     audioSampleRate: audioSampleRate ?? undefined,
@@ -331,6 +341,61 @@ function coercePlayerSongPayload(value: unknown): PlayerSong | null {
     source: source ? (source as PlayerSong["source"]) : undefined,
     localPath: localPath || undefined,
   };
+}
+
+function isPersistablePlaybackSong(song: PlayerSong | null | undefined): song is PlayerSong {
+  if (!song) return false;
+  return !(
+    song.source === "browser-local" ||
+    song.source === "picked-file" ||
+    song.source === "radio" ||
+    song.id.startsWith("browser-local:") ||
+    song.id.startsWith("picked-file:") ||
+    song.id.startsWith("radio:") ||
+    song.audioUrl.startsWith("blob:")
+  );
+}
+
+function coercePlaybackStatePayload(value: unknown, fallbackUpdatedAt = Date.now()): PlaybackStateSnapshot | null {
+  const payload = toObject(value);
+  if (!payload) return null;
+  const rawQueue = Array.isArray(payload.queue) ? payload.queue : [];
+  const queue = rawQueue
+    .map(coercePlayerSongPayload)
+    .filter(isPersistablePlaybackSong);
+  const payloadSong = coercePlayerSongPayload(payload.song);
+  const fallbackIndex = Math.max(0, Math.min(queue.length - 1, Math.floor(toNumberValue(payload.currentIndex) ?? 0)));
+  const song = isPersistablePlaybackSong(payloadSong) ? payloadSong : queue[fallbackIndex] ?? null;
+  if (!song) return null;
+  const queueWithSong = queue.some((item) => item.id === song.id) ? queue : [song, ...queue];
+  const currentIndex = Math.max(0, queueWithSong.findIndex((item) => item.id === song.id));
+  const currentTime = Math.max(0, toNumberValue(payload.currentTime) ?? 0);
+  const updatedAt = Math.max(0, toNumberValue(payload.updatedAt) ?? fallbackUpdatedAt);
+  const accountScope = toStringValue(payload.accountScope) || "anonymous";
+  const deviceId = toStringValue(payload.deviceId) || "unknown";
+  return {
+    version: PLAYBACK_STATE_VERSION,
+    accountScope,
+    queue: queueWithSong,
+    currentIndex,
+    song,
+    currentTime,
+    isPlaying: payload.isPlaying === true,
+    updatedAt,
+    deviceId,
+  };
+}
+
+function parsePlaybackStateJson(value: string): PlaybackStateSnapshot | null {
+  try {
+    return coercePlaybackStatePayload(JSON.parse(value), 0);
+  } catch {
+    return null;
+  }
+}
+
+function playbackStateFromRow(row: PlaybackStateRow | undefined): PlaybackStateSnapshot | null {
+  return row ? parsePlaybackStateJson(row.stateJson) : null;
 }
 
 function coerceOfflineDownloadScopes(value: unknown, songId: string): string[] {
@@ -571,6 +636,10 @@ function defaultUserImage(email: string, name: string | null): string | null {
 function requireUser(user: AuthUser | null): AuthUser {
   if (!user) throw new ApiError("Unauthorized", 401);
   return user;
+}
+
+function requirePlaybackStateUser(c: Context<AppEnv>): AuthUser {
+  return requireUser(c.get("user") ?? getLocalMacMiniAuthUser(c));
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -1634,6 +1703,77 @@ app.get("/api/library", async (c) => {
   return jsonCached(c, { playlists: await listPlaylists(c.get("db"), user?.id ?? null), userId: user?.id ?? null }, {
     cacheControl: "private, max-age=300, stale-while-revalidate=600",
   });
+});
+
+app.get("/api/podcast-feeds/:id", async (c) => {
+  const podcastShow = PODCAST_SHOWS.find((show) => show.id === c.req.param("id"));
+  if (!podcastShow) return jsonError("Podcast not found", 404);
+  const response = await fetchWithTimeout(podcastShow.feedUrl, SPOTIFY_REQUEST_TIMEOUT_MS);
+  if (!response.ok) throw new ApiError(`Podcast feed returned ${response.status}`, 502);
+  const body = await response.text();
+  return new Response(body, {
+    headers: {
+      "content-type": response.headers.get("content-type") || "application/rss+xml; charset=utf-8",
+      "cache-control": "public, max-age=300, stale-while-revalidate=1800",
+    },
+  });
+});
+
+app.get("/api/playback-state", async (c) => {
+  const user = requirePlaybackStateUser(c);
+  const rows = await c.get("db")<PlaybackStateRow>`
+    SELECT "id", "userId", "deviceId", "stateJson", "clientUpdatedAt", "createdAt", "updatedAt"
+    FROM "PlaybackState"
+    WHERE "userId" = ${user.id}
+    LIMIT 1
+  `;
+  return c.json(
+    { state: playbackStateFromRow(rows[0]) },
+    { headers: { "cache-control": "no-store" } },
+  );
+});
+
+app.put("/api/playback-state", async (c) => {
+  const user = requirePlaybackStateUser(c);
+  const payload = await readJson<PlaybackStateWritePayload>(c.req.raw);
+  const state = coercePlaybackStatePayload(payload?.state);
+  if (!state) return jsonError("Invalid playback state", 400);
+  const stateJson = JSON.stringify(state);
+  if (stateJson.length > 512_000) return jsonError("Playback state is too large", 413);
+
+  const db = c.get("db");
+  const existingRows = await db<PlaybackStateRow>`
+    SELECT "id", "userId", "deviceId", "stateJson", "clientUpdatedAt", "createdAt", "updatedAt"
+    FROM "PlaybackState"
+    WHERE "userId" = ${user.id}
+    LIMIT 1
+  `;
+  const existing = existingRows[0];
+  const existingState = playbackStateFromRow(existing);
+  if (existingState && existingState.updatedAt > state.updatedAt) {
+    return c.json(
+      { state: existingState },
+      { headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  if (existing) {
+    await db`
+      UPDATE "PlaybackState"
+      SET "deviceId" = ${state.deviceId}, "stateJson" = ${stateJson}, "clientUpdatedAt" = ${state.updatedAt}, "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${existing.id}
+    `;
+  } else {
+    await db`
+      INSERT INTO "PlaybackState" ("id", "userId", "deviceId", "stateJson", "clientUpdatedAt", "createdAt", "updatedAt")
+      VALUES (${crypto.randomUUID()}, ${user.id}, ${state.deviceId}, ${stateJson}, ${state.updatedAt}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `;
+  }
+
+  return c.json(
+    { state },
+    { headers: { "cache-control": "no-store" } },
+  );
 });
 
 app.get("/api/liked", async (c) => {

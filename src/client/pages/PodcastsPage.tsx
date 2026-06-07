@@ -82,7 +82,7 @@ export default function PodcastsPage() {
       setError(null);
 
       try {
-        const response = await fetch(activeShow.feedUrl, { signal });
+        const response = await fetch(`/api/podcast-feeds/${encodeURIComponent(activeShow.id)}`, { signal });
         if (!response.ok) throw new Error(`Podcast feed returned ${response.status}`);
         const xml = await response.text();
         const nextEpisodes = parsePodcastFeed(xml, activeShow);

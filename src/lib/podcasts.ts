@@ -61,6 +61,19 @@ export const PODCAST_SHOWS: PodcastShow[] = [
       "https://megaphone.imgix.net/podcasts/0adac72a-8012-11ef-9b16-bffe28b27ef7/image/84f5c3e24f7864f2fd9f7fc858aa2889.png?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
     accentClassName: "from-[#fb7185] via-[#f97316] to-[#22c55e]",
   },
+  {
+    id: "all-in",
+    title: "All-In",
+    author: "Chamath Palihapitiya, Jason Calacanis, David Sacks & David Friedberg",
+    subtitle: "Markets, tech, politics, and poker",
+    description:
+      "Industry veterans, degenerate gamblers, and besties cover all things economic, tech, political, social, and poker.",
+    feedUrl: "https://rss.libsyn.com/shows/254861/destinations/1928300.xml",
+    websiteUrl: "https://allin.com/",
+    imageUrl:
+      "https://static.libsyn.com/p/assets/a/9/c/b/a9cb4d1dadb1ea21/all-in_logo.png",
+    accentClassName: "from-[#0ea5e9] via-[#a3e635] to-[#f97316]",
+  },
 ];
 
 export const HUBERMAN_PODCAST = PODCAST_SHOWS[0];
