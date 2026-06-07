@@ -103,6 +103,11 @@ if [[ ! -f "$REMOTE_APP/src/server/local-music-server.ts" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$REMOTE_APP/src/lib/licensed-source-download.ts" ]]; then
+  echo "Missing shared library source: $REMOTE_APP/src/lib/licensed-source-download.ts" >&2
+  exit 1
+fi
+
 if [[ ! -f "$REMOTE_APP/dist/client/index.html" ]]; then
   echo "Missing frontend build: $REMOTE_APP/dist/client/index.html" >&2
   exit 1

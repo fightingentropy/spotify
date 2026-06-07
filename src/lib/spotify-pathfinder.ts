@@ -35,6 +35,10 @@ export type SpotifyBatchTrack = {
   id: string;
   name: string;
   artists: string[];
+  album?: string;
+  releaseDate?: string;
+  durationMs?: number;
+  imageUrl?: string;
 };
 
 type SpotifyAccessTokenCache = {
@@ -52,6 +56,37 @@ function toObject(value: unknown): Record<string, unknown> | null {
 
 function toStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function imageUrlFromAlbum(albumValue: Record<string, unknown> | null): string {
+  const coverArt = toObject(albumValue?.coverArt);
+  const sources = Array.isArray(coverArt?.sources) ? coverArt.sources : [];
+  const ranked = sources
+    .map((source) => {
+      const object = toObject(source);
+      return {
+        url: toStringValue(object?.url),
+        width: toFiniteNumber(object?.width) ?? 0,
+      };
+    })
+    .filter((source) => source.url)
+    .sort((left, right) => right.width - left.width);
+  return ranked[0]?.url || "";
+}
+
+function releaseDateFromAlbum(albumValue: Record<string, unknown> | null): string {
+  const date = toObject(albumValue?.date);
+  return toStringValue(date?.isoString) || toStringValue(date?.year);
+}
+
+function durationMsFromTrackData(data: Record<string, unknown>): number {
+  const duration = toObject(data.duration);
+  return toFiniteNumber(duration?.totalMilliseconds) ?? toFiniteNumber(data.durationMs) ?? 0;
 }
 
 function normalizeCookie(cookie?: string): string {
@@ -148,6 +183,7 @@ function trackFromPathfinderItem(item: unknown): SpotifyBatchTrack | null {
   const root = toObject(item);
   const itemV2 = toObject(root?.itemV2);
   const data = toObject(itemV2?.data);
+  if (!data) return null;
   const uri = toStringValue(data?.uri);
   const id = parseTrackIdFromUri(uri);
   if (!id) return null;
@@ -172,6 +208,10 @@ function trackFromPathfinderItem(item: unknown): SpotifyBatchTrack | null {
     id,
     name: toStringValue(data?.name) || "Unknown Track",
     artists: artists.length > 0 ? artists : ["Unknown Artist"],
+    album: toStringValue(albumValue?.name),
+    releaseDate: releaseDateFromAlbum(albumValue),
+    durationMs: durationMsFromTrackData(data),
+    imageUrl: imageUrlFromAlbum(albumValue),
   };
 }
 
@@ -205,6 +245,10 @@ function trackFromLibraryItem(item: unknown): SpotifyBatchTrack | null {
     id,
     name: toStringValue(data?.name) || "Unknown Track",
     artists: artists.length > 0 ? artists : ["Unknown Artist"],
+    album: toStringValue(albumValue?.name),
+    releaseDate: releaseDateFromAlbum(albumValue),
+    durationMs: durationMsFromTrackData(data),
+    imageUrl: imageUrlFromAlbum(albumValue),
   };
 }
 

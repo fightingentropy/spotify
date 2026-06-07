@@ -12,6 +12,19 @@ export type ClientBatchInfo = {
   trackCount: number;
   format: "flac" | "mp3" | "aac" | "ogg" | "opus" | "wav";
   trackIds: string[];
+  tracks: ClientBatchTrack[];
+};
+
+export type ClientBatchTrack = {
+  spotifyId: string;
+  title: string;
+  artist: string;
+  album: string;
+  releaseDate: string;
+  totalPlays: number;
+  durationMs: number;
+  imageUrl: string;
+  previewUrl: string;
 };
 
 function parsePlaylistId(input: string): string | null {
@@ -66,16 +79,33 @@ function batchFromTracks(
   tracks: SpotifyBatchTrack[],
   format: ClientBatchInfo["format"],
 ): ClientBatchInfo {
-  const trackIds = Array.from(new Set(tracks.map((track) => track.id).filter(Boolean)));
-  if (trackIds.length === 0) {
+  const seen = new Set<string>();
+  const batchTracks: ClientBatchTrack[] = [];
+  for (const track of tracks) {
+    if (!track.id || seen.has(track.id)) continue;
+    seen.add(track.id);
+    batchTracks.push({
+      spotifyId: track.id,
+      title: track.name || "Unknown Track",
+      artist: track.artists.filter(Boolean).join(", ") || "Unknown Artist",
+      album: track.album || "",
+      releaseDate: track.releaseDate || "",
+      totalPlays: 0,
+      durationMs: track.durationMs || 0,
+      imageUrl: track.imageUrl || "",
+      previewUrl: "",
+    });
+  }
+  if (batchTracks.length === 0) {
     throw new Error("No tracks found in that Spotify library.");
   }
   return {
     type,
     title,
     artist,
-    trackCount: trackIds.length,
+    trackCount: batchTracks.length,
     format,
-    trackIds,
+    trackIds: batchTracks.map((track) => track.spotifyId),
+    tracks: batchTracks,
   };
 }

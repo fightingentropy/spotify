@@ -17,6 +17,7 @@ import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
 import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 import { convertAudioFile, getSupportedFormats, getExtensionForFormat } from "@/lib/audio-converter";
+import { classifyAudioBytes, classifyAudioContentType, type AudioCodecInfo } from "@/lib/audio-codec-detect";
 
 type SpotifyTrack = {
   spotifyId: string;
@@ -46,6 +47,7 @@ type BatchInfo = {
   trackCount: number;
   format: OutputFormat;
   trackIds: string[];
+  tracks?: SpotifyTrack[];
 };
 type BatchProgress = {
   current: number;
@@ -120,6 +122,35 @@ function sanitizeDownloadSegment(value: string): string {
 function extensionFromFileName(name: string, fallback: string): string {
   const index = name.lastIndexOf(".");
   return index >= 0 ? name.slice(index).toLowerCase() : fallback;
+}
+
+function audioCodecLabel(info: AudioCodecInfo): string {
+  return info.codec || "unknown codec";
+}
+
+async function assertLosslessDownloadBlob(
+  payload: Record<string, string>,
+  blob: Blob,
+) {
+  const requestedLossless =
+    (payload.outputFormat || "flac") === "flac" &&
+    ["cd", "hires48", "max", ""].includes(payload.qualityProfile || "");
+  if (!requestedLossless) return;
+
+  const contentTypeInfo = classifyAudioContentType(blob.type);
+  if (contentTypeInfo.quality === "lossless") return;
+  if (contentTypeInfo.quality === "lossy") {
+    throw new Error(`Provider returned a lossy ${audioCodecLabel(contentTypeInfo)} fallback for a lossless download`);
+  }
+
+  const byteInfo = classifyAudioBytes(await blob.arrayBuffer(), blob.type);
+  if (byteInfo.quality !== "lossless") {
+    throw new Error(
+      byteInfo.quality === "lossy"
+        ? `Provider returned a lossy ${audioCodecLabel(byteInfo)} fallback for a lossless download`
+        : `Provider returned an unverified ${audioCodecLabel(byteInfo)} fallback for a lossless download`,
+    );
+  }
 }
 
 function stemFromFileName(name: string): string {
@@ -496,9 +527,11 @@ export default function UploadPage() {
     }
     const blob = await res.blob();
     const fallback = `${track.artist || "Unknown Artist"} - ${track.title || "Track"}${extensionFromContentType(blob.type, ".flac")}`;
+    const fileName = filenameFromContentDisposition(res.headers.get("content-disposition"), fallback);
+    await assertLosslessDownloadBlob(payload, blob);
     return {
       blob,
-      fileName: filenameFromContentDisposition(res.headers.get("content-disposition"), fallback),
+      fileName,
     };
   }
 
@@ -673,6 +706,29 @@ export default function UploadPage() {
     return knownKeys.has(normalizeTrackKey(track.title, track.artist));
   }
 
+  function trackFromBatchId(spotifyId: string): SpotifyTrack {
+    return {
+      spotifyId,
+      title: "Unknown Track",
+      artist: "Unknown Artist",
+      album: "",
+      releaseDate: "",
+      totalPlays: 0,
+      durationMs: 0,
+      imageUrl: "",
+      previewUrl: "",
+    };
+  }
+
+  function needsTrackMetadataRefresh(track: SpotifyTrack) {
+    return (
+      !track.title ||
+      !track.artist ||
+      track.title === "Unknown Track" ||
+      track.artist === "Unknown Artist"
+    );
+  }
+
   async function handleBatchDownload() {
     if (!batchInfo) return;
     setError(null);
@@ -680,7 +736,11 @@ export default function UploadPage() {
     setBatchFailures([]);
     setBatchStatus("loading");
 
-    const total = batchInfo.trackIds.length;
+    const batchTracks =
+      batchInfo.tracks && batchInfo.tracks.length > 0
+        ? batchInfo.tracks
+        : batchInfo.trackIds.map(trackFromBatchId);
+    const total = batchTracks.length;
     const knownKeys = new Set(
       localSongs.map((song) => normalizeTrackKey(song.title, song.artist)),
     );
@@ -701,13 +761,17 @@ export default function UploadPage() {
     });
 
     try {
-      for (let index = 0; index < batchInfo.trackIds.length; index += 1) {
-        const trackId = batchInfo.trackIds[index];
+      for (let index = 0; index < batchTracks.length; index += 1) {
+        const batchTrack = batchTracks[index];
+        const trackId = batchTrack.spotifyId || batchInfo.trackIds[index];
         const trackUrl = `https://open.spotify.com/track/${trackId}`;
-        let track: SpotifyTrack;
+        let track = batchTrack;
 
         try {
-          track = await fetchSpotifyTrackById(trackId);
+          if (!trackId) throw new Error("Spotify track ID missing");
+          if (needsTrackMetadataRefresh(track)) {
+            track = await fetchSpotifyTrackById(trackId);
+          }
         } catch (err) {
           failed += 1;
           failures.push(
@@ -944,9 +1008,11 @@ export default function UploadPage() {
     }
     const blob = await res.blob();
     const fallback = `${spotifyTrack?.artist || "Unknown Artist"} - ${spotifyTrack?.title || "Track"}${extensionFromContentType(blob.type, ".flac")}`;
+    const fileName = filenameFromContentDisposition(res.headers.get("content-disposition"), fallback);
+    await assertLosslessDownloadBlob(payload, blob);
     return {
       blob,
-      fileName: filenameFromContentDisposition(res.headers.get("content-disposition"), fallback),
+      fileName,
     };
   }
 
@@ -1282,8 +1348,12 @@ export default function UploadPage() {
                     className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
                   >
                     <option value="auto">Auto (Best Available)</option>
-                    <option value="qobuz">Qobuz</option>
+                    <option value="licensed">Licensed Source</option>
                     <option value="tidal">Tidal</option>
+                    <option value="qobuz">Qobuz</option>
+                    <option value="amazon">Amazon Music</option>
+                    <option value="deezer">Deezer</option>
+                    <option value="apple">Apple Music</option>
                   </select>
                 </div>
               </div>

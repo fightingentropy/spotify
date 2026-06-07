@@ -26,6 +26,13 @@ const QOBUZ_LEGACY_STREAM_API_BASES = [
   "https://dabmusic.xyz/api/stream?trackId=",
   "https://qobuz.squid.wtf/api/download-music?track_id=",
 ];
+const QOBUZ_SPOTBYE_API_URLS = [
+  "https://qbz-a.spotbye.qzz.io/api/dl",
+  "https://qbz-b.spotbye.qzz.io/api/dl",
+  "https://qbz-c.spotbye.qzz.io/api/dl",
+  "https://qbz-d.spotbye.qzz.io/api/dl",
+  "https://qbz-e.spotbye.qzz.io/api/dl",
+];
 
 const qobuzMusicDLDebugKeySeedParts = [
   Buffer.from([0x73, 0x70, 0x6f, 0x74, 0x69, 0x66]),
@@ -53,7 +60,7 @@ const qobuzMusicDLDebugKeyTag = Buffer.from([
   0x69, 0xb1, 0xfe, 0xbb,
 ]);
 
-type QobuzCredentials = {
+export type QobuzCredentials = {
   appId: string;
   appSecret: string;
 };
@@ -179,7 +186,19 @@ async function scrapeQobuzOpenCredentials(): Promise<QobuzCredentials> {
   return { appId, appSecret };
 }
 
-async function getQobuzCredentials(forceRefresh = false): Promise<QobuzCredentials> {
+function validQobuzCredentials(credentials?: QobuzCredentials): QobuzCredentials | null {
+  const appId = toStringValue(credentials?.appId);
+  const appSecret = toStringValue(credentials?.appSecret);
+  return appId && appSecret ? { appId, appSecret } : null;
+}
+
+async function getQobuzCredentials(
+  forceRefresh = false,
+  credentialsOverride?: QobuzCredentials,
+): Promise<QobuzCredentials> {
+  const override = validQobuzCredentials(credentialsOverride);
+  if (override) return override;
+
   if (!forceRefresh && qobuzCredentials) {
     return qobuzCredentials;
   }
@@ -235,8 +254,9 @@ async function qobuzSignedFetch(
   path: string,
   params: URLSearchParams,
   forceRefresh = false,
+  credentialsOverride?: QobuzCredentials,
 ): Promise<Response> {
-  const credentials = await getQobuzCredentials(forceRefresh);
+  const credentials = await getQobuzCredentials(forceRefresh, credentialsOverride);
   const timestamp = `${Math.floor(Date.now() / 1000)}`;
   const requestParams = new URLSearchParams(params);
   requestParams.set("app_id", credentials.appId);
@@ -253,11 +273,15 @@ async function qobuzSignedFetch(
   });
 }
 
-async function qobuzSignedJson<T>(path: string, params: URLSearchParams): Promise<T> {
-  let response = await qobuzSignedFetch(path, params);
+async function qobuzSignedJson<T>(
+  path: string,
+  params: URLSearchParams,
+  credentials?: QobuzCredentials,
+): Promise<T> {
+  let response = await qobuzSignedFetch(path, params, false, credentials);
   if (response.status === 400 || response.status === 401) {
     response.body?.cancel().catch(() => {});
-    response = await qobuzSignedFetch(path, params, true);
+    response = await qobuzSignedFetch(path, params, true, credentials);
   }
 
   if (!response.ok) {
@@ -375,6 +399,7 @@ export async function resolveQobuzTrack(options: {
   title?: string;
   artist?: string;
   album?: string;
+  credentials?: QobuzCredentials;
 }): Promise<QobuzTrack> {
   const isrc = toStringValue(options.isrc).toUpperCase();
   const title = toStringValue(options.title);
@@ -392,6 +417,7 @@ export async function resolveQobuzTrack(options: {
           query,
           limit: "10",
         }),
+        options.credentials,
       );
       const items = Array.isArray(payload.tracks?.items) ? payload.tracks.items : [];
       if (items.length === 0) {
@@ -512,10 +538,10 @@ async function extractStreamUrlFromResponse(response: Response): Promise<string>
 }
 
 function mapQobuzWJHEQuality(quality: string): { quality: string; format: string } {
-  if (quality === "27" || quality === "7") {
+  if (quality === "27" || quality === "24" || quality === "7") {
     return { quality: "2000", format: "flac" };
   }
-  if (!quality || quality === "6") {
+  if (!quality || quality === "16" || quality === "6") {
     return { quality: "1000", format: "flac" };
   }
   return { quality: "320", format: "mp3" };
@@ -559,8 +585,8 @@ function qobuzGDStudioSignature(apiUrl: string, value: string, ts9: string): str
 }
 
 function mapQobuzGDStudioBitrate(quality: string): string {
-  if (quality === "27" || quality === "7") return "999";
-  if (!quality || quality === "6") return "740";
+  if (quality === "27" || quality === "24" || quality === "7") return "999";
+  if (!quality || quality === "16" || quality === "6") return "740";
   return "320";
 }
 
@@ -652,6 +678,32 @@ async function downloadFromMusicDL(trackId: string, quality: string): Promise<st
   }
 }
 
+function mapQobuzSpotbyeQuality(quality: string): string {
+  const normalized = quality.trim();
+  if (normalized === "24" || normalized === "16" || normalized === "6") return normalized;
+  return "";
+}
+
+async function downloadFromSpotbye(trackId: string, quality: string, apiUrl: string): Promise<string> {
+  const spotbyeQuality = mapQobuzSpotbyeQuality(quality);
+  if (!spotbyeQuality) {
+    throw new QobuzDownloadError(`Spotbye Qobuz does not support quality ${quality || "default"}`);
+  }
+
+  const response = await fetchWithTimeout(apiUrl, {
+    method: "POST",
+    timeoutMs: 25_000,
+    headers: {
+      accept: "application/json, text/plain, */*",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ id: trackId, quality: spotbyeQuality }),
+  });
+  const streamUrl = await extractStreamUrlFromResponse(response);
+  if (streamUrl) return streamUrl;
+  throw new QobuzDownloadError(`Spotbye Qobuz returned ${response.status} without a stream URL`);
+}
+
 async function downloadFromLegacyProvider(
   trackId: string,
   quality: string,
@@ -672,6 +724,7 @@ export async function resolveQobuzStreamUrl(options: {
   artist?: string;
   album?: string;
   quality: string;
+  credentials?: QobuzCredentials;
 }): Promise<string> {
   const track = await resolveQobuzTrack(options);
   const trackId = qobuzTrackId(track);
@@ -680,6 +733,9 @@ export async function resolveQobuzStreamUrl(options: {
   }
 
   const attempts: Array<() => Promise<string>> = [
+    ...QOBUZ_SPOTBYE_API_URLS.map(
+      (apiUrl) => () => downloadFromSpotbye(trackId, options.quality, apiUrl),
+    ),
     () => downloadFromWJHE(trackId, options.quality),
     ...QOBUZ_GDSTUDIO_API_URLS.map(
       (apiUrl) => () => downloadFromGDStudio(trackId, options.quality, apiUrl),
@@ -707,6 +763,7 @@ export async function resolveQobuzAvailability(options: {
   title?: string;
   artist?: string;
   album?: string;
+  credentials?: QobuzCredentials;
 }): Promise<{ available: boolean; qobuzUrl: string }> {
   try {
     const track = await resolveQobuzTrack(options);

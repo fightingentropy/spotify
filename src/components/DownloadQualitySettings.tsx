@@ -40,7 +40,12 @@ const PROVIDER_OPTIONS: Array<{
   {
     value: "auto",
     label: "Auto",
-    note: "Try Qobuz, then Tidal",
+    note: "Use SpotiFLAC provider order",
+  },
+  {
+    value: "licensed",
+    label: "Licensed source",
+    note: "Use configured licensed source only",
   },
   {
     value: "qobuz",
@@ -51,6 +56,21 @@ const PROVIDER_OPTIONS: Array<{
     value: "tidal",
     label: "Tidal",
     note: "Use Tidal only",
+  },
+  {
+    value: "amazon",
+    label: "Amazon Music",
+    note: "Use Amazon Music only",
+  },
+  {
+    value: "deezer",
+    label: "Deezer",
+    note: "Use configured Deezer source only",
+  },
+  {
+    value: "apple",
+    label: "Apple Music",
+    note: "Use configured Apple Music source only",
   },
 ];
 

@@ -33,6 +33,9 @@
 	},
 	"vars": {
 		"AUTH_TRUST_HOST": "true",
-		"MAC_MINI_ORIGIN": "https://spotify.fightingentropy.org"
+		"MAC_MINI_ORIGIN": "https://spotify.fightingentropy.org",
+		"SPOTIFLAC_PROVIDER_ORDER": "tidal-tidal_x-tidal_custom-qobuz-qobuz_x-qobuz_custom-amazon-amazon_x-deezer-deezer_x-deezer_custom-apple",
+		"SPOTIFLAC_TIDAL_APIS": "https://tdl-a.spotbye.qzz.io,https://tdl-b.spotbye.qzz.io,https://tdl-c.spotbye.qzz.io,https://tdl-d.spotbye.qzz.io,https://tdl-e.spotbye.qzz.io",
+		"SPOTIFLAC_ACTIVE_TIDAL_API": "https://tdl-a.spotbye.qzz.io"
 	}
 }

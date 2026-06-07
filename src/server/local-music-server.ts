@@ -19,6 +19,11 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { parseFile } from "music-metadata";
 import type { IAudioMetadata } from "music-metadata";
+import {
+  LicensedSourceDownloadError,
+  materializeLicensedSourceStream,
+  type LicensedSourceStream,
+} from "../lib/licensed-source-download";
 import type { PlayerSong } from "../types/player";
 
 type LocalSongEntry = {
@@ -169,7 +174,7 @@ function localUser() {
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
 const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus", "wav"]);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
 const MAX_REMOTE_REDIRECTS = 5;
 
@@ -1569,6 +1574,35 @@ async function handleRemoteSongUpload(payload: {
   return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
+async function handleLicensedSourceMaterialize(request: Request): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const payload = await readJsonBody<{
+    stream?: unknown;
+    userAgent?: unknown;
+  }>(request);
+  const stream = payload?.stream;
+  if (!stream || typeof stream !== "object" || Array.isArray(stream)) {
+    return json({ error: "Licensed source stream is required" }, { status: 400 });
+  }
+  try {
+    const response = await materializeLicensedSourceStream(stream as LicensedSourceStream, {
+      maxBytes: MAX_AUDIO_BYTES,
+      userAgent: typeof payload?.userAgent === "string" ? payload.userAgent : undefined,
+    });
+    if (!response.ok || !response.body) return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
+    const headers = new Headers();
+    headers.set("content-type", response.headers.get("content-type") || "audio/mp4");
+    const length = response.headers.get("content-length");
+    if (length) headers.set("content-length", length);
+    return new Response(response.body, { headers });
+  } catch (error) {
+    if (error instanceof LicensedSourceDownloadError) {
+      return json({ error: error.message }, { status: error.status });
+    }
+    throw error;
+  }
+}
+
 async function handleSongUpload(source: LibrarySource, request: Request): Promise<Response> {
   const contentType = request.headers.get("content-type") || "";
   if (contentType.toLowerCase().startsWith("application/json")) {
@@ -1590,6 +1624,8 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
   if (!form) return json({ error: "Invalid form body" }, { status: 400 });
   const title = typeof form.get("title") === "string" ? String(form.get("title")).trim() : "";
   const artist = typeof form.get("artist") === "string" ? String(form.get("artist")).trim() : "";
+  const album = typeof form.get("album") === "string" ? String(form.get("album")).trim() : "";
+  const imageUrl = typeof form.get("imageUrl") === "string" ? String(form.get("imageUrl")).trim() : "";
   const image = form.get("image");
   const audio = form.get("audio");
   if (!title || !artist || !(audio instanceof File)) {
@@ -1605,18 +1641,64 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
   if (byteLength(lyricsText) > MAX_LYRICS_BYTES) {
     return json({ error: "Lyrics text is too large" }, { status: 413 });
   }
+  const replaceExisting =
+    form.get("replaceExisting") === "true" ||
+    form.get("replaceExisting") === "1" ||
+    form.get("replaceExisting") === "yes";
+
+  const currentSnapshot = await getLibrary(source);
+  const existingEntry = currentSnapshot.songs
+    .map((song) => currentSnapshot.entriesById.get(song.id))
+    .find((entry): entry is LocalSongEntry =>
+      Boolean(entry && trackKey(entry.song.title, entry.song.artist) === trackKey(title, artist)),
+    );
+
+  if (existingEntry && !replaceExisting) {
+    return json(
+      {
+        error: "Song already exists in your library",
+        code: "DUPLICATE_SONG",
+        existingSong: {
+          id: existingEntry.song.id,
+          title: existingEntry.song.title,
+          artist: existingEntry.song.artist,
+        },
+      },
+      { status: 409 },
+    );
+  }
 
   const audioExt = AUDIO_EXTENSIONS.has(extname(audio.name).toLowerCase())
     ? extname(audio.name).toLowerCase()
     : ".mp3";
   const stem = sanitizeFileName(`${artist} - ${title}`);
-  const audioPath = await uniquePath(resolve(source.root, `${stem}${audioExt}`));
-  await saveFile(audio, audioPath);
+  const preferredAudioPath = existingEntry && replaceExisting
+    ? resolve(dirname(existingEntry.absolutePath), `${stem}${audioExt}`)
+    : resolve(source.root, `${stem}${audioExt}`);
+  const audioPath =
+    existingEntry &&
+    replaceExisting &&
+    (!existsSync(preferredAudioPath) || preferredAudioPath === existingEntry.absolutePath)
+      ? preferredAudioPath
+      : await uniquePath(preferredAudioPath);
+  const tempAudioPath = existingEntry && replaceExisting
+    ? await uniquePath(resolve(
+        dirname(audioPath),
+        `.${basename(audioPath, extname(audioPath))}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp${audioExt}`,
+      ))
+    : audioPath;
+  await saveFile(audio, tempAudioPath);
+  if (existingEntry && replaceExisting) {
+    await deleteSongEntryFiles(source, existingEntry);
+    await mkdir(dirname(audioPath), { recursive: true });
+    await rename(tempAudioPath, audioPath);
+  }
 
   const sidecar: LocalSidecar = {
     version: 1,
     title,
     artist,
+    album: album || undefined,
     updatedAt: new Date().toISOString(),
   };
 
@@ -1627,6 +1709,10 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
     const coverName = `${basename(audioPath, extname(audioPath))}.cover${imageExt}`;
     await saveFile(image, resolve(dirname(audioPath), coverName));
     sidecar.coverFile = coverName;
+  } else if (imageUrl) {
+    sidecar.coverFile = await saveRemoteImage(imageUrl, basename(audioPath, extname(audioPath)), audioPath).catch(
+      () => undefined,
+    );
   }
 
   if (lyricsText) {
@@ -1640,8 +1726,8 @@ async function handleSongUpload(source: LibrarySource, request: Request): Promis
   const relativePath = relative(source.root, audioPath).split(sep).join("/");
   const entry = snapshot.entriesByPath.get(relativePath);
   if (!entry) return json({ error: "Uploaded song could not be scanned" }, { status: 500 });
-  await markSongLikedForSource(source, snapshot.songs, entry.song.id);
-  return json(entry.song, { status: 201 });
+  if (!existingEntry) await markSongLikedForSource(source, snapshot.songs, entry.song.id);
+  return json(entry.song, { status: existingEntry && replaceExisting ? 200 : 201 });
 }
 
 async function handlePatchSong(source: LibrarySource, id: string, request: Request): Promise<Response> {
@@ -2007,6 +2093,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/likes") {
     return handleLikes(request);
+  }
+
+  if (pathname === "/api/licensed-source/materialize" && request.method === "POST") {
+    return handleLicensedSourceMaterialize(request);
   }
 
   if (pathname === "/api/songs" && request.method === "GET") {
