@@ -21,7 +21,7 @@ type PlayerState = {
   crossfadeSeconds: number; // 0..12
   setQueue: (songs: PlayerSong[], startIndex: number, options?: SetQueueOptions) => PlayerSong | null;
   setSong: (song: PlayerSong | null) => void;
-  advanceToIndex: (index: number) => void;
+  advanceToIndex: (index: number, options?: AdvanceToIndexOptions) => void;
   replaceSong: (song: PlayerSong) => void;
   play: () => void;
   pause: () => void;
@@ -38,6 +38,12 @@ type PlayerState = {
 
 type SetQueueOptions = {
   respectShuffle?: boolean;
+};
+
+type AdvanceToIndexOptions = {
+  // True when the target index was peeked from playFuture (the redo stack), so
+  // the commit should consume that entry rather than picking from the shuffle pool.
+  fromFuture?: boolean;
 };
 
 const MAX_PLAY_HISTORY = 200;
@@ -155,16 +161,30 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     return currentSong;
   },
   setSong: (song) => set({ currentSong: song, playHistory: [], playFuture: [], shuffleRemaining: [] }),
-  advanceToIndex: (index) =>
+  advanceToIndex: (index, options) =>
     set((s) => {
       if (index < 0 || index >= s.queue.length || index === s.currentIndex) return s;
+      if (!s.shuffle) {
+        return {
+          ...s,
+          currentIndex: index,
+          currentSong: s.queue[index],
+          isPlaying: true,
+        };
+      }
+      // Mirror next()'s shuffle bookkeeping: when the target came from playFuture
+      // (redo stack), consume that one entry and leave shuffleRemaining untouched;
+      // otherwise treat it as a fresh pick, which only happens when playFuture is
+      // empty, so the redo stack ends up cleared just like next().
+      const future = s.playFuture.slice();
+      const fromFuture = options?.fromFuture === true && future[future.length - 1] === index;
       return {
         ...s,
         currentIndex: index,
         currentSong: s.queue[index],
-        playHistory: s.shuffle ? pushHistory(s.playHistory, s.currentIndex) : s.playHistory,
-        playFuture: s.shuffle ? [] : s.playFuture,
-        shuffleRemaining: s.shuffle ? removeQueueIndex(s.shuffleRemaining, index) : s.shuffleRemaining,
+        playHistory: pushHistory(s.playHistory, s.currentIndex),
+        playFuture: fromFuture ? future.slice(0, -1) : [],
+        shuffleRemaining: fromFuture ? s.shuffleRemaining : removeQueueIndex(s.shuffleRemaining, index),
         isPlaying: true,
       };
     }),

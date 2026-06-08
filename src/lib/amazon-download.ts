@@ -1,5 +1,13 @@
 import { createDecipheriv, createHash } from "node:crypto";
 
+import {
+  DEFAULT_USER_AGENT,
+  fetchWithTimeout as fetchWithTimeoutShared,
+  toObject,
+  toStringValue,
+  type FetchWithTimeoutOptions,
+} from "./provider-http";
+
 // Amazon resolver flow adapted from SpotiFLAC 0.6.0's MIT-licensed Amazon provider.
 // See THIRD_PARTY_NOTICES.md for the license notice.
 const AMAZON_RESOLVE_URL = "https://api.zarz.moe/v1/resolve";
@@ -7,8 +15,6 @@ const AMAZON_ZARZ_MEDIA_URL = "https://api.zarz.moe/v1/dl/amazeamazeamaze/media"
 const AMAZON_SPOTBYE1_API_URL = "https://amz.spotbye.qzz.io/api/track";
 const AMAZON_SPOTBYE2_API_BASE_URL = "https://amazon.spotbye.qzz.io/api/track";
 const SONG_LINK_API_URL = "https://api.song.link/v1-alpha.1/links";
-const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 const SPOTIFLAC_MOBILE_USER_AGENT = "SpotiFLAC-Mobile/1.0";
 const AMAZON_REQUEST_TIMEOUT_MS = 45_000;
 
@@ -56,15 +62,6 @@ export class AmazonDownloadError extends Error {
 
 let amazonDebugKey: string | null = null;
 
-function toStringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function toObject(value: unknown): JsonObject | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as JsonObject;
-}
-
 function amazonDebugHeaderValue(): string {
   if (amazonDebugKey) return amazonDebugKey;
   const key = createHash("sha256").update(Buffer.concat(amazonDebugKeySeedParts)).digest();
@@ -78,40 +75,14 @@ function amazonDebugHeaderValue(): string {
   return amazonDebugKey;
 }
 
-async function fetchWithTimeout(
+function fetchWithTimeout(
   url: string,
-  options?: {
-    method?: string;
-    body?: BodyInit;
-    headers?: HeadersInit;
-    timeoutMs?: number;
-  },
+  options?: FetchWithTimeoutOptions,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    options?.timeoutMs ?? AMAZON_REQUEST_TIMEOUT_MS,
-  );
-  const headers = new Headers(options?.headers);
-  if (!headers.has("user-agent")) headers.set("user-agent", DEFAULT_USER_AGENT);
-  if (!headers.has("accept")) headers.set("accept", "application/json, text/plain, */*");
-
-  try {
-    return await fetch(url, {
-      method: options?.method ?? "GET",
-      body: options?.body,
-      headers,
-      redirect: "follow",
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new AmazonDownloadError("Amazon provider request timed out", 504);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchWithTimeoutShared(url, options, {
+    defaultTimeoutMs: AMAZON_REQUEST_TIMEOUT_MS,
+    onTimeout: () => new AmazonDownloadError("Amazon provider request timed out", 504),
+  });
 }
 
 async function readJsonObject(response: Response): Promise<JsonObject> {
@@ -121,7 +92,10 @@ async function readJsonObject(response: Response): Promise<JsonObject> {
 }
 
 function amazonAsinFromUrl(value: string): string {
-  const decoded = decodeURIComponent(value);
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {}
   return (
     decoded.match(/(?:trackAsin=|tracks\/)([A-Z0-9]{10})/)?.[1] ??
     decoded.match(/\b(B[0-9A-Z]{9})\b/)?.[1] ??

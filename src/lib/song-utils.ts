@@ -25,10 +25,7 @@ export function normalizeCoverImageUrl(url: string | null | undefined): string {
   return resolveNativeApiUrl(url);
 }
 
-export function normalizeMediaUrl(
-  url: string | null | undefined,
-  _kind: "image" | "audio" | "lyrics",
-): string {
+export function normalizeMediaUrl(url: string | null | undefined): string {
   if (!url) return "";
   if (url.startsWith("/api/files/")) {
     const encoded = url.slice("/api/files/".length);
@@ -60,9 +57,9 @@ export function songToPlayerSong(song: SongRow): PlayerSong {
     title: song.title,
     artist: song.artist,
     album: typeof song.album === "string" && song.album.trim() ? song.album.trim() : undefined,
-    imageUrl: normalizeMediaUrl(song.imageUrl, "image"),
-    audioUrl: normalizeMediaUrl(song.audioUrl, "audio"),
-    lyricsUrl: normalizeMediaUrl(song.lyricsUrl, "lyrics"),
+    imageUrl: normalizeMediaUrl(song.imageUrl),
+    audioUrl: normalizeMediaUrl(song.audioUrl),
+    lyricsUrl: normalizeMediaUrl(song.lyricsUrl),
     createdAt: createdAtIso,
     duration:
       typeof song.duration === "number" && Number.isFinite(song.duration)

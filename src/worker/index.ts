@@ -64,7 +64,6 @@ type AuthUser = {
   image: string | null;
 };
 
-const SAVANNAH_PROFILE_IMAGE_URL = "/savannah.jpg";
 const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
 const LOCAL_MAC_MINI_AUTH_USER: AuthUser = {
   id: "local-mac-mini",
@@ -306,7 +305,7 @@ async function ensureSongColumns(db: SqlTag): Promise<void> {
       'ALTER TABLE "Song" ADD COLUMN "composer" TEXT',
       'ALTER TABLE "Song" ADD COLUMN "publisher" TEXT',
       'ALTER TABLE "Song" ADD COLUMN "copyright" TEXT',
-      'ALTER TABLE "Song" ADD COLUMN "outputFormat" TEXT DEFAULT "flac"',
+      `ALTER TABLE "Song" ADD COLUMN "outputFormat" TEXT DEFAULT 'flac'`,
     ]) {
       try {
         await db([statement] as unknown as TemplateStringsArray);
@@ -550,6 +549,36 @@ function parseHttpUrl(value: string): URL | null {
   }
 }
 
+function isSpotifyCdnUrl(url: URL): boolean {
+  if (url.username || url.password) return false;
+  const host = url.hostname.toLowerCase();
+  return host.endsWith(".scdn.co") || host.endsWith(".spotifycdn.com");
+}
+
+async function streamCappedBody(body: ReadableStream<Uint8Array>, maxBytes: number): Promise<ReadableStream<Uint8Array>> {
+  const reader = body.getReader();
+  let total = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        controller.error(new Error("Upstream response exceeded maximum allowed size"));
+        return;
+      }
+      controller.enqueue(value);
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {});
+    },
+  });
+}
+
 function outputFormatFromPayload(value: unknown): OutputFormat {
   const format = toStringValue(value).toLowerCase() as OutputFormat;
   return OUTPUT_FORMATS.has(format) ? format : SERVER_IMPORT_OUTPUT_FORMAT;
@@ -602,10 +631,20 @@ function getRequestIp(req: Request): string {
   return "unknown";
 }
 
+const RATE_LIMIT_MAX_ENTRIES = 10_000;
+
 function rateLimit(req: Request, keyPrefix: string, max: number, windowMs: number) {
   const ip = getRequestIp(req);
   const key = `${keyPrefix}:${ip}`;
   const now = Date.now();
+  // Opportunistically evict expired entries so the map cannot grow unbounded.
+  for (const [existingKey, existingEntry] of rateLimitStore) {
+    if (existingEntry.resetAt <= now) rateLimitStore.delete(existingKey);
+  }
+  if (rateLimitStore.size >= RATE_LIMIT_MAX_ENTRIES) {
+    const oldestKey = rateLimitStore.keys().next().value;
+    if (oldestKey !== undefined) rateLimitStore.delete(oldestKey);
+  }
   let entry = rateLimitStore.get(key);
   if (!entry || entry.resetAt <= now) entry = { count: 0, resetAt: now + windowMs };
   entry.count += 1;
@@ -680,19 +719,9 @@ async function publicUserForResponse(c: Context<AppEnv>, user: AuthUser) {
   return publicUser(await ensureDefaultProfileImageStored(c, user));
 }
 
-function defaultUserImage(email: string, name: string | null): string | null {
-  const normalizedName = name?.trim().toLowerCase() || "";
-  const emailLocalPart = email.split("@")[0]?.trim().toLowerCase() || "";
-  if (
-    normalizedName === "erlin" ||
-    normalizedName === "erlin hoxha" ||
-    emailLocalPart === "erlin" ||
-    emailLocalPart === "erlinhoxha"
-  ) {
-    return ERLIN_PROFILE_IMAGE_URL;
-  }
-  if (normalizedName === "savannah" || normalizedName === "savanna") return SAVANNAH_PROFILE_IMAGE_URL;
-  if (emailLocalPart === "savannah" || emailLocalPart === "savanna") return SAVANNAH_PROFILE_IMAGE_URL;
+function defaultUserImage(_email: string, _name: string | null): string | null {
+  // Name-based identity heuristics have been dropped; everyone gets the same
+  // generic default avatar (resolved by the normal fallback paths).
   return null;
 }
 
@@ -2144,7 +2173,9 @@ async function uploadRemoteCover(env: CloudflareEnv, title: string, artist: stri
   if (!imageUrl) return "/apple-icon.png";
   const parsed = parseHttpUrl(imageUrl);
   if (!parsed) return "/apple-icon.png";
-  const response = await fetchWithTimeout(parsed.toString(), SPOTIFY_REQUEST_TIMEOUT_MS);
+  const response = await fetchWithTimeout(parsed.toString(), SPOTIFY_REQUEST_TIMEOUT_MS, {
+    redirect: "manual",
+  });
   if (!response.ok) return "/apple-icon.png";
   const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
   if (!IMAGE_MIME_TYPES.has(contentType)) return "/apple-icon.png";
@@ -2636,7 +2667,27 @@ async function audioFileFromResolvedResponse(
   return new File([buffer], fileName, { type: responseType });
 }
 
+const SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  // SAFE SUBSET ONLY: no default-src/script-src/connect-src so the SPA keeps working.
+  "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+};
+
+function applySecurityHeaders(headers: Headers): void {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+}
+
 const app = new Hono<AppEnv>();
+
+app.use("*", async (c, next) => {
+  await next();
+  applySecurityHeaders(c.res.headers);
+});
 
 app.use("/api/*", async (c, next) => {
   if (shouldProxyMusicRequest(c)) {
@@ -2741,18 +2792,31 @@ app.post("/api/register", async (c) => {
   const name = toStringValue(body?.name);
   if (!email || !password) return jsonError("Email and password are required", 400);
   if (password.length < 8 || password.length > 128) return jsonError("Password must be 8-128 characters", 400);
+  // Impersonation guard: never let a registrant claim a configured owner display name.
+  const ownerNames = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_NAMES");
+  const configuredOwnerNames = ownerNames.length > 0 ? ownerNames : ["Erlin"];
+  const normalizedName = name.trim().toLowerCase();
+  if (normalizedName && configuredOwnerNames.some((owner) => owner.trim().toLowerCase() === normalizedName)) {
+    return jsonError("Display name is not available", 400);
+  }
   const db = c.get("db");
+  // Always hash so registration timing does not reveal whether the email exists.
+  const passwordHash = await hash(password, 10);
   const existing = await db<UserRow>`
     SELECT "id"
     FROM "User"
     WHERE "email" = ${email}
     LIMIT 1
   `;
-  if (existing[0]) return jsonError("Email already in use", 409);
+  if (existing[0]) {
+    // Return the same generic shape as a successful registration to avoid
+    // user enumeration; do not distinguish duplicates with a 409.
+    return c.json({ ok: true }, 201);
+  }
   const image = defaultUserImage(email, name);
   await db`
     INSERT INTO "User" ("id", "email", "name", "passwordHash", "image", "emailVerified", "createdAt", "updatedAt")
-    VALUES (${crypto.randomUUID()}, ${email}, ${name || null}, ${await hash(password, 10)}, ${image}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    VALUES (${crypto.randomUUID()}, ${email}, ${name || null}, ${passwordHash}, ${image}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `;
   return c.json({ ok: true }, 201);
 });
@@ -2893,12 +2957,21 @@ app.get("/api/songs/spotify/cover", async (c) => {
   const remoteUrlRaw = c.req.query("url") || "";
   const fileName = sanitizeFileName(c.req.query("filename") || "cover");
   const remoteUrl = parseHttpUrl(remoteUrlRaw);
-  if (!remoteUrl) return jsonError("Only valid http(s) URLs are allowed", 400);
-  const upstream = await fetchWithTimeout(remoteUrl.toString(), SPOTIFY_REQUEST_TIMEOUT_MS);
+  if (!remoteUrl || !isSpotifyCdnUrl(remoteUrl)) {
+    return jsonError("Only Spotify CDN cover URLs are allowed", 400);
+  }
+  const upstream = await fetchWithTimeout(remoteUrl.toString(), SPOTIFY_REQUEST_TIMEOUT_MS, {
+    redirect: "manual",
+  });
   if (!upstream.ok) throw new ApiError(`Upstream cover request returned ${upstream.status}`, 502);
-  return new Response(upstream.body, {
+  const contentType = upstream.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().startsWith("image/")) {
+    return jsonError("Upstream cover is not an image", 400);
+  }
+  if (!upstream.body) throw new ApiError("Upstream cover request returned no body", 502);
+  return new Response(await streamCappedBody(upstream.body, MAX_IMAGE_BYTES), {
     headers: {
-      "content-type": upstream.headers.get("content-type") || "application/octet-stream",
+      "content-type": contentType,
       "content-disposition": `attachment; filename="${fileName.replaceAll('"', "'")}"`,
       "cache-control": "no-store",
     },
@@ -3221,9 +3294,19 @@ app.post("/api/songs", async (c) => {
       const remoteAudioUrl = toStringValue(payload.audioUrl);
       const remoteAudio = parseHttpUrl(remoteAudioUrl);
       if (!remoteAudio) return jsonError("Only valid http(s) audio URLs are allowed", 400);
-      const response = await fetchWithTimeout(remoteAudio.toString(), DOWNLOAD_REQUEST_TIMEOUT_MS);
+      const response = await fetchWithTimeout(remoteAudio.toString(), DOWNLOAD_REQUEST_TIMEOUT_MS, {
+        redirect: "manual",
+      });
       if (!response.ok || !response.body) throw new ApiError(`Audio server returned ${response.status}`, 502);
       const responseType = response.headers.get("content-type") || "audio/flac";
+      const responseMime = responseType.split(";")[0]?.trim().toLowerCase() || "";
+      if (!AUDIO_MIME_TYPES.has(responseMime)) {
+        return jsonError("Unsupported audio format", 415);
+      }
+      const remoteAudioLength = Number(response.headers.get("content-length") || "0");
+      if (Number.isFinite(remoteAudioLength) && remoteAudioLength > MAX_AUDIO_BYTES) {
+        return jsonError("Audio file is too large", 413);
+      }
       const ext = extensionFromResponse(response, remoteAudio.toString());
       const audioKey = `${buildOrganizedMusicBasePath(title, artist)}/audio/${crypto.randomUUID()}${ext}`;
       await putStream(c.env, audioKey, response.body, responseType);
@@ -3580,36 +3663,36 @@ app.get("/api/files/*", async (c) => {
   if (range) {
     const parsed = parseRangeHeader(range, size);
     if (!parsed) {
-      return new Response(null, {
-        status: 416,
-        headers: {
-          "Content-Range": `bytes */${size}`,
-          "Accept-Ranges": "bytes",
-        },
+      const headers = new Headers({
+        "Content-Range": `bytes */${size}`,
+        "Accept-Ranges": "bytes",
       });
+      applySecurityHeaders(headers);
+      return new Response(null, { status: 416, headers });
     }
     const length = parsed.end - parsed.start + 1;
     const partial = await c.env.MEDIA.get(key, { range: { offset: parsed.start, length } });
-    return new Response(partial?.body ?? null, {
-      status: 206,
-      headers: {
-        "Content-Type": contentType,
-        "Content-Length": String(length),
-        "Content-Range": `bytes ${parsed.start}-${parsed.end}/${size}`,
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "private, max-age=31536000, immutable",
-      },
-    });
-  }
-  const full = await c.env.MEDIA.get(key);
-  return new Response(full?.body ?? null, {
-    headers: {
+    if (!partial?.body) return jsonError("Not found", 404);
+    const headers = new Headers({
       "Content-Type": contentType,
-      "Content-Length": String(size),
+      "Content-Length": String(length),
+      "Content-Range": `bytes ${parsed.start}-${parsed.end}/${size}`,
       "Accept-Ranges": "bytes",
       "Cache-Control": "private, max-age=31536000, immutable",
-    },
+    });
+    applySecurityHeaders(headers);
+    return new Response(partial.body, { status: 206, headers });
+  }
+  const full = await c.env.MEDIA.get(key);
+  if (!full?.body) return jsonError("Not found", 404);
+  const headers = new Headers({
+    "Content-Type": contentType,
+    "Content-Length": String(size),
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, max-age=31536000, immutable",
   });
+  applySecurityHeaders(headers);
+  return new Response(full.body, { headers });
 });
 
 app.get("/api/artwork/r2/*", async (c) => {
@@ -3668,6 +3751,15 @@ app.onError((error) => {
   return jsonError("Internal server error", 500);
 });
 
-app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
+app.all("*", async (c) => {
+  const assetResponse = await c.env.ASSETS.fetch(c.req.raw);
+  const headers = new Headers(assetResponse.headers);
+  applySecurityHeaders(headers);
+  return new Response(assetResponse.body, {
+    status: assetResponse.status,
+    statusText: assetResponse.statusText,
+    headers,
+  });
+});
 
 export default app;

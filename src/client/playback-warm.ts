@@ -66,6 +66,12 @@ function uniqueStrings(values: Array<string | undefined | null>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
 }
 
+function sweepStalePlaybackSeen(timestamp: number): void {
+  for (const [seenUrl, seenAt] of warmPlaybackSeen) {
+    if (timestamp - seenAt >= PLAYBACK_WARM_DEDUPE_MS) warmPlaybackSeen.delete(seenUrl);
+  }
+}
+
 async function warmPlaybackUrl(url: string): Promise<void> {
   if (typeof window === "undefined") return;
   if (!sameOriginCacheableUrl(url)) return;
@@ -139,6 +145,7 @@ export function warmPlaybackSong(song: PlayerSong, priority = false): void {
     return;
   }
 
+  sweepStalePlaybackSeen(timestamp);
   warmPlaybackSeen.set(url, timestamp);
   if (priority) {
     warmPlaybackQueue.unshift(url);

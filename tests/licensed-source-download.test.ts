@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   LicensedSourceDownloadError,
+  materializeLicensedSourceStream,
   resolveLicensedSourceStreamUrl,
 } from "../src/lib/licensed-source-download";
 
@@ -110,5 +111,163 @@ describe("licensed source downloader", () => {
       message: "Licensed source provider is not configured",
       status: 501,
     } satisfies Partial<LicensedSourceDownloadError>);
+  });
+});
+
+// 203.0.113.0/24 is TEST-NET-3 (documentation) — a public, non-private IP
+// literal that the SSRF guard accepts and node:dns resolves locally (no real
+// network), so we can drive materialize end-to-end with a mocked fetch.
+const MANIFEST_BASE = "https://203.0.113.10/dash/manifest.mpd";
+
+const PADDED_MANIFEST = `<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+  <Period>
+    <BaseURL>media/</BaseURL>
+    <AdaptationSet>
+      <SegmentTemplate
+        initialization="$RepresentationID$/init.mp4"
+        media="$RepresentationID$_$Bandwidth$/seg-$Number%05d$-t$Time$$$end.m4s"
+        startNumber="1">
+        <SegmentTimeline>
+          <S t="0" d="48000" r="1"/>
+          <S d="24000"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="audio-hi" bandwidth="320000"/>
+      <Representation id="audio-lo" bandwidth="96000"/>
+    </AdaptationSet>
+  </Period>
+</MPD>`;
+
+describe("licensed source DASH materialize", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("substitutes padded/identifier SegmentTemplate tokens end-to-end", async () => {
+    const requestedUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrls.push(String(input));
+      return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
+        status: 200,
+        headers: { "content-type": "audio/mp4", "content-length": "4" },
+      });
+    }) as unknown as typeof fetch;
+
+    const response = await materializeLicensedSourceStream({
+      kind: "dash",
+      streamUrl: MANIFEST_BASE,
+      headers: {},
+      contentType: "audio/mp4",
+      metadata: {},
+      dash: { manifestXml: PADDED_MANIFEST, manifestUrl: MANIFEST_BASE },
+    });
+
+    expect(response.status).toBe(200);
+    // Three segments: t=0, t=48000, then t=96000 (24000 duration on the last S).
+    expect(requestedUrls).toEqual([
+      "https://203.0.113.10/dash/media/audio-hi/init.mp4",
+      "https://203.0.113.10/dash/media/audio-hi_320000/seg-00001-t0$end.m4s",
+      "https://203.0.113.10/dash/media/audio-hi_320000/seg-00002-t48000$end.m4s",
+      "https://203.0.113.10/dash/media/audio-hi_320000/seg-00003-t96000$end.m4s",
+    ]);
+  });
+
+  test("rejects a manifest with an unresolved template token", async () => {
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array([0]).buffer, { status: 200 })) as unknown as typeof fetch;
+
+    const badManifest = PADDED_MANIFEST.replace(
+      "seg-$Number%05d$-t$Time$$$end.m4s",
+      "seg-$Number$-$UnknownToken$.m4s",
+    );
+
+    await expect(materializeLicensedSourceStream({
+      kind: "dash",
+      streamUrl: MANIFEST_BASE,
+      headers: {},
+      contentType: "audio/mp4",
+      metadata: {},
+      dash: { manifestXml: badManifest, manifestUrl: MANIFEST_BASE },
+    })).rejects.toMatchObject({ status: 502 });
+  });
+
+  test("strips caller-injected headers from outbound media fetches", async () => {
+    let sentHeaders = new Headers();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sentHeaders = new Headers(init?.headers);
+      return new Response(new Uint8Array([1, 2]).buffer, {
+        status: 200,
+        headers: { "content-type": "audio/flac", "content-length": "2" },
+      });
+    }) as unknown as typeof fetch;
+
+    await materializeLicensedSourceStream({
+      kind: "url",
+      streamUrl: "https://203.0.113.10/song.flac",
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "session=abc",
+        host: "evil.example",
+        "user-agent": "provider-agent/1.0",
+        range: "bytes=0-100",
+      },
+      contentType: "audio/flac",
+      metadata: {},
+    });
+
+    expect(sentHeaders.get("authorization")).toBeNull();
+    expect(sentHeaders.get("cookie")).toBeNull();
+    expect(sentHeaders.get("host")).toBeNull();
+    expect(sentHeaders.get("user-agent")).toBe("provider-agent/1.0");
+    expect(sentHeaders.get("range")).toBe("bytes=0-100");
+  });
+
+  test("fetchMediaWithRetries honors 429 + Retry-After then succeeds", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("slow down", {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+      }
+      return new Response(new Uint8Array([9]).buffer, {
+        status: 200,
+        headers: { "content-type": "audio/flac", "content-length": "1" },
+      });
+    }) as unknown as typeof fetch;
+
+    const response = await materializeLicensedSourceStream({
+      kind: "url",
+      streamUrl: "https://203.0.113.10/retry.flac",
+      headers: {},
+      contentType: "audio/flac",
+      metadata: {},
+    });
+
+    expect(calls).toBe(2);
+    expect(response.status).toBe(200);
+  });
+
+  test("rejects a segment whose Content-Length exceeds the remaining budget", async () => {
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array([1, 2, 3]).buffer, {
+        status: 200,
+        headers: { "content-type": "audio/mp4", "content-length": "999999999" },
+      })) as unknown as typeof fetch;
+
+    await expect(materializeLicensedSourceStream(
+      {
+        kind: "dash",
+        streamUrl: MANIFEST_BASE,
+        headers: {},
+        contentType: "audio/mp4",
+        metadata: {},
+        dash: { manifestXml: PADDED_MANIFEST, manifestUrl: MANIFEST_BASE },
+      },
+      { maxBytes: 1024 },
+    )).rejects.toMatchObject({ status: 413 });
   });
 });

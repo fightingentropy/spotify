@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
-import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
@@ -96,8 +96,8 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
               className="wf-list-row wf-pressable w-full min-h-[56px] px-2 rounded-xl flex items-center gap-3 text-left active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
             >
               <div className="relative h-12 w-12 rounded-md overflow-hidden shrink-0">
-                <img
-                  src={normalizeCoverImageUrl(song.imageUrl)}
+                <CoverImage
+                  src={song.imageUrl}
                   alt={song.title}
                   className="wf-song-cover h-full w-full object-cover"
                 />

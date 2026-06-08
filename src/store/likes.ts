@@ -112,16 +112,12 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     }
 
     if (isLocalSongId(songId)) {
-      set((state) => {
-        const likedSongIds: Record<string, true> = nextLiked
-          ? { ...state.likedSongIds, [songId]: true as const }
-          : removeKey(state.likedSongIds, songId);
-        writeLocalLikedSongIds(likedSongIds);
-        return {
-          likedSongIds,
-          hydrated: true,
-        };
-      });
+      const current = get().likedSongIds;
+      const likedSongIds: Record<string, true> = nextLiked
+        ? { ...current, [songId]: true as const }
+        : removeKey(current, songId);
+      set({ likedSongIds, hydrated: true });
+      writeLocalLikedSongIds(likedSongIds);
       return { ok: true, status: 200 };
     }
 

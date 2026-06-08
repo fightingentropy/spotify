@@ -5,12 +5,8 @@ import { useNavigate, Link } from "react-router-dom";
 import { CheckCircle2, Download, Loader2, Pause, Play, XCircle } from "lucide-react";
 import { invalidateLibraryApiCache } from "@/client/api";
 import { useAuth } from "@/client/auth";
-import {
-  DOWNLOAD_PROVIDER_KEY,
-  DOWNLOAD_QUALITY_PROFILE_KEY,
-  type DownloadQualityProfile,
-} from "@/lib/download-settings";
 import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
+import { formatTime } from "@/lib/utils";
 import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
 import { useBrowserLocalLibraryStore } from "@/store/browser-local-library";
 import { convertAudioFile, getSupportedFormats, getExtensionForFormat } from "@/lib/audio-converter";
@@ -67,10 +63,7 @@ type BrowserSaveResult = "shared-all" | "shared-some" | "downloaded";
 
 function formatDuration(durationMs: number): string {
   if (!durationMs || !Number.isFinite(durationMs)) return "0:00";
-  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  return formatTime(durationMs / 1000);
 }
 
 function formatPlays(totalPlays: number): string {
@@ -221,12 +214,10 @@ export default function UploadPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [spotifyUrl, setSpotifyUrl] = useState("");
-  const region = "US";
   const [spotifyTrack, setSpotifyTrack] = useState<SpotifyTrack | null>(null);
   const [lyricsText, setLyricsText] = useState("");
   const [fetchStatus, setFetchStatus] = useState<ActionStatus>("idle");
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
-  const qualityProfile: DownloadQualityProfile = "max";
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("flac");
   const [showReplaceModal, setShowReplaceModal] = useState(false);
   const [replaceModalMessage, setReplaceModalMessage] = useState("");
@@ -265,11 +256,6 @@ export default function UploadPage() {
   }, [canUseBrowserOutputConversion, outputFormat]);
 
   useEffect(() => {
-    try {
-      localStorage.removeItem(DOWNLOAD_QUALITY_PROFILE_KEY);
-      localStorage.removeItem(DOWNLOAD_PROVIDER_KEY);
-    } catch {}
-
     const params = new URLSearchParams(window.location.search);
     const cookieParam = params.get("spotifyCookie");
     const urlParam = params.get("url");
@@ -405,9 +391,9 @@ export default function UploadPage() {
             credentials: "include",
             body: JSON.stringify({
               spotifyUrl: url,
-              region,
+              region: "US",
               outputFormat: requestedOutputFormat,
-              qualityProfile,
+              qualityProfile: "max",
               spotifyCookie: cookie,
             }),
           });
@@ -431,7 +417,7 @@ export default function UploadPage() {
           method: "POST",
           headers: { "content-type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ action: "fetch", spotifyUrl: url, region }),
+          body: JSON.stringify({ action: "fetch", spotifyUrl: url, region: "US" }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error ?? "Failed to fetch Spotify track");
@@ -452,7 +438,7 @@ export default function UploadPage() {
       body: JSON.stringify({
         action: "fetch",
         spotifyUrl: `https://open.spotify.com/track/${trackId}`,
-        region,
+        region: "US",
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -472,7 +458,7 @@ export default function UploadPage() {
           spotifyUrl: trackUrl,
           title: track.title,
           artist: track.artist,
-          region,
+          region: "US",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -491,13 +477,13 @@ export default function UploadPage() {
     const payload: Record<string, string> = {
       mode: "spotify",
       spotifyUrl: trackUrl,
-      region,
+      region: "US",
       title: track.title,
       artist: track.artist,
       album: track.album,
       durationMs: String(track.durationMs || ""),
       imageUrl: track.imageUrl,
-      qualityProfile,
+      qualityProfile: "max",
       outputFormat: "flac",
     };
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
@@ -668,13 +654,13 @@ export default function UploadPage() {
     const payload: Record<string, string> = {
       mode: "spotify",
       spotifyUrl: trackUrl,
-      region,
+      region: "US",
       title: track.title,
       artist: track.artist,
       album: track.album,
       durationMs: String(track.durationMs || ""),
       imageUrl: track.imageUrl,
-      qualityProfile,
+      qualityProfile: "max",
       outputFormat: "flac",
     };
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
@@ -911,7 +897,7 @@ export default function UploadPage() {
           spotifyUrl: spotifyUrl.trim(),
           title: spotifyTrack.title,
           artist: spotifyTrack.artist,
-          region,
+          region: "US",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -929,13 +915,13 @@ export default function UploadPage() {
     const payload: Record<string, string> = {
       mode: "spotify",
       spotifyUrl: spotifyUrl.trim(),
-      region,
+      region: "US",
       title: spotifyTrack.title,
       artist: spotifyTrack.artist,
       album: spotifyTrack.album,
       durationMs: String(spotifyTrack.durationMs || ""),
       imageUrl: spotifyTrack.imageUrl,
-      qualityProfile,
+      qualityProfile: "max",
       outputFormat: "flac",
     };
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
@@ -973,13 +959,13 @@ export default function UploadPage() {
     const payload: Record<string, string> = {
       mode: "spotify",
       spotifyUrl: spotifyUrl.trim(),
-      region,
+      region: "US",
       title: spotifyTrack.title,
       artist: spotifyTrack.artist,
       album: spotifyTrack.album,
       durationMs: String(spotifyTrack.durationMs || ""),
       imageUrl: spotifyTrack.imageUrl,
-      qualityProfile,
+      qualityProfile: "max",
     };
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
     return payload;
@@ -1301,7 +1287,6 @@ export default function UploadPage() {
                     className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50"
                   >
                     <option value="flac">FLAC (Lossless)</option>
-                    {canUseBrowserOutputConversion && getSupportedFormats().includes("mp3") && <option value="mp3">MP3 320kbps</option>}
                     {canUseBrowserOutputConversion && getSupportedFormats().includes("aac") && <option value="aac">AAC (M4A)</option>}
                     {canUseBrowserOutputConversion && getSupportedFormats().includes("ogg") && <option value="ogg">OGG Vorbis</option>}
                     {canUseBrowserOutputConversion && getSupportedFormats().includes("opus") && <option value="opus">Opus</option>}

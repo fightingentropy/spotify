@@ -1,5 +1,25 @@
+import { toObject, toStringValue } from "./provider-http";
+import { fetchPublicHttpUrl } from "./safe-fetch";
+
+// NOTE: this provider's DEFAULT_USER_AGENT and fetchWithTimeout deliberately
+// diverge from the shared provider-http helpers: it advertises the app's own
+// UA (not the Chrome string the public-API providers spoof) and its
+// fetchWithTimeout takes a RequestInit + timeout rather than the option bag the
+// other providers use. Both stay local on purpose.
 const DEFAULT_USER_AGENT = "spotify/1.0 (+https://spotify.fightingentropy.org)";
 const LICENSED_SOURCE_REQUEST_TIMEOUT_MS = 30_000;
+const LICENSED_SOURCE_MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+
+// Caller- and provider-supplied stream headers are untrusted. Only forward a
+// small allowlist of innocuous request headers so a caller cannot inject
+// Host/Authorization/Cookie (or similar) headers into an SSRF fetch.
+const ALLOWED_MEDIA_HEADERS = new Set([
+  "user-agent",
+  "range",
+  "accept",
+  "accept-language",
+  "x-captcha-token",
+]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -27,15 +47,6 @@ export class LicensedSourceDownloadError extends Error {
     super(message);
     this.status = status;
   }
-}
-
-function toStringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function toObject(value: unknown): JsonObject | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as JsonObject;
 }
 
 function parseHttpUrl(value: string): URL | null {
@@ -77,6 +88,32 @@ function withHeaderIfMissing(headers: Record<string, string>, key: string, value
   const normalizedKey = key.toLowerCase();
   if (Object.keys(headers).some((header) => header.toLowerCase() === normalizedKey)) return headers;
   return { ...headers, [normalizedKey]: value };
+}
+
+// Build the request headers for an outbound media fetch from untrusted stream
+// headers: drop everything outside ALLOWED_MEDIA_HEADERS so a caller cannot
+// inject Host/Authorization/Cookie, then force our own user-agent.
+function mediaRequestHeaders(
+  streamHeaders: Record<string, string> | undefined,
+  userAgent: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(streamHeaders ?? {})) {
+    const normalizedKey = key.trim().toLowerCase();
+    const normalizedValue = typeof value === "string" ? value.trim() : "";
+    if (!normalizedKey || !normalizedValue) continue;
+    if (!ALLOWED_MEDIA_HEADERS.has(normalizedKey)) continue;
+    headers[normalizedKey] = normalizedValue;
+  }
+  if (!headers["user-agent"]) headers["user-agent"] = userAgent;
+  return headers;
+}
+
+function assertMediaResponseSize(response: Response, maxBytes: number): void {
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+  }
 }
 
 function providerMetadata(payload: JsonObject, data: JsonObject, audio: JsonObject, stream: JsonObject): JsonObject {
@@ -173,17 +210,22 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Fetch caller/provider-controlled media URLs through the SSRF guard
+// (redirect:"manual" with per-hop re-validation), retrying on 429/503 while
+// honoring Retry-After.
 async function fetchMediaWithRetries(url: string, init: RequestInit): Promise<Response> {
+  const parsed = parseHttpUrl(url);
+  if (!parsed) throw new LicensedSourceDownloadError("Licensed source URL is invalid", 502);
   let lastResponse: Response | null = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const response = await fetchWithTimeout(url, init);
+    const response = await fetchPublicHttpUrl(parsed, init, LICENSED_SOURCE_REQUEST_TIMEOUT_MS);
     if (response.status !== 429 && response.status !== 503) return response;
     lastResponse = response;
     if (attempt === 3) return response;
-    await response.arrayBuffer().catch(() => undefined);
+    await response.body?.cancel().catch(() => undefined);
     await wait(retryAfterMs(response, (attempt + 1) * 1500));
   }
-  return lastResponse ?? fetchWithTimeout(url, init);
+  return lastResponse ?? fetchPublicHttpUrl(parsed, init, LICENSED_SOURCE_REQUEST_TIMEOUT_MS);
 }
 
 export async function resolveLicensedSourceStreamUrl(options: {
@@ -316,12 +358,68 @@ export async function resolveLicensedSourceStreamUrl(options: {
 }
 
 function xmlAttr(source: string, name: string): string {
-  const match = source.match(new RegExp(`${name}="([^"]+)"`));
+  const match = source.match(new RegExp(`\\b${name}="([^"]*)"`));
   return match?.[1]?.replaceAll("&amp;", "&") ?? "";
 }
 
-function segmentUrlsFromManifest(manifestXml: string): string[] {
-  const templateMatch = manifestXml.match(/<SegmentTemplate\b[\s\S]*?<\/SegmentTemplate>/);
+// Substitute DASH SegmentTemplate identifiers ($Number$, $RepresentationID$,
+// $Bandwidth$, $Time$) including the zero-padded/width form $Identifier%0Nd$,
+// and the $$ -> $ literal escape. Throws if an unresolved "$...$" token remains.
+function substituteTemplate(template: string, values: Record<string, number | string>): string {
+  const result = template.replace(
+    /\$\$|\$([A-Za-z]+)(%0\d+d)?\$/g,
+    (match, identifier?: string, format?: string) => {
+      if (match === "$$") return "$";
+      if (!identifier || !(identifier in values)) return match;
+      const value = values[identifier];
+      if (format) {
+        const width = Number(format.slice(2, -1));
+        return String(value).padStart(width, "0");
+      }
+      return String(value);
+    },
+  );
+  if (/\$[A-Za-z]+(%0\d+d)?\$/.test(result)) {
+    throw new LicensedSourceDownloadError("Licensed source DASH manifest has an unresolved template token", 502);
+  }
+  return result;
+}
+
+function manifestBaseUrl(manifestXml: string, manifestUrl: string): string {
+  const baseMatch = manifestXml.match(/<BaseURL[^>]*>([^<]+)<\/BaseURL>/);
+  const base = baseMatch?.[1]?.trim().replaceAll("&amp;", "&") ?? "";
+  if (!base) return manifestUrl;
+  try {
+    return new URL(base, manifestUrl).toString();
+  } catch {
+    return base;
+  }
+}
+
+function resolveSegmentUrl(template: string, baseUrl: string): string {
+  try {
+    return new URL(template, baseUrl).toString();
+  } catch {
+    return template;
+  }
+}
+
+function chosenRepresentation(manifestXml: string): { id: string; bandwidth: string } {
+  let best: { id: string; bandwidth: string; score: number } | null = null;
+  for (const match of manifestXml.matchAll(/<Representation\b([^>]*)\/?>/g)) {
+    const attrs = match[1] ?? "";
+    const id = xmlAttr(attrs, "id");
+    const bandwidth = xmlAttr(attrs, "bandwidth");
+    const score = Number(bandwidth) || 0;
+    if (!best || score > best.score) best = { id, bandwidth, score };
+  }
+  return best ? { id: best.id, bandwidth: best.bandwidth } : { id: "", bandwidth: "" };
+}
+
+function segmentUrlsFromManifest(manifestXml: string, manifestUrl: string): string[] {
+  const templateMatch = manifestXml.match(
+    /<SegmentTemplate\b[^>]*>[\s\S]*?<\/SegmentTemplate>|<SegmentTemplate\b[^>]*\/>/,
+  );
   const template = templateMatch?.[0] ?? "";
   if (!template) throw new LicensedSourceDownloadError("Licensed source DASH manifest has no SegmentTemplate", 502);
   const initialization = xmlAttr(template, "initialization");
@@ -330,71 +428,104 @@ function segmentUrlsFromManifest(manifestXml: string): string[] {
   if (!initialization || !media || !Number.isFinite(startNumber)) {
     throw new LicensedSourceDownloadError("Licensed source DASH manifest is missing segment URLs", 502);
   }
-  let segmentCount = 0;
+
+  const representation = chosenRepresentation(manifestXml);
+  const baseUrl = manifestBaseUrl(manifestXml, manifestUrl);
+  const sharedValues = {
+    RepresentationID: representation.id,
+    Bandwidth: representation.bandwidth,
+  };
+
+  // Build the (number, time) pairs from the SegmentTimeline. Each <S> entry
+  // carries an optional explicit start time (t), a duration (d), and a repeat
+  // count (r); r segments follow the first with monotonically increasing time.
+  const segments: Array<{ number: number; time: number }> = [];
+  let nextNumber = startNumber;
+  let nextTime = 0;
+  let sawTimeline = false;
   for (const match of template.matchAll(/<S\b([^>]*)\/>/g)) {
+    sawTimeline = true;
     const attrs = match[1] ?? "";
+    const explicitTime = attrs.match(/\bt="(\d+)"/)?.[1];
+    const durationRaw = attrs.match(/\bd="(\d+)"/)?.[1];
     const repeatRaw = attrs.match(/\br="(-?\d+)"/)?.[1];
+    const duration = durationRaw ? Number(durationRaw) : 0;
     const repeat = repeatRaw ? Number(repeatRaw) : 0;
     if (!Number.isFinite(repeat) || repeat < 0) {
       throw new LicensedSourceDownloadError("Licensed source DASH manifest uses unsupported open-ended segments", 502);
     }
-    segmentCount += repeat + 1;
+    if (explicitTime !== undefined) nextTime = Number(explicitTime);
+    for (let i = 0; i <= repeat; i += 1) {
+      segments.push({ number: nextNumber, time: nextTime });
+      nextNumber += 1;
+      nextTime += duration;
+    }
   }
-  if (segmentCount <= 0) throw new LicensedSourceDownloadError("Licensed source DASH manifest has no segments", 502);
-  const urls = [initialization];
-  for (let index = 0; index < segmentCount; index += 1) {
-    urls.push(media.replaceAll("$Number$", String(startNumber + index)));
+  if (!sawTimeline || segments.length <= 0) {
+    throw new LicensedSourceDownloadError("Licensed source DASH manifest has no segments", 502);
+  }
+
+  const urls = [resolveSegmentUrl(substituteTemplate(initialization, sharedValues), baseUrl)];
+  for (const segment of segments) {
+    const filled = substituteTemplate(media, {
+      ...sharedValues,
+      Number: segment.number,
+      Time: segment.time,
+    });
+    urls.push(resolveSegmentUrl(filled, baseUrl));
   }
   return urls;
 }
 
-async function readManifest(stream: LicensedSourceStream): Promise<string> {
-  const inline = stream.dash?.manifestXml;
-  if (inline) return inline;
+async function readManifest(stream: LicensedSourceStream): Promise<{ xml: string; url: string }> {
   const manifestUrl = stream.dash?.manifestUrl || stream.streamUrl;
-  const response = await fetchWithTimeout(manifestUrl, {
-    method: "GET",
-    headers: {
-      "user-agent": DEFAULT_USER_AGENT,
-      ...stream.headers,
+  const inline = stream.dash?.manifestXml;
+  if (inline) return { xml: inline, url: manifestUrl };
+  const parsed = parseHttpUrl(manifestUrl);
+  if (!parsed) throw new LicensedSourceDownloadError("Licensed source manifest URL is invalid", 502);
+  const response = await fetchPublicHttpUrl(
+    parsed,
+    {
+      method: "GET",
+      headers: mediaRequestHeaders(stream.headers, DEFAULT_USER_AGENT),
     },
-  });
+    LICENSED_SOURCE_REQUEST_TIMEOUT_MS,
+  );
   if (!response.ok) throw new LicensedSourceDownloadError(`Licensed source manifest returned ${response.status}`, response.status);
   const text = await response.text();
   if (!text.includes("<MPD")) throw new LicensedSourceDownloadError("Licensed source manifest is not DASH MPD", 502);
-  return text;
+  return { xml: text, url: parsed.toString() };
 }
 
 export async function materializeLicensedSourceStream(
   stream: LicensedSourceStream,
   options?: { maxBytes?: number; userAgent?: string },
 ): Promise<Response> {
+  const userAgent = options?.userAgent || DEFAULT_USER_AGENT;
+  const maxBytes = options?.maxBytes ?? LICENSED_SOURCE_MAX_AUDIO_BYTES;
   if (stream.kind === "url") {
-    return fetchMediaWithRetries(stream.streamUrl, {
+    const response = await fetchMediaWithRetries(stream.streamUrl, {
       method: "GET",
-      headers: {
-        ...stream.headers,
-        "user-agent": options?.userAgent || DEFAULT_USER_AGENT,
-      },
+      headers: mediaRequestHeaders(stream.headers, userAgent),
     });
+    if (response.ok) assertMediaResponseSize(response, maxBytes);
+    return response;
   }
 
-  const manifestXml = await readManifest(stream);
-  const segmentUrls = segmentUrlsFromManifest(manifestXml);
+  const manifest = await readManifest(stream);
+  const segmentUrls = segmentUrlsFromManifest(manifest.xml, manifest.url);
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   for (const url of segmentUrls) {
-    const response = await fetchWithTimeout(url, {
+    const response = await fetchMediaWithRetries(url, {
       method: "GET",
-      headers: {
-        ...stream.headers,
-        "user-agent": options?.userAgent || DEFAULT_USER_AGENT,
-      },
+      headers: mediaRequestHeaders(stream.headers, userAgent),
     });
     if (!response.ok) throw new LicensedSourceDownloadError(`Licensed source segment returned ${response.status}`, response.status);
+    assertMediaResponseSize(response, maxBytes - totalBytes);
     const bytes = new Uint8Array(await response.arrayBuffer());
     totalBytes += bytes.byteLength;
-    if (options?.maxBytes && totalBytes > options.maxBytes) {
+    if (totalBytes > maxBytes) {
       throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
     }
     chunks.push(bytes);

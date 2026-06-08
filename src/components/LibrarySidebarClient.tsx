@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Download, Heart, Library, ListMusic, Plus, Podcast, RadioTower } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Heart, Library, ListMusic, Podcast, RadioTower } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type PlaylistEntry = {
@@ -54,17 +54,6 @@ export default function LibrarySidebarClient({
           )}
 
           <div className={cn("flex items-center", collapsed ? "gap-0" : "gap-1")}>
-            {!collapsed && (
-              <button
-                type="button"
-                aria-label="Create playlist (coming soon)"
-                title="Create playlist (coming soon)"
-                className="h-8 w-8 rounded-full grid place-items-center bg-white/[0.08] text-white/[0.68] cursor-default"
-                disabled
-              >
-                <Plus size={16} />
-              </button>
-            )}
             <button
               type="button"
               aria-label={collapsed ? "Expand library sidebar" : "Collapse library sidebar"}

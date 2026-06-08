@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -40,7 +40,6 @@ const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadSettingsPage,
   loadSignInPage,
   loadRegisterPage,
-  loadOfflineStatusIndicator,
 ];
 const prefetchedRouteModules = new Set<RoutePrefetcher>();
 const ROUTE_PREFETCH_IDLE_TIMEOUT_MS = 2_000;
@@ -210,6 +209,9 @@ function Shell() {
   const { user, status } = useAuth();
   const location = useLocation();
   const currentSong = usePlayerStore((state) => state.currentSong);
+  const [initialSidebarCollapsed] = useState(
+    () => localStorage.getItem("spotify_left_sidebar_collapsed") === "1",
+  );
   const { data: library } = useApiData<LibraryPayload>(
     withAccountScope("/api/library", user?.id ?? status),
     {
@@ -263,7 +265,7 @@ function Shell() {
       <LibrarySidebarClient
         userId={status === "loading" ? visibleLibrary.userId : user?.id ?? null}
         playlists={visibleLibrary.playlists}
-        initialCollapsed={localStorage.getItem("spotify_left_sidebar_collapsed") === "1"}
+        initialCollapsed={initialSidebarCollapsed}
       />
       <NowPlayingSidebar />
       <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">

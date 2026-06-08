@@ -1,9 +1,7 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
-import { lookup } from "node:dns/promises";
 import { createWriteStream, existsSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { isIP } from "node:net";
 import {
   mkdtemp,
   mkdir,
@@ -27,6 +25,10 @@ import {
   materializeLicensedSourceStream,
   type LicensedSourceStream,
 } from "../lib/licensed-source-download";
+import {
+  RemoteUrlError,
+  fetchPublicHttpUrl,
+} from "../lib/safe-fetch";
 import type { PlayerSong } from "../types/player";
 
 const execFileAsync = promisify(execFile);
@@ -181,7 +183,6 @@ const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
-const MAX_REMOTE_REDIRECTS = 5;
 
 let librarySnapshot: LibrarySnapshot | null = null;
 let scanPromise: Promise<LibrarySnapshot> | null = null;
@@ -327,8 +328,43 @@ function isLocalNetworkHost(host: string): boolean {
   );
 }
 
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const bufferA = Buffer.from(a, "utf8");
+  const bufferB = Buffer.from(b, "utf8");
+  if (bufferA.length !== bufferB.length) return false;
+  return timingSafeEqual(bufferA, bufferB);
+}
+
+// The real peer (socket) address as reported by Bun's server.requestIP(), keyed
+// by the Request object so the trust check can consult it without threading the
+// server through every helper signature. Populated by the fetch handler.
+const requestPeerAddresses = new WeakMap<Request, string | null>();
+
+function rememberRequestPeer(request: Request, address: string | null): void {
+  requestPeerAddresses.set(request, address);
+}
+
+// A peer is "local" only when its actual socket address is loopback, RFC1918
+// private, or Tailscale CGNAT (100.64.0.0/10). When the peer address is unknown
+// (e.g. in tests where requestIP was not threaded), fall back to trusting it so
+// existing LAN/Tailscale/loopback behavior is preserved.
+function isLocalPeerAddress(request: Request): boolean {
+  if (!requestPeerAddresses.has(request)) return true;
+  const address = requestPeerAddresses.get(request) ?? "";
+  if (!address) return true;
+  const normalized = address.toLowerCase().startsWith("::ffff:")
+    ? address.slice("::ffff:".length)
+    : address;
+  return (
+    isLoopbackHost(normalized) ||
+    isPrivateIpv4Host(normalized) ||
+    isTailscaleIpv4Host(normalized)
+  );
+}
+
 function hasValidProxyToken(request: Request): boolean {
-  return Boolean(proxyToken && request.headers.get("x-spotify-proxy-token") === proxyToken);
+  const token = request.headers.get("x-spotify-proxy-token") || "";
+  return Boolean(proxyToken && timingSafeEqualStr(token, proxyToken));
 }
 
 function requestNeedsProxyToken(request: Request): boolean {
@@ -340,7 +376,11 @@ function requestNeedsProxyToken(request: Request): boolean {
 }
 
 function allowsImplicitLocalUser(request: Request): boolean {
-  return !requestNeedsProxyToken(request) && isLocalNetworkHost(requestHostname(request));
+  return (
+    !requestNeedsProxyToken(request) &&
+    isLocalNetworkHost(requestHostname(request)) &&
+    isLocalPeerAddress(request)
+  );
 }
 
 function isMutationRequest(request: Request): boolean {
@@ -443,7 +483,13 @@ function contentTypeForPath(path: string): string {
   }
 }
 
-function parseRangeHeader(rangeHeader: string | null, size: number): { start: number; end: number } | null {
+type ParsedRange = { start: number; end: number } | "unsatisfiable" | null;
+
+// Returns a satisfiable byte range, "unsatisfiable" when the Range header is
+// well-formed `bytes=` syntax that cannot be satisfied (so the caller should
+// answer 416), or null when there is no Range header / the header is malformed
+// and should simply be ignored (RFC 7233 §3.1).
+function parseRangeHeader(rangeHeader: string | null, size: number): ParsedRange {
   if (!rangeHeader || !rangeHeader.startsWith("bytes=") || size <= 0) return null;
   const value = rangeHeader.slice("bytes=".length).trim();
   if (!value || value.includes(",")) return null;
@@ -453,15 +499,21 @@ function parseRangeHeader(rangeHeader: string | null, size: number): { start: nu
   const startRaw = value.slice(0, dash);
   const endRaw = value.slice(dash + 1);
   if (!startRaw) {
+    if (!/^\d+$/.test(endRaw)) return null;
     const suffixLength = Number(endRaw);
-    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null;
+    if (!Number.isFinite(suffixLength)) return null;
+    if (suffixLength <= 0) return "unsatisfiable";
     return { start: Math.max(0, size - suffixLength), end: size - 1 };
   }
 
+  if (!/^\d+$/.test(startRaw)) return null;
   const start = Number(startRaw);
-  if (!Number.isFinite(start) || start < 0 || start >= size) return null;
+  if (!Number.isFinite(start) || start < 0) return null;
+  if (start >= size) return "unsatisfiable";
+  if (endRaw && !/^\d+$/.test(endRaw)) return null;
   let end = endRaw ? Number(endRaw) : size - 1;
-  if (!Number.isFinite(end) || end < start) return null;
+  if (!Number.isFinite(end)) return null;
+  if (end < start) return "unsatisfiable";
   if (end >= size) end = size - 1;
   return { start, end };
 }
@@ -501,6 +553,11 @@ async function serveFile(
   headers.set("etag", `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`);
 
   const range = parseRangeHeader(request.headers.get("range"), size);
+  if (range === "unsatisfiable") {
+    headers.set("content-range", `bytes */${size}`);
+    headers.set("content-length", "0");
+    return new Response(null, { status: 416, headers });
+  }
   if (!range && ifNoneMatchMatches(request.headers.get("if-none-match"), headers.get("etag") || "")) {
     return new Response(null, { status: 304, headers });
   }
@@ -612,102 +669,6 @@ function parseHttpUrl(value: string): URL | null {
   }
 }
 
-function isPrivateOrReservedIpAddress(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) {
-    const octets = address.split(".").map((part) => Number(part));
-    const [a, b] = octets;
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      a >= 224
-    );
-  }
-
-  if (family === 6) {
-    const normalized = address.toLowerCase();
-    if (normalized.startsWith("::ffff:")) {
-      return isPrivateOrReservedIpAddress(normalized.slice("::ffff:".length));
-    }
-    return (
-      normalized === "::" ||
-      normalized === "::1" ||
-      normalized.startsWith("fc") ||
-      normalized.startsWith("fd") ||
-      normalized.startsWith("fe8") ||
-      normalized.startsWith("fe9") ||
-      normalized.startsWith("fea") ||
-      normalized.startsWith("feb") ||
-      normalized.startsWith("ff")
-    );
-  }
-
-  return true;
-}
-
-function isBlockedRemoteHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    !normalized ||
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    !normalized.includes(".") ||
-    (isIP(normalized) !== 0 && isPrivateOrReservedIpAddress(normalized))
-  );
-}
-
-async function assertPublicHttpUrl(url: URL): Promise<void> {
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new RemoteUrlError("Only valid http(s) URLs are supported");
-  }
-  if (url.username || url.password) {
-    throw new RemoteUrlError("Remote URLs with credentials are not supported");
-  }
-  if (isBlockedRemoteHostname(url.hostname)) {
-    throw new RemoteUrlError("Remote URL host is not allowed");
-  }
-
-  const addresses = await lookup(url.hostname, { all: true }).catch(() => []);
-  if (!addresses.length) throw new RemoteUrlError("Remote URL host could not be resolved");
-  if (addresses.some(({ address }) => isPrivateOrReservedIpAddress(address))) {
-    throw new RemoteUrlError("Remote URL host resolves to a private network address");
-  }
-}
-
-async function fetchPublicHttpUrl(url: URL, init: RequestInit = {}, timeoutMs = 5_000): Promise<Response> {
-  let nextUrl = url;
-  let nextInit = { ...init };
-
-  for (let redirectCount = 0; redirectCount <= MAX_REMOTE_REDIRECTS; redirectCount += 1) {
-    await assertPublicHttpUrl(nextUrl);
-    const response = await fetchWithTimeout(
-      nextUrl.toString(),
-      { ...nextInit, redirect: "manual" },
-      timeoutMs,
-    );
-
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-
-    const location = response.headers.get("location");
-    await response.body?.cancel().catch(() => undefined);
-    if (!location) return response;
-
-    nextUrl = new URL(location, nextUrl);
-    if (response.status === 303) {
-      nextInit = { ...nextInit, method: "GET", body: undefined };
-    }
-  }
-
-  throw new RemoteUrlError("Remote URL redirected too many times");
-}
-
 function outputFormatFromPayload(value: unknown): OutputFormat {
   const format = typeof value === "string"
     ? value.trim().toLowerCase() as OutputFormat
@@ -732,7 +693,9 @@ async function readSidecar(audioPath: string): Promise<LocalSidecar> {
 async function writeSidecar(audioPath: string, sidecar: LocalSidecar): Promise<void> {
   const target = sidecarPathForAudio(audioPath);
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, `${JSON.stringify(sidecar, null, 2)}\n`, "utf8");
+  const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(sidecar, null, 2)}\n`, "utf8");
+  await rename(tempPath, target);
 }
 
 async function directoryNames(path: string, cache: Map<string, Promise<string[]>>): Promise<string[]> {
@@ -1184,7 +1147,7 @@ function hasValidMediaSignature(url: URL): boolean {
     userId &&
     (scope === "shared" || scope === "user") &&
     signature &&
-    signature === mediaSignature(userId, scope, url.pathname),
+    timingSafeEqualStr(signature, mediaSignature(userId, scope, url.pathname)),
   );
 }
 
@@ -1389,11 +1352,30 @@ async function deleteSongEntryFiles(source: LibrarySource, entry: LocalSongEntry
     rm(sidecarPathForAudio(entry.absolutePath), { force: true }).catch(() => undefined),
   ]);
 
+  const directory = dirname(entry.absolutePath);
+  const removed = new Set<string>();
   for (const fileName of [sidecar.coverFile, sidecar.lyricsFile]) {
     if (!fileName) continue;
-    const candidate = resolve(dirname(entry.absolutePath), fileName);
+    const candidate = resolve(directory, fileName);
     if (isPathInside(source.root, candidate)) {
       await rm(candidate, { force: true }).catch(() => undefined);
+      removed.add(candidate);
+    }
+  }
+
+  // Auto-detected (non-sidecar) covers follow stem-specific conventions:
+  // `${stem}.cover.<ext>` and `${stem}.<ext>`. Delete those too so a replace
+  // does not orphan them. Never touch directory-shared cover.*/folder.*/front.*
+  // — those belong to sibling tracks in the same directory.
+  const stem = basename(entry.absolutePath, extname(entry.absolutePath));
+  for (const ext of IMAGE_EXTENSIONS) {
+    for (const coverName of [`${stem}.cover${ext}`, `${stem}${ext}`]) {
+      const candidate = resolve(directory, coverName);
+      if (removed.has(candidate)) continue;
+      if (candidate === entry.absolutePath) continue;
+      if (isPathInside(source.root, candidate)) {
+        await rm(candidate, { force: true }).catch(() => undefined);
+      }
     }
   }
 }
@@ -1602,30 +1584,70 @@ function ffmpegDecryptionKey(value: string): string {
   return /^[0-9a-fA-F]{32}$/.test(candidate) ? candidate : value.trim();
 }
 
+// Caller/provider-supplied stream headers are untrusted; only forward a small
+// allowlist so a caller cannot inject Host/Authorization/Cookie headers into
+// the SSRF-guarded fetch below.
+const ALLOWED_LICENSED_MEDIA_HEADERS = new Set([
+  "user-agent",
+  "range",
+  "accept",
+  "accept-language",
+  "x-captcha-token",
+]);
+
+function licensedMediaRequestHeaders(
+  streamHeaders: Record<string, string> | undefined,
+  userAgent: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(streamHeaders ?? {})) {
+    const normalizedKey = key.trim().toLowerCase();
+    const normalizedValue = typeof value === "string" ? value.trim() : "";
+    if (!normalizedKey || !normalizedValue) continue;
+    if (!ALLOWED_LICENSED_MEDIA_HEADERS.has(normalizedKey)) continue;
+    headers[normalizedKey] = normalizedValue;
+  }
+  if (!headers["user-agent"]) headers["user-agent"] = userAgent;
+  return headers;
+}
+
 async function materializeEncryptedLicensedSourceStream(
   stream: LicensedSourceStream,
   userAgent?: string,
 ): Promise<Response> {
-  const response = await fetch(stream.streamUrl, {
-    redirect: "follow",
-    headers: {
-      ...stream.headers,
-      "user-agent": userAgent || stream.headers["user-agent"] || "spotify/1.0 (+https://spotify.fightingentropy.org)",
-    },
-  });
+  const parsedStreamUrl = parseHttpUrl(stream.streamUrl);
+  if (!parsedStreamUrl) {
+    throw new LicensedSourceDownloadError("Licensed source URL is invalid", 502);
+  }
+  let response: Response;
+  try {
+    response = await fetchPublicHttpUrl(
+      parsedStreamUrl,
+      {
+        method: "GET",
+        headers: licensedMediaRequestHeaders(
+          stream.headers,
+          userAgent || "spotify/1.0 (+https://spotify.fightingentropy.org)",
+        ),
+      },
+      120_000,
+    );
+  } catch (error) {
+    if (error instanceof RemoteUrlError) {
+      throw new LicensedSourceDownloadError(error.message, 400);
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new LicensedSourceDownloadError(`Licensed source audio returned ${response.status}`, response.status);
   }
-  const encryptedBytes = new Uint8Array(await response.arrayBuffer());
-  if (encryptedBytes.byteLength > MAX_AUDIO_BYTES) {
-    throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
-  }
+  assertRemoteResponseSize(response, MAX_AUDIO_BYTES, "Licensed source audio");
 
   const tempDir = await mkdtemp(resolve(tmpdir(), "spotify-licensed-"));
   const encryptedPath = resolve(tempDir, "source.mp4");
   const outputPath = resolve(tempDir, "output.flac");
   try {
-    await writeFile(encryptedPath, encryptedBytes);
+    await saveResponseBody(response, encryptedPath, MAX_AUDIO_BYTES, "Licensed source audio");
     await runFfmpeg([
       "-decryption_key",
       ffmpegDecryptionKey(stream.decryptionKey || ""),
@@ -1681,6 +1703,12 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
   } catch (error) {
     if (error instanceof LicensedSourceDownloadError) {
       return json({ error: error.message }, { status: error.status });
+    }
+    if (error instanceof PayloadTooLargeError) {
+      return json({ error: error.message }, { status: 413 });
+    }
+    if (error instanceof RemoteUrlError) {
+      return json({ error: error.message }, { status: 400 });
     }
     throw error;
   }
@@ -1903,8 +1931,6 @@ type DownloadedArtwork = {
 
 class PayloadTooLargeError extends Error {}
 
-class RemoteUrlError extends Error {}
-
 function scoreItunesArtwork(song: PlayerSong, result: ItunesArtworkResult): number {
   if (!result.artworkUrl100) return 0;
   const titleScore = textMatchScore(song.title, result.trackName);
@@ -2041,7 +2067,7 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
 async function handleApi(request: Request, url: URL): Promise<Response> {
   const pathname = url.pathname;
 
-  if (requestNeedsProxyToken(request) && request.headers.get("x-spotify-proxy-token") !== proxyToken) {
+  if (requestNeedsProxyToken(request) && !hasValidProxyToken(request)) {
     return json({ error: "Unauthorized" }, { status: 401 });
   }
   const unauthorizedMutation = authorizeMutationRequest(request);
@@ -2284,8 +2310,9 @@ Bun.serve({
   hostname: host,
   port,
   idleTimeout: idleTimeoutSeconds,
-  async fetch(request) {
+  async fetch(request, server) {
     const url = new URL(request.url);
+    rememberRequestPeer(request, server.requestIP(request)?.address ?? null);
     try {
       if (url.pathname.startsWith("/api/")) {
         return await handleApi(request, url);

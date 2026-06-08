@@ -152,5 +152,3 @@ export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) =
     prevProps.onToggleLike === nextProps.onToggleLike
   );
 });
-
-export default SongListItem;

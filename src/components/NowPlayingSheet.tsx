@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
+import { parseCredits, useLyrics } from "@/lib/credits";
 import {
   CheckCircle2,
   ChevronDown,
@@ -23,6 +24,7 @@ import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type NowPlayingSheetProps = {
   open: boolean;
@@ -33,34 +35,6 @@ type NowPlayingSheetProps = {
   duration: number;
   onSeek: (value: number) => void;
 };
-
-type LyricsState = {
-  status: "idle" | "loading" | "ready" | "error";
-  text: string;
-};
-
-function parseCredits(artist: string): Array<{ name: string; role: string }> {
-  const seen = new Set<string>();
-  const names = artist
-    .split(/,|&| feat\.? | ft\.? /i)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .filter((part) => {
-      const key = part.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-  if (names.length === 0) {
-    return [{ name: artist || "Unknown Artist", role: "Main Artist" }];
-  }
-
-  return names.map((name, index) => ({
-    name,
-    role: index === 0 ? "Main Artist, Vocalist" : "Featured Artist",
-  }));
-}
 
 export default function NowPlayingSheet({
   open,
@@ -94,55 +68,18 @@ export default function NowPlayingSheet({
   const podcastDescription = song.description?.trim() ?? "";
 
   const [showLyrics, setShowLyrics] = useState(false);
-  const [lyricsState, setLyricsState] = useState<LyricsState>({
-    status: "idle",
-    text: "",
-  });
-  const loadedLyricsKeyRef = useRef<string | null>(null);
   const touchStartYRef = useRef<number | null>(null);
+
+  const offlineRecords = useOfflineStore((state) => state.records);
+  const lyricsSong = useMemo(
+    () => resolveOfflinePlaybackSong(song),
+    [song, offlineRecords],
+  );
 
   const credits = useMemo(() => parseCredits(song.artist), [song.artist]);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
-  useEffect(() => {
-    if (!open || !showLyrics) return;
-
-    if (!song.lyricsUrl) {
-      setLyricsState({ status: "idle", text: "" });
-      loadedLyricsKeyRef.current = null;
-      return;
-    }
-    const lyricsKey = `${song.id}:${song.lyricsUrl}`;
-    if (loadedLyricsKeyRef.current === lyricsKey) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadLyrics() {
-      setLyricsState({ status: "loading", text: "" });
-      try {
-        const response = await fetch(song.lyricsUrl as string);
-        if (!response.ok) {
-          throw new Error("Lyrics unavailable");
-        }
-        const text = (await response.text()).trim();
-        if (cancelled) return;
-        setLyricsState({ status: "ready", text });
-        loadedLyricsKeyRef.current = lyricsKey;
-      } catch {
-        if (cancelled) return;
-        setLyricsState({ status: "error", text: "" });
-        loadedLyricsKeyRef.current = null;
-      }
-    }
-
-    loadLyrics();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, showLyrics, song.id, song.lyricsUrl]);
+  const lyricsState = useLyrics(lyricsSong.id, lyricsSong.lyricsUrl, open && showLyrics);
 
   useEffect(() => {
     if (!open) return;

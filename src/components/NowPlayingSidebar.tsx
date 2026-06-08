@@ -1,40 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4, Podcast, RadioTower } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
-import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { parseCredits, useLyrics } from "@/lib/credits";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
+import { CoverImage } from "@/components/CoverImage";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
-
-type LyricsState = {
-  status: "idle" | "loading" | "ready" | "error";
-  text: string;
-};
-
-function parseCredits(artist: string): Array<{ name: string; role: string }> {
-  const seen = new Set<string>();
-  const names = artist
-    .split(/,|&| feat\.? | ft\.? /i)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .filter((part) => {
-      const key = part.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-  if (names.length === 0) {
-    return [{ name: artist || "Unknown Artist", role: "Main Artist" }];
-  }
-
-  return names.map((name, index) => ({
-    name,
-    role: index === 0 ? "Main Artist, Vocalist" : "Featured Artist",
-  }));
-}
 
 export default function NowPlayingSidebar() {
   const currentSong = usePlayerStore((state) => state.currentSong);
@@ -49,60 +22,13 @@ export default function NowPlayingSidebar() {
 
   const [collapsed, setCollapsed] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
-  const [lyricsState, setLyricsState] = useState<LyricsState>({
-    status: "idle",
-    text: "",
-  });
-  const loadedLyricsKeyRef = useRef<string | null>(null);
 
   const credits = useMemo(
     () => parseCredits(displaySong?.artist || ""),
     [displaySong?.artist],
   );
 
-  useEffect(() => {
-    if (!showLyrics) return;
-
-    const lyricsUrl = displaySong?.lyricsUrl;
-    if (!lyricsUrl) {
-      setLyricsState({ status: "idle", text: "" });
-      loadedLyricsKeyRef.current = null;
-      return;
-    }
-    const lyricsKey = `${displaySong?.id ?? ""}:${lyricsUrl}`;
-    if (loadedLyricsKeyRef.current === lyricsKey) {
-      return;
-    }
-    const safeLyricsUrl = lyricsUrl;
-
-    let cancelled = false;
-
-    async function loadLyrics() {
-      setLyricsState({ status: "loading", text: "" });
-      try {
-        // Lyrics files are served from /api/files with an immutable cache
-        // header, so the browser HTTP cache is the right layer to rely on.
-        const response = await fetch(safeLyricsUrl);
-        if (!response.ok) {
-          throw new Error("Lyrics unavailable");
-        }
-        const text = (await response.text()).trim();
-        if (cancelled) return;
-        setLyricsState({ status: "ready", text });
-        loadedLyricsKeyRef.current = lyricsKey;
-      } catch {
-        if (cancelled) return;
-        setLyricsState({ status: "error", text: "" });
-        loadedLyricsKeyRef.current = null;
-      }
-    }
-
-    loadLyrics();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [displaySong?.id, displaySong?.lyricsUrl, showLyrics]);
+  const lyricsState = useLyrics(displaySong?.id, displaySong?.lyricsUrl, showLyrics);
 
   return (
     <aside
@@ -142,8 +68,8 @@ export default function NowPlayingSidebar() {
           </div>
         ) : (
           <div className="space-y-5 pb-4">
-            <img
-              src={normalizeCoverImageUrl(displaySong.imageUrl)}
+            <CoverImage
+              src={displaySong.imageUrl}
               alt={displaySong.title}
               loading="eager"
               className="w-full aspect-square rounded-md object-cover bg-white/[0.08]"

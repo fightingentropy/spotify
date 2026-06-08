@@ -76,8 +76,6 @@ export const PODCAST_SHOWS: PodcastShow[] = [
   },
 ];
 
-export const HUBERMAN_PODCAST = PODCAST_SHOWS[0];
-
 function firstElementByTag(parent: Element | Document | null | undefined, tagName: string): Element | null {
   return parent?.getElementsByTagName(tagName).item(0) ?? null;
 }

@@ -7,7 +7,7 @@ import { useApiData, withAccountScope, type SearchIndexPayload } from "@/client/
 import { useAuth } from "@/client/auth";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
-import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
@@ -26,6 +26,8 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const setQueue = usePlayerStore((state) => state.setQueue);
   const offlineRecords = useOfflineStore((state) => state.records);
   const { data, loading, error } = useApiData<SearchIndexPayload>(
@@ -111,6 +113,30 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
           setQueue(songs, queueIndex);
           setOpen(false);
         }
+        return;
+      }
+      if (event.key === "Tab") {
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const focusable = dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusable.length === 0) {
+          event.preventDefault();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey) {
+          if (active === first || !dialog.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !dialog.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
 
@@ -120,13 +146,19 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
 
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     const raf = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      const restoreTarget = triggerRef.current ?? previouslyFocused;
+      restoreTarget?.focus();
+    };
   }, [open]);
 
   return (
     <div className={className}>
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Search songs, Command K"
         aria-keyshortcuts="Meta+K Control+K"
@@ -146,6 +178,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       {open ? (
         <div className="fixed inset-0 z-[70] bg-black/70 p-4 backdrop-blur-sm sm:p-8" onClick={() => setOpen(false)}>
           <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label="Search songs"
@@ -209,8 +242,8 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     )}
                   >
                     <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md">
-                      <img
-                        src={normalizeCoverImageUrl(song.imageUrl)}
+                      <CoverImage
+                        src={song.imageUrl}
                         alt={song.title}
                         className="h-full w-full object-cover"
                       />
@@ -229,5 +262,3 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
     </div>
   );
 }
-
-export default HomeSearchCommandPalette;

@@ -143,8 +143,6 @@ const OFFLINE_DEVICE_ID_STORAGE_KEY = "spotify_offline_device_id";
 const OFFLINE_SYNC_EVENT = "spotify-offline-sync";
 const PLAYBACK_WARM_BYTES = 512 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
-const PLAYBACK_WARM_DEDUPE_MS = 2 * 60 * 1_000;
-const PLAYBACK_WARM_QUEUE_LIMIT = 12;
 const DOWNLOAD_STALL_TIMEOUT_MS = 30_000;
 const DOWNLOAD_CACHE_WRITE_TIMEOUT_MS = 60_000;
 const DOWNLOAD_RETRY_ATTEMPTS = 3;
@@ -160,10 +158,7 @@ let downloadPumpRunning = false;
 let downloadPumpRerunRequested = false;
 let syncRunning = false;
 let prefetchRunning = false;
-let warmPlaybackPumpRunning = false;
 const priorityDownloadQueue: string[] = [];
-const warmPlaybackQueue: string[] = [];
-const warmPlaybackSeen = new Map<string, number>();
 let currentOfflineAccountScope = readStoredOfflineAccountScope();
 let currentOfflineDeviceId = readStoredOfflineDeviceId();
 
@@ -542,6 +537,19 @@ async function idbDelete(storeName: string, key: IDBValidKey): Promise<void> {
   });
 }
 
+async function idbDeleteMany(storeName: string, keys: IDBValidKey[]): Promise<void> {
+  if (keys.length === 0) return;
+  const db = await openOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
+    for (const key of keys) store.delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error(`Failed to delete from ${storeName}`));
+    tx.onabort = () => reject(tx.error ?? new Error(`Failed to delete from ${storeName}`));
+  });
+}
+
 async function idbClear(storeName: string): Promise<void> {
   const db = await openOfflineDb();
   return new Promise((resolve, reject) => {
@@ -815,49 +823,6 @@ async function warmPlaybackUrl(url: string): Promise<void> {
   }
 }
 
-async function pumpWarmPlaybackQueue(): Promise<void> {
-  if (warmPlaybackPumpRunning) return;
-  warmPlaybackPumpRunning = true;
-  try {
-    for (;;) {
-      const url = warmPlaybackQueue.shift();
-      if (!url) break;
-      await warmPlaybackUrl(url);
-    }
-  } finally {
-    warmPlaybackPumpRunning = false;
-  }
-}
-
-export function warmPlaybackSong(song: PlayerSong, priority = false): void {
-  if (typeof window === "undefined" || isBrowserLocalSong(song) || !sameOriginCacheableUrl(song.audioUrl)) return;
-  const url = resolveUrl(song.audioUrl);
-  const seenAt = warmPlaybackSeen.get(url);
-  const timestamp = now();
-  if (seenAt && timestamp - seenAt < PLAYBACK_WARM_DEDUPE_MS) {
-    const queuedIndex = warmPlaybackQueue.indexOf(url);
-    if (priority && queuedIndex > 0) {
-      warmPlaybackQueue.splice(queuedIndex, 1);
-      warmPlaybackQueue.unshift(url);
-    }
-    return;
-  }
-
-  warmPlaybackSeen.set(url, timestamp);
-  if (priority) {
-    warmPlaybackQueue.unshift(url);
-  } else {
-    if (warmPlaybackQueue.length >= PLAYBACK_WARM_QUEUE_LIMIT) {
-      warmPlaybackQueue.shift();
-    }
-    warmPlaybackQueue.push(url);
-  }
-  if (priority && warmPlaybackQueue.length > PLAYBACK_WARM_QUEUE_LIMIT) {
-    warmPlaybackQueue.length = PLAYBACK_WARM_QUEUE_LIMIT;
-  }
-  void pumpWarmPlaybackQueue();
-}
-
 async function deleteCachedUrls(urls: string[]): Promise<void> {
   if (!hasCacheStorage()) return;
   const cacheNames = [OFFLINE_MEDIA_CACHE, OFFLINE_PLAYBACK_CACHE];
@@ -890,6 +855,12 @@ async function prunePlaybackCache(): Promise<void> {
   await Promise.all(entries.slice(0, deleteCount).map((entry) => cache.delete(entry.request)));
 }
 
+async function pruneRuntimeCaches(): Promise<void> {
+  if (!hasCacheStorage()) return;
+  const cacheNames = (await caches.keys()).filter((name) => /^spotify-v\d+-runtime$/.test(name));
+  await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName).catch(() => false)));
+}
+
 async function cacheDurableUrlOnce(
   url: string,
   onProgress?: (loaded: number, total: number | null) => void,
@@ -898,6 +869,7 @@ async function cacheDurableUrlOnce(
     return await cacheUrl(url, OFFLINE_MEDIA_CACHE, onProgress);
   } catch (error) {
     await prunePlaybackCache();
+    await pruneRuntimeCaches();
     return await cacheUrl(url, OFFLINE_MEDIA_CACHE, onProgress).catch(() => {
       throw error;
     });
@@ -1343,17 +1315,16 @@ export async function removeOfflineApiSnapshots(
       return;
     }
     const snapshots = await idbGetAll<OfflineApiSnapshot>(API_SNAPSHOT_STORE);
-    await Promise.all(
-      snapshots.map(async (snapshot) => {
-        const shouldDelete =
-          typeof match === "string"
-            ? snapshot.url === match || snapshot.url.startsWith(match)
-            : match instanceof RegExp
-              ? match.test(snapshot.url)
-              : match(snapshot.url);
-        if (shouldDelete) await idbDelete(API_SNAPSHOT_STORE, snapshot.url);
-      }),
-    );
+    const keysToDelete = snapshots
+      .filter((snapshot) => {
+        return typeof match === "string"
+          ? snapshot.url === match || snapshot.url.startsWith(match)
+          : match instanceof RegExp
+            ? match.test(snapshot.url)
+            : match(snapshot.url);
+      })
+      .map((snapshot) => snapshot.url);
+    await idbDeleteMany(API_SNAPSHOT_STORE, keysToDelete);
   } catch {}
 }
 

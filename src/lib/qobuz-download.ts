@@ -1,13 +1,20 @@
 import { createDecipheriv, createHash } from "node:crypto";
 
+import { gdStudioSignature, gdStudioUrlEncode } from "./gdstudio";
+import {
+  fetchWithTimeout as fetchWithTimeoutShared,
+  toObject,
+  toStringValue,
+  type FetchWithTimeoutOptions,
+} from "./provider-http";
+import { scoreTitleArtistAlbum } from "./search-scoring";
+
 const QOBUZ_API_BASE_URL = "https://www.qobuz.com/api.json/0.2";
 const QOBUZ_DEFAULT_APP_ID = "712109809";
 const QOBUZ_DEFAULT_APP_SECRET = "589be88e4538daea11f509d29e4a23b1";
 const QOBUZ_OPEN_TRACK_PROBE_URL = "https://open.qobuz.com/track/1";
 const QOBUZ_REQUEST_TIMEOUT_MS = 60_000;
 const QOBUZ_GDSTUDIO_VERSION = "2026.5.10";
-const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
 const qobuzOpenBundleScriptPattern =
   /<script[^>]+src="([^"]+\/js\/main\.js|\/resources\/[^"]+\/js\/main\.js)"/;
@@ -104,56 +111,14 @@ export class QobuzDownloadError extends Error {
 let qobuzCredentials: QobuzCredentials | null = null;
 let qobuzMusicDLDebugKey: string | null = null;
 
-function toStringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function toObject(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-async function fetchWithTimeout(
+function fetchWithTimeout(
   url: string,
-  options?: {
-    method?: string;
-    body?: BodyInit;
-    headers?: HeadersInit;
-    redirect?: RequestRedirect;
-    timeoutMs?: number;
-  },
+  options?: FetchWithTimeoutOptions,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    options?.timeoutMs ?? QOBUZ_REQUEST_TIMEOUT_MS,
-  );
-  const headers = new Headers(options?.headers);
-  if (!headers.has("user-agent")) {
-    headers.set("user-agent", DEFAULT_USER_AGENT);
-  }
-  if (!headers.has("accept")) {
-    headers.set("accept", "application/json, text/plain, */*");
-  }
-
-  try {
-    return await fetch(url, {
-      method: options?.method ?? "GET",
-      body: options?.body,
-      redirect: options?.redirect ?? "follow",
-      signal: controller.signal,
-      headers,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new QobuzDownloadError("Qobuz provider request timed out", 504);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchWithTimeoutShared(url, options, {
+    defaultTimeoutMs: QOBUZ_REQUEST_TIMEOUT_MS,
+    onTimeout: () => new QobuzDownloadError("Qobuz provider request timed out", 504),
+  });
 }
 
 async function scrapeQobuzOpenCredentials(): Promise<QobuzCredentials> {
@@ -309,22 +274,6 @@ function firstNonEmpty(...values: Array<string | undefined>): string {
   return "";
 }
 
-function normalizeSearchValue(value: string): string {
-  const replacer = new Map([
-    ["&", " and "],
-    ["feat.", " "],
-    ["ft.", " "],
-    ["/", " "],
-    ["-", " "],
-    ["_", " "],
-  ]);
-  let normalized = value.toLowerCase().trim();
-  for (const [from, to] of replacer) {
-    normalized = normalized.replaceAll(from, to);
-  }
-  return normalized.split(/\s+/).filter(Boolean).join(" ");
-}
-
 function qobuzTrackDisplayArtist(track: QobuzTrack): string {
   return firstNonEmpty(track.performer?.name, track.album?.artist?.name);
 }
@@ -344,41 +293,14 @@ function scoreQobuzSearchCandidate(
   artist: string,
   album: string,
 ): number {
-  let score = 0;
-  const titleNeedle = normalizeSearchValue(title);
-  const titleHaystack = normalizeSearchValue(toStringValue(track.title));
-  if (titleNeedle && titleHaystack === titleNeedle) {
-    score += 1000;
-  } else if (
-    titleNeedle &&
-    (titleHaystack.includes(titleNeedle) || titleNeedle.includes(titleHaystack))
-  ) {
-    score += 500;
-  }
-
-  const artistNeedle = normalizeSearchValue(artist);
-  const artistHaystack = normalizeSearchValue(qobuzTrackDisplayArtist(track));
-  if (artistNeedle && artistHaystack === artistNeedle) {
-    score += 300;
-  } else if (
-    artistNeedle &&
-    artistHaystack &&
-    (artistHaystack.includes(artistNeedle) || artistNeedle.includes(artistHaystack))
-  ) {
-    score += 180;
-  }
-
-  const albumNeedle = normalizeSearchValue(album);
-  const albumHaystack = normalizeSearchValue(toStringValue(track.album?.title));
-  if (albumNeedle && albumHaystack === albumNeedle) {
-    score += 150;
-  } else if (
-    albumNeedle &&
-    albumHaystack &&
-    (albumHaystack.includes(albumNeedle) || albumNeedle.includes(albumHaystack))
-  ) {
-    score += 90;
-  }
+  let score = scoreTitleArtistAlbum(
+    { title, artist, album },
+    {
+      title: toStringValue(track.title),
+      artist: qobuzTrackDisplayArtist(track),
+      album: toStringValue(track.album?.title),
+    },
+  );
 
   if (qobuzTrackSupportsHiRes(track)) {
     score += 40;
@@ -585,18 +507,9 @@ async function downloadFromWJHE(trackId: string, quality: string): Promise<strin
   throw new QobuzDownloadError(`WJHE returned ${response.status}`);
 }
 
-function qobuzGDStudioPaddedVersion(): string {
-  return QOBUZ_GDSTUDIO_VERSION.split(".")
-    .map((part) => (part.trim().length === 1 ? `0${part.trim()}` : part.trim()))
-    .join("");
-}
-
 function qobuzGDStudioSignature(apiUrl: string, value: string, ts9: string): string {
   const host = new URL(apiUrl).host;
-  const escapedValue = encodeURIComponent(value.trim()).replaceAll("+", "%20");
-  const signatureBase = `${host}|${qobuzGDStudioPaddedVersion()}|${ts9}|${escapedValue}`;
-  const digest = createHash("md5").update(signatureBase).digest("hex").toUpperCase();
-  return digest.slice(-8);
+  return gdStudioSignature(host, gdStudioUrlEncode(value.trim()), ts9, QOBUZ_GDSTUDIO_VERSION);
 }
 
 function mapQobuzGDStudioBitrate(quality: string): string {

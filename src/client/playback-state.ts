@@ -93,6 +93,11 @@ export function coercePlaybackState(value: unknown, fallbackUpdatedAt = 0): Play
   const payload = toObject(value);
   if (!payload) return null;
 
+  // Reject persisted state stamped with a different schema version as stale.
+  if (payload.version !== undefined && payload.version !== PLAYBACK_STATE_VERSION) {
+    return null;
+  }
+
   const rawQueue = Array.isArray(payload.queue) ? payload.queue : [];
   const queue = rawQueue
     .map(coercePlayerSong)

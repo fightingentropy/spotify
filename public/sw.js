@@ -11,6 +11,7 @@ const MAX_CACHED_RANGE_BLOB_BYTES = 64 * 1024 * 1024;
 const OFFLINE_PLAYBACK_SEARCH_PARAM = "spotify_offline";
 const API_REFRESH_HEADER = "x-spotify-api-refresh";
 const APP_CACHE_RETENTION_COUNT = 3;
+const RUNTIME_CACHE_MAX_ENTRIES = 200;
 const OFFLINE_ASSETS_MANIFEST_URL = "/offline-assets.json";
 
 const SHELL_URLS = [
@@ -41,7 +42,7 @@ const API_CACHE_PATHS = [
 ];
 
 function isCacheableResponse(response) {
-  return response && response.ok && response.type !== "opaqueredirect";
+  return response && response.ok && response.status !== 206 && response.type !== "opaqueredirect";
 }
 
 function offlineJsonResponse(message = "You're offline and this data has not been cached yet.") {
@@ -63,11 +64,21 @@ function isRetainedVersionedAppCache(key) {
   return version >= CURRENT_CACHE_VERSION_NUMBER - APP_CACHE_RETENTION_COUNT + 1;
 }
 
+async function pruneRuntimeCache(cache) {
+  try {
+    const keys = await cache.keys();
+    const overflow = keys.length - RUNTIME_CACHE_MAX_ENTRIES;
+    if (overflow <= 0) return;
+    await Promise.all(keys.slice(0, overflow).map((key) => cache.delete(key)));
+  } catch {}
+}
+
 async function putCache(cacheName, request, response) {
-  if (!isCacheableResponse(response)) return;
+  if (!isCacheableResponse(response) || response.status === 206) return;
   try {
     const cache = await caches.open(cacheName);
     await cache.put(request, response.clone());
+    if (cacheName.endsWith("-runtime")) await pruneRuntimeCache(cache);
   } catch {}
 }
 
@@ -434,7 +445,7 @@ function offlineNavigationResponse() {
   });
 }
 
-async function navigationResponse(request) {
+async function navigationResponse(event, request) {
   const cache = await caches.open(SHELL_CACHE);
 
   if (isKnownOffline()) {
@@ -445,7 +456,12 @@ async function navigationResponse(request) {
 
   try {
     const response = await fetch(request, { cache: "reload" });
-    await cacheBuildAssets(response.clone(), { required: true });
+    if (!response.ok) {
+      const cached = await cachedNavigationResponse(cache, request);
+      if (cached) return cached;
+      return response;
+    }
+    event.waitUntil(cacheBuildAssets(response.clone()).catch(() => undefined));
     await putCache(SHELL_CACHE, request, response.clone());
     return response;
   } catch {
@@ -484,7 +500,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname === "/sw.js") return;
 
   if (request.mode === "navigate") {
-    event.respondWith(navigationResponse(request));
+    event.respondWith(navigationResponse(event, request));
     return;
   }
 

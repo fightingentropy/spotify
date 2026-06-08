@@ -306,7 +306,11 @@ async function fetchApiData<T>(url: string): Promise<T> {
       headers,
     });
     if (response.status === 304 && cached?.data !== undefined) {
-      return writeApiCache(url, cached.data, cached.etag ?? null);
+      // Prefer the live cache entry so in-flight optimistic patches
+      // (e.g. patchLikeApiCache) made while this request was flying survive.
+      const live = apiCache.get(url) as ApiCacheEntry<T> | undefined;
+      const current = live?.data !== undefined ? live : cached;
+      return writeApiCache(url, current.data as T, current.etag ?? null);
     }
     if (!response.ok) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string; offline?: boolean };
@@ -361,17 +365,22 @@ export function invalidateApiCache(match?: string | RegExp | ((url: string) => b
   void removeOfflineApiSnapshots(match);
 }
 
-export function invalidateLibraryApiCache(): void {
-  invalidateApiCache((url) =>
-    getApiPath(url) === "/api/home" ||
-    getApiPath(url) === "/api/search-index" ||
-    getApiPath(url) === "/api/songs" ||
-    getApiPath(url) === "/api/liked" ||
-    getApiPath(url) === "/api/likes" ||
-    getApiPath(url).startsWith("/api/music/source") ||
-    getApiPath(url).startsWith("/api/library") ||
-    getApiPath(url).startsWith("/api/playlist/"),
-  );
+export function invalidateLibraryApiCache(accountScope?: string): void {
+  const scopedAccount = accountScope?.trim();
+  invalidateApiCache((url) => {
+    if (scopedAccount && getApiAuthScope(url) !== scopedAccount) return false;
+    const path = getApiPath(url);
+    return (
+      path === "/api/home" ||
+      path === "/api/search-index" ||
+      path === "/api/songs" ||
+      path === "/api/liked" ||
+      path === "/api/likes" ||
+      path.startsWith("/api/music/source") ||
+      path.startsWith("/api/library") ||
+      path.startsWith("/api/playlist/")
+    );
+  });
 }
 
 export function useApiData<T>(
@@ -388,18 +397,6 @@ export function useApiData<T>(
   const [error, setError] = useState<string | null>(null);
   const dataUrlRef = useRef(cachedInitial !== undefined ? url : "");
   const initialValueRef = useRef(initialValue);
-
-  function setData(nextData: T | ((current: T) => T)) {
-    setDataState((current) => {
-      const resolved =
-        typeof nextData === "function"
-          ? (nextData as (current: T) => T)(current)
-          : nextData;
-      writeApiCache(url, resolved);
-      dataUrlRef.current = url;
-      return resolved;
-    });
-  }
 
   useEffect(() => {
     initialValueRef.current = initialValue;
@@ -484,7 +481,7 @@ export function useApiData<T>(
     };
   }, [enabled, startLoad, refreshOnReconnect]);
 
-  return { data, loading, error, setData };
+  return { data, loading, error };
 }
 
 export type HomePayload = {

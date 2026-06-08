@@ -95,39 +95,11 @@ type BrowserLocalLibraryState = {
   writable: boolean;
   pickedFileMode: boolean;
   scannedAt: number | null;
-  hydrateCapabilities: () => void;
-  chooseDirectory: () => Promise<void>;
-  rescan: () => Promise<void>;
-  loadPickedFolder: (files: FileList | File[]) => void;
-  loadPickedFiles: (files: FileList | File[]) => void;
   saveDownloadedTrack: (input: SaveDownloadedTrackInput) => Promise<PlayerSong>;
-  replaceSong: (song: PlayerSong) => void;
 };
 
 export type FolderPickerKind = "handle" | "webkit" | "files";
 
-type DirectoryPickerFile = File & { webkitRelativePath?: string };
-type PickedFolderFile = {
-  file: File;
-  relativePath: string;
-};
-type PersistedPickedFolderFile = {
-  relativePath: string;
-  file: File;
-};
-
-const AUDIO_EXTENSIONS = new Set([
-  ".aac",
-  ".aif",
-  ".aiff",
-  ".flac",
-  ".m4a",
-  ".mp3",
-  ".oga",
-  ".ogg",
-  ".opus",
-  ".wav",
-]);
 const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const LYRICS_EXTENSIONS = [".lrc", ".txt"];
 const DIRECTORY_PICKER_ID = "spotify-music-library";
@@ -184,18 +156,6 @@ function normalizePath(parts: string[]): string {
   return parts.join("/");
 }
 
-function normalizeRelativePath(path: string): string {
-  return path.split("/").filter(Boolean).join("/");
-}
-
-function pickedFolderFileFromFile(file: DirectoryPickerFile): PickedFolderFile {
-  const relativePath = normalizeRelativePath(file.webkitRelativePath?.trim() || file.name);
-  return {
-    file,
-    relativePath: relativePath || file.name,
-  };
-}
-
 function songIdForPath(parts: string[]): string {
   return `browser-local:${encodeURIComponent(normalizePath(parts))}`;
 }
@@ -206,54 +166,15 @@ function createTrackedObjectUrl(blob: Blob): string {
   return url;
 }
 
-function clearTrackedObjectUrls() {
-  for (const url of objectUrls) {
-    URL.revokeObjectURL(url);
-  }
-  objectUrls.clear();
-}
-
-function readCachedFolderName(): string {
-  try {
-    return localStorage.getItem(FOLDER_NAME_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 function writeCachedFolderName(name: string) {
   try {
     localStorage.setItem(FOLDER_NAME_STORAGE_KEY, name);
   } catch {}
 }
 
-function clearCachedFolderName() {
-  try {
-    localStorage.removeItem(FOLDER_NAME_STORAGE_KEY);
-  } catch {}
-}
-
 function writeCachedFolderAccessKind(kind: FolderPickerKind) {
   try {
     localStorage.setItem(FOLDER_ACCESS_KIND_KEY, kind);
-  } catch {}
-}
-
-function readCachedFolderAccessKind(): FolderPickerKind | null {
-  try {
-    const value = localStorage.getItem(FOLDER_ACCESS_KIND_KEY);
-    if (value === "handle" || value === "webkit" || value === "files") {
-      return value;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function clearCachedFolderAccessKind() {
-  try {
-    localStorage.removeItem(FOLDER_ACCESS_KIND_KEY);
   } catch {}
 }
 
@@ -305,92 +226,6 @@ async function readPersistedDirectoryHandle(): Promise<BrowserDirectoryHandle | 
   }
 }
 
-async function clearPersistedDirectoryHandle(): Promise<void> {
-  if (typeof indexedDB === "undefined") return;
-  try {
-    const db = await openDirectoryHandleDb();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(HANDLE_STORE_NAME, "readwrite");
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error("Failed to clear folder handle"));
-      tx.objectStore(HANDLE_STORE_NAME).delete(HANDLE_KEY);
-    });
-    db.close();
-  } catch {}
-}
-
-async function requestPersistentStorage(): Promise<void> {
-  try {
-    await navigator.storage?.persist?.();
-  } catch {}
-}
-
-function isPersistablePickedFolderFile(entry: PickedFolderFile): boolean {
-  const name = entry.file.name.toLowerCase();
-  const extension = extensionOf(name);
-  return (
-    AUDIO_EXTENSIONS.has(extension) ||
-    IMAGE_EXTENSIONS.includes(extension) ||
-    LYRICS_EXTENSIONS.includes(extension) ||
-    name.endsWith(".spotify.json")
-  );
-}
-
-async function persistPickedFolderSnapshot(files: PickedFolderFile[]): Promise<void> {
-  if (typeof indexedDB === "undefined") return;
-  await requestPersistentStorage();
-
-  const snapshotFiles = files.filter(isPersistablePickedFolderFile);
-  const db = await openDirectoryHandleDb();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(PICKED_FOLDER_STORE_NAME, "readwrite");
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error("Failed to save offline folder"));
-      tx.onabort = () => reject(tx.error ?? new Error("Failed to save offline folder"));
-
-      const store = tx.objectStore(PICKED_FOLDER_STORE_NAME);
-      store.clear();
-      for (const entry of snapshotFiles) {
-        const record: PersistedPickedFolderFile = {
-          relativePath: entry.relativePath,
-          file: entry.file,
-        };
-        store.put(record);
-      }
-    });
-  } finally {
-    db.close();
-  }
-}
-
-async function readPickedFolderSnapshot(): Promise<PickedFolderFile[]> {
-  if (typeof indexedDB === "undefined") return [];
-
-  const db = await openDirectoryHandleDb();
-  try {
-    const records = await new Promise<PersistedPickedFolderFile[]>((resolve, reject) => {
-      const tx = db.transaction(PICKED_FOLDER_STORE_NAME, "readonly");
-      const request = tx.objectStore(PICKED_FOLDER_STORE_NAME).getAll();
-      request.onsuccess = () => resolve(request.result as PersistedPickedFolderFile[]);
-      request.onerror = () =>
-        reject(request.error ?? new Error("Failed to read offline folder"));
-      tx.onerror = () => reject(tx.error ?? new Error("Failed to read offline folder"));
-    });
-
-    return records
-      .filter((record) => record.file instanceof File && record.relativePath)
-      .map((record) => ({
-        file: record.file,
-        relativePath: normalizeRelativePath(record.relativePath) || record.file.name,
-      }));
-  } catch {
-    return [];
-  } finally {
-    db.close();
-  }
-}
-
 async function clearPickedFolderSnapshot(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
   let db: IDBDatabase | null = null;
@@ -421,129 +256,6 @@ async function restoreSavedDirectoryAccess(): Promise<"granted" | "prompt" | "mi
 
   const readPermission = await handle.queryPermission({ mode: "read" }).catch(() => "prompt" as const);
   return readPermission === "granted" ? "granted" : "prompt";
-}
-
-async function restoreSavedLibrary(
-  apply: (partial: Partial<BrowserLocalLibraryState>) => void,
-): Promise<boolean> {
-  const access = await restoreSavedDirectoryAccess();
-  if (access === "missing") {
-    const cachedName = readCachedFolderName();
-    if (cachedName) {
-      apply({ directoryName: cachedName, status: "idle", error: null });
-    }
-    return false;
-  }
-
-  const folderName = activeDirectoryHandle?.name || readCachedFolderName() || "Music";
-  apply({ status: "scanning", error: null, directoryName: folderName });
-
-  if (activeDirectoryHandle) {
-    const canAccess =
-      (await requestDirectoryPermission(activeDirectoryHandle, "readwrite")) ||
-      (await requestDirectoryPermission(activeDirectoryHandle, "read"));
-    if (!canAccess) {
-      apply({ status: "idle", error: null, directoryName: folderName });
-      return false;
-    }
-  }
-
-  try {
-    const result = await scanActiveDirectory();
-    writeCachedFolderName(result.directoryName);
-    apply({
-      directoryName: result.directoryName,
-      songs: result.songs,
-      status: "ready",
-      error: null,
-      writable: result.writable,
-      pickedFileMode: false,
-      folderPickerKind: "handle",
-      scannedAt: Date.now(),
-    });
-    return true;
-  } catch (error) {
-    apply({
-      status: "error",
-      error: error instanceof Error ? error.message : "Failed to restore folder",
-    });
-    return false;
-  }
-}
-
-async function restorePickedFolderSnapshot(
-  apply: (partial: Partial<BrowserLocalLibraryState>) => void,
-): Promise<boolean> {
-  const cachedName = readCachedFolderName();
-  const files = await readPickedFolderSnapshot();
-
-  if (files.length === 0) {
-    if (cachedName) {
-      apply({
-        directoryName: cachedName,
-        status: "idle",
-        error: null,
-        writable: false,
-        pickedFileMode: false,
-        folderPickerKind: "webkit",
-      });
-    } else {
-      clearCachedFolderAccessKind();
-    }
-    return false;
-  }
-
-  apply({
-    directoryName: cachedName || folderNameFromPickedFiles(files),
-    status: "scanning",
-    error: null,
-    writable: false,
-    pickedFileMode: false,
-    folderPickerKind: "webkit",
-  });
-
-  try {
-    const result = await scanPickedFolderFiles(files);
-    if (result.songs.length === 0) {
-      await clearPickedFolderSnapshot();
-      clearCachedFolderName();
-      clearCachedFolderAccessKind();
-      apply({
-        directoryName: "",
-        songs: [],
-        status: "idle",
-        error: "No supported audio files found in the saved offline folder",
-        writable: false,
-        pickedFileMode: false,
-        folderPickerKind: "webkit",
-        scannedAt: null,
-      });
-      return false;
-    }
-
-    writeCachedFolderName(result.directoryName);
-    writeCachedFolderAccessKind("webkit");
-    apply({
-      directoryName: result.directoryName,
-      songs: result.songs,
-      status: "ready",
-      error: null,
-      writable: false,
-      pickedFileMode: false,
-      folderPickerKind: "webkit",
-      scannedAt: Date.now(),
-    });
-    return true;
-  } catch (error) {
-    apply({
-      status: "error",
-      error: error instanceof Error ? error.message : "Failed to restore offline folder",
-      writable: false,
-      pickedFileMode: false,
-      folderPickerKind: "webkit",
-    });
-    return false;
-  }
 }
 
 function sanitizeFileSegment(value: string): string {
@@ -591,7 +303,7 @@ type EmbeddedAudioMetadata = {
 
 async function parseEmbeddedMetadata(
   file: File,
-  options?: { skipCovers?: boolean },
+  options?: { skipCovers?: boolean; skipLyrics?: boolean },
 ): Promise<EmbeddedAudioMetadata> {
   try {
     const { parseBlob, selectCover } = await import("music-metadata");
@@ -623,11 +335,13 @@ async function parseEmbeddedMetadata(
       }
     }
 
-    const embeddedLyrics = metadata.common.lyrics?.filter(Boolean).join("\n\n").trim();
-    if (embeddedLyrics) {
-      result.lyricsUrl = createTrackedObjectUrl(
-        new Blob([embeddedLyrics], { type: "text/plain;charset=utf-8" }),
-      );
+    if (!options?.skipLyrics) {
+      const embeddedLyrics = metadata.common.lyrics?.filter(Boolean).join("\n\n").trim();
+      if (embeddedLyrics) {
+        result.lyricsUrl = createTrackedObjectUrl(
+          new Blob([embeddedLyrics], { type: "text/plain;charset=utf-8" }),
+        );
+      }
     }
 
     const bits = metadata.format.bitsPerSample;
@@ -728,32 +442,6 @@ async function findLyricsHandle(
   return null;
 }
 
-async function collectAudioFiles(
-  dirHandle: BrowserDirectoryHandle,
-  pathParts: string[],
-  acc: Array<{
-    fileHandle: BrowserFileHandle;
-    parentDirectoryHandle: BrowserDirectoryHandle;
-    pathParts: string[];
-  }>,
-) {
-  for await (const handle of dirHandle.values()) {
-    if (handle.kind === "directory") {
-      if (handle.name === ".spotify" || handle.name === "node_modules") continue;
-      await collectAudioFiles(handle, [...pathParts, handle.name], acc);
-      continue;
-    }
-
-    if (AUDIO_EXTENSIONS.has(extensionOf(handle.name))) {
-      acc.push({
-        fileHandle: handle,
-        parentDirectoryHandle: dirHandle,
-        pathParts: [...pathParts, handle.name],
-      });
-    }
-  }
-}
-
 async function songFromAudioHandle(input: {
   fileHandle: BrowserFileHandle;
   parentDirectoryHandle: BrowserDirectoryHandle;
@@ -774,6 +462,7 @@ async function songFromAudioHandle(input: {
   const lyricsHandle = await findLyricsHandle(parentDirectoryHandle, stem, sidecar);
   const embedded = await parseEmbeddedMetadata(file, {
     skipCovers: Boolean(coverHandle),
+    skipLyrics: Boolean(lyricsHandle),
   });
 
   const audioUrl = createTrackedObjectUrl(file);
@@ -816,291 +505,6 @@ async function songFromAudioHandle(input: {
     sidecar,
     writable,
   };
-}
-
-async function scanActiveDirectory(): Promise<{
-  directoryName: string;
-  songs: PlayerSong[];
-  writable: boolean;
-}> {
-  if (!activeDirectoryHandle) {
-    throw new Error("Choose a music folder first");
-  }
-
-  const writable = await requestDirectoryPermission(activeDirectoryHandle, "readwrite");
-  const files: Array<{
-    fileHandle: BrowserFileHandle;
-    parentDirectoryHandle: BrowserDirectoryHandle;
-    pathParts: string[];
-  }> = [];
-
-  clearTrackedObjectUrls();
-  entriesById.clear();
-  await collectAudioFiles(activeDirectoryHandle, [], files);
-
-  const entries = await Promise.all(
-    files.map((file) => songFromAudioHandle({ ...file, writable })),
-  );
-  entries.sort((left, right) => {
-    const byArtist = left.song.artist.localeCompare(right.song.artist);
-    if (byArtist !== 0) return byArtist;
-    return left.song.title.localeCompare(right.song.title);
-  });
-
-  for (const entry of entries) {
-    entriesById.set(entry.song.id, entry);
-  }
-
-  return {
-    directoryName: activeDirectoryHandle.name || "Music",
-    songs: entries.map((entry) => entry.song),
-    writable,
-  };
-}
-
-function directoryKeyForRelativePath(relativePath: string): string {
-  const parts = relativePath.split("/").filter(Boolean);
-  parts.pop();
-  return parts.join("/");
-}
-
-function pathPartsForRelativePath(relativePath: string): string[] {
-  return relativePath.split("/").filter(Boolean);
-}
-
-function folderNameFromPickedFiles(files: PickedFolderFile[]): string {
-  for (const entry of files) {
-    const relativePath = entry.relativePath.trim();
-    if (!relativePath) continue;
-    const [root] = relativePath.split("/");
-    if (root) return root;
-  }
-  return "Music folder";
-}
-
-function buildDirectoryIndex(files: PickedFolderFile[]): Map<string, PickedFolderFile[]> {
-  const byDirectory = new Map<string, PickedFolderFile[]>();
-  for (const entry of files) {
-    const relativePath = entry.relativePath || entry.file.name;
-    const directoryKey = directoryKeyForRelativePath(relativePath);
-    const bucket = byDirectory.get(directoryKey);
-    if (bucket) {
-      bucket.push(entry);
-    } else {
-      byDirectory.set(directoryKey, [entry]);
-    }
-  }
-  return byDirectory;
-}
-
-async function readSidecarFromFiles(
-  files: PickedFolderFile[],
-  stem: string,
-): Promise<LocalSidecar> {
-  const sidecarEntry = files.find((entry) => entry.file.name === `${stem}.spotify.json`);
-  if (!sidecarEntry) return {};
-  try {
-    const parsed = JSON.parse(await sidecarEntry.file.text()) as LocalSidecar;
-    if (!parsed || typeof parsed !== "object") return {};
-    return parsed;
-  } catch {
-    return {};
-  }
-}
-
-function findCoverFileInDirectory(
-  files: PickedFolderFile[],
-  stem: string,
-  sidecar: LocalSidecar,
-): File | null {
-  if (sidecar.coverFile) {
-    const fromSidecar = files.find((entry) => entry.file.name === sidecar.coverFile);
-    if (fromSidecar) return fromSidecar.file;
-  }
-
-  for (const ext of IMAGE_EXTENSIONS) {
-    for (const candidate of [
-      `${stem}${ext}`,
-      `${stem}.cover${ext}`,
-      `cover${ext}`,
-      `folder${ext}`,
-    ]) {
-      const match = files.find((entry) => entry.file.name === candidate);
-      if (match) return match.file;
-    }
-  }
-  return null;
-}
-
-function findLyricsFileInDirectory(
-  files: PickedFolderFile[],
-  stem: string,
-  sidecar: LocalSidecar,
-): File | null {
-  if (sidecar.lyricsFile) {
-    const fromSidecar = files.find((entry) => entry.file.name === sidecar.lyricsFile);
-    if (fromSidecar) return fromSidecar.file;
-  }
-
-  for (const ext of LYRICS_EXTENSIONS) {
-    const match = files.find((entry) => entry.file.name === `${stem}${ext}`);
-    if (match) return match.file;
-  }
-  return null;
-}
-
-async function songFromPickedFolderFile(
-  entry: PickedFolderFile,
-  pathParts: string[],
-  directoryFiles: PickedFolderFile[],
-): Promise<LocalSongEntry> {
-  const { file } = entry;
-  const stem = stemOf(file.name);
-  const sidecar = await readSidecarFromFiles(directoryFiles, stem);
-  const parsed = parseTitleArtist(
-    stem,
-    pathParts.length > 1 ? pathParts[pathParts.length - 2] : "",
-    sidecar,
-  );
-
-  const coverFile = findCoverFileInDirectory(directoryFiles, stem, sidecar);
-  const lyricsFile = findLyricsFileInDirectory(directoryFiles, stem, sidecar);
-  const embedded = await parseEmbeddedMetadata(file, {
-    skipCovers: Boolean(coverFile),
-  });
-
-  const audioUrl = createTrackedObjectUrl(file);
-  let imageUrl = "/apple-icon.png";
-  if (coverFile) {
-    imageUrl = createTrackedObjectUrl(coverFile);
-  } else if (embedded.imageUrl) {
-    imageUrl = embedded.imageUrl;
-  }
-
-  let lyricsUrl: string | undefined;
-  if (lyricsFile) {
-    lyricsUrl = createTrackedObjectUrl(lyricsFile);
-  } else if (embedded.lyricsUrl) {
-    lyricsUrl = embedded.lyricsUrl;
-  }
-
-  const song: PlayerSong = {
-    id: songIdForPath(pathParts),
-    title: embedded.title || parsed.title,
-    artist: embedded.artist || parsed.artist,
-    imageUrl,
-    audioUrl,
-    lyricsUrl,
-    duration: embedded.duration,
-    audioBitDepth: embedded.audioBitDepth,
-    audioSampleRate: embedded.audioSampleRate,
-    createdAt: new Date(file.lastModified || Date.now()).toISOString(),
-    source: "browser-local",
-    localPath: normalizePath(pathParts),
-    writable: false,
-  };
-
-  return {
-    song,
-    audioFileHandle: null,
-    parentDirectoryHandle: null,
-    pathParts,
-    stem,
-    sidecar,
-    writable: false,
-  };
-}
-
-async function scanPickedFolderFiles(files: PickedFolderFile[]): Promise<{
-  directoryName: string;
-  songs: PlayerSong[];
-}> {
-  const directoryIndex = buildDirectoryIndex(files);
-  const audioFiles = files.filter((entry) => AUDIO_EXTENSIONS.has(extensionOf(entry.file.name)));
-
-  clearTrackedObjectUrls();
-  entriesById.clear();
-  activeDirectoryHandle = null;
-
-  const entries = await Promise.all(
-    audioFiles.map(async (entry) => {
-      const relativePath = entry.relativePath || entry.file.name;
-      const pathParts = pathPartsForRelativePath(relativePath);
-      const directoryKey = directoryKeyForRelativePath(relativePath);
-      const directoryFiles = directoryIndex.get(directoryKey) ?? [entry];
-      return songFromPickedFolderFile(entry, pathParts, directoryFiles);
-    }),
-  );
-
-  entries.sort((left, right) => {
-    const byArtist = left.song.artist.localeCompare(right.song.artist);
-    if (byArtist !== 0) return byArtist;
-    return left.song.title.localeCompare(right.song.title);
-  });
-
-  for (const entry of entries) {
-    entriesById.set(entry.song.id, entry);
-  }
-
-  return {
-    directoryName: folderNameFromPickedFiles(files),
-    songs: entries.map((entry) => entry.song),
-  };
-}
-
-async function scanPickedFolder(filesInput: FileList | File[]): Promise<{
-  directoryName: string;
-  songs: PlayerSong[];
-  files: PickedFolderFile[];
-}> {
-  const files = Array.from(filesInput, (file) =>
-    pickedFolderFileFromFile(file as DirectoryPickerFile),
-  );
-  const result = await scanPickedFolderFiles(files);
-  return { ...result, files };
-}
-
-function pickedFileSong(file: File): LocalSongEntry {
-  const stem = stemOf(file.name);
-  const parsed = parseTitleArtist(stem, "", {});
-  const id = `picked-file:${encodeURIComponent(`${file.name}:${file.size}:${file.lastModified}`)}`;
-  const song: PlayerSong = {
-    id,
-    title: parsed.title,
-    artist: parsed.artist,
-    imageUrl: "/apple-icon.png",
-    audioUrl: createTrackedObjectUrl(file),
-    duration: undefined,
-    createdAt: new Date(file.lastModified || Date.now()).toISOString(),
-    source: "picked-file",
-    localPath: file.name,
-    writable: false,
-  };
-
-  return {
-    song,
-    audioFileHandle: null,
-    parentDirectoryHandle: null,
-    pathParts: [file.name],
-    stem,
-    sidecar: {},
-    writable: false,
-  };
-}
-
-async function pickedFileSongWithMetadata(file: File): Promise<LocalSongEntry> {
-  const entry = pickedFileSong(file);
-  const embedded = await parseEmbeddedMetadata(file);
-  entry.song = {
-    ...entry.song,
-    title: embedded.title || entry.song.title,
-    artist: embedded.artist || entry.song.artist,
-    imageUrl: embedded.imageUrl || entry.song.imageUrl,
-    lyricsUrl: embedded.lyricsUrl,
-    audioBitDepth: embedded.audioBitDepth,
-    audioSampleRate: embedded.audioSampleRate,
-  };
-  return entry;
 }
 
 async function writeBlobFile(
@@ -1231,7 +635,7 @@ function upsertSong(songs: PlayerSong[], song: PlayerSong): PlayerSong[] {
   return next;
 }
 
-export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set, get) => ({
+export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set) => ({
   supported: false,
   folderPickerKind: "files",
   hydrated: false,
@@ -1242,206 +646,6 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
   writable: false,
   pickedFileMode: false,
   scannedAt: null,
-  hydrateCapabilities: () => {
-    if (get().hydrated) return;
-
-    void (async () => {
-      const folderPickerKind = resolveFolderPickerKind();
-      const supported = folderPickerKind !== "files";
-      set({ supported, folderPickerKind, hydrated: true });
-
-      if (folderPickerKind === "handle") {
-        await restoreSavedLibrary((partial) => set(partial));
-        return;
-      }
-
-      if (folderPickerKind === "webkit") {
-        const cachedKind = readCachedFolderAccessKind();
-        if (cachedKind === "webkit") {
-          await restorePickedFolderSnapshot((partial) => set(partial));
-        }
-      }
-    })();
-  },
-  chooseDirectory: async () => {
-    const picker = getDirectoryPicker();
-    if (!picker) {
-      set({
-        status: "error",
-        error: "Use Choose Folder to open your music folder in Files or iCloud Drive",
-      });
-      return;
-    }
-
-    set({ status: "scanning", error: null, supported: true, folderPickerKind: "handle" });
-    try {
-      activeDirectoryHandle = await picker({
-        id: DIRECTORY_PICKER_ID,
-        mode: "readwrite",
-        startIn: "music",
-      });
-      await persistDirectoryHandle(activeDirectoryHandle);
-      const result = await scanActiveDirectory();
-      await clearPickedFolderSnapshot();
-      writeCachedFolderName(result.directoryName);
-      writeCachedFolderAccessKind("handle");
-      set({
-        directoryName: result.directoryName,
-        songs: result.songs,
-        status: "ready",
-        error: null,
-        writable: result.writable,
-        pickedFileMode: false,
-        folderPickerKind: "handle",
-        scannedAt: Date.now(),
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        set({ status: get().songs.length > 0 ? "ready" : "idle", error: null });
-        return;
-      }
-      set({
-        status: "error",
-        error: error instanceof Error ? error.message : "Failed to open folder",
-      });
-    }
-  },
-  rescan: async () => {
-    if (get().folderPickerKind === "webkit") {
-      set({
-        status: "idle",
-        error: null,
-      });
-      return;
-    }
-
-    if (!activeDirectoryHandle) {
-      const access = await restoreSavedDirectoryAccess();
-      if (access === "missing") {
-        set({
-          status: "error",
-          error: "Choose a music folder in Settings first",
-        });
-        return;
-      }
-    }
-
-    await restoreSavedLibrary((partial) => set(partial));
-  },
-  loadPickedFolder: (filesInput) => {
-    void (async () => {
-      set({
-        status: "scanning",
-        error: null,
-        supported: true,
-        folderPickerKind: "webkit",
-        pickedFileMode: false,
-        writable: false,
-      });
-
-      try {
-        const result = await scanPickedFolder(filesInput);
-        if (result.songs.length === 0) {
-          await clearPersistedDirectoryHandle();
-          await clearPickedFolderSnapshot();
-          clearCachedFolderName();
-          clearCachedFolderAccessKind();
-          set({
-            directoryName: "",
-            songs: [],
-            status: "idle",
-            error: "No supported audio files found in that folder",
-            writable: false,
-            pickedFileMode: false,
-            folderPickerKind: "webkit",
-            scannedAt: null,
-          });
-          return;
-        }
-
-        await clearPersistedDirectoryHandle();
-        let snapshotError: string | null = null;
-        try {
-          await persistPickedFolderSnapshot(result.files);
-        } catch {
-          snapshotError =
-            "Folder loaded, but this device did not allow Spotify to save it for offline use";
-        }
-        writeCachedFolderName(result.directoryName);
-        writeCachedFolderAccessKind("webkit");
-        set({
-          directoryName: result.directoryName,
-          songs: result.songs,
-          status: "ready",
-          error: snapshotError,
-          writable: false,
-          pickedFileMode: false,
-          folderPickerKind: "webkit",
-          scannedAt: Date.now(),
-        });
-      } catch (error) {
-        set({
-          status: "error",
-          error: error instanceof Error ? error.message : "Failed to read folder",
-          folderPickerKind: "webkit",
-        });
-      }
-    })();
-  },
-  loadPickedFiles: (filesInput) => {
-    void (async () => {
-      const files = Array.from(filesInput).filter((file) =>
-        AUDIO_EXTENSIONS.has(extensionOf(file.name)),
-      );
-      clearTrackedObjectUrls();
-      entriesById.clear();
-      activeDirectoryHandle = null;
-      await clearPersistedDirectoryHandle();
-      await clearPickedFolderSnapshot();
-      clearCachedFolderName();
-      clearCachedFolderAccessKind();
-
-      if (files.length === 0) {
-        set({
-          directoryName: "",
-          songs: [],
-          status: "idle",
-          error: "No supported audio files selected",
-          writable: false,
-          pickedFileMode: true,
-          folderPickerKind: "files",
-          scannedAt: null,
-        });
-        return;
-      }
-
-      set({
-        directoryName: "Selected files",
-        songs: [],
-        status: "scanning",
-        error: null,
-        writable: false,
-        pickedFileMode: true,
-        folderPickerKind: "files",
-        scannedAt: null,
-      });
-
-      const entries = await Promise.all(files.map(pickedFileSongWithMetadata));
-      for (const entry of entries) {
-        entriesById.set(entry.song.id, entry);
-      }
-      set({
-        directoryName: "Selected files",
-        songs: entries.map((entry) => entry.song),
-        status: "ready",
-        error: null,
-        writable: false,
-        pickedFileMode: true,
-        folderPickerKind: "files",
-        scannedAt: Date.now(),
-      });
-    })();
-  },
   saveDownloadedTrack: async (input) => {
     set({ error: null });
     const song = await saveDownloadedTrackToFolder(input);
@@ -1459,8 +663,5 @@ export const useBrowserLocalLibraryStore = create<BrowserLocalLibraryState>((set
       scannedAt: Date.now(),
     }));
     return song;
-  },
-  replaceSong: (song) => {
-    set((state) => ({ songs: upsertSong(state.songs, song) }));
   },
 }));

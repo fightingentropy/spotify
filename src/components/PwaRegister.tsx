@@ -7,8 +7,10 @@ const CACHE_APP_SHELL_MESSAGE = { type: "CACHE_APP_SHELL" };
 const APP_ASSETS_CACHE = "spotify-app-assets-v1";
 const OFFLINE_ASSETS_MANIFEST_URL = "/offline-assets.json";
 const watchedRegistrations = new WeakSet<ServiceWorkerRegistration>();
+const WARM_APP_SHELL_COALESCE_MS = 5_000;
+let lastWarmAppShellAt = 0;
 
-function isDevelopmentAppCache(cacheName: string): boolean {
+function isVersionedAppCache(cacheName: string): boolean {
   return cacheName.startsWith("spotify-v") || cacheName === APP_ASSETS_CACHE;
 }
 
@@ -24,10 +26,14 @@ function isNativeCapacitorApp(): boolean {
 }
 
 function warmAppShell(registration: ServiceWorkerRegistration) {
+  const target =
+    navigator.serviceWorker.controller || registration.active || registration.waiting;
+  if (!target) return;
+  const timestamp = Date.now();
+  if (timestamp - lastWarmAppShellAt < WARM_APP_SHELL_COALESCE_MS) return;
+  lastWarmAppShellAt = timestamp;
   try {
-    navigator.serviceWorker.controller?.postMessage(CACHE_APP_SHELL_MESSAGE);
-    registration.active?.postMessage(CACHE_APP_SHELL_MESSAGE);
-    registration.waiting?.postMessage(CACHE_APP_SHELL_MESSAGE);
+    target.postMessage(CACHE_APP_SHELL_MESSAGE);
   } catch {}
 }
 
@@ -37,6 +43,7 @@ function warmWhenWorkerActivates(registration: ServiceWorkerRegistration) {
   if (!worker) return;
   const handleStateChange = () => {
     if (worker.state === "activated") {
+      lastWarmAppShellAt = 0;
       warmAppShell(registration);
       worker.removeEventListener("statechange", handleStateChange);
     }
@@ -91,7 +98,7 @@ async function resetDevelopmentServiceWorkers(): Promise<void> {
     const cacheNames = await caches.keys();
     await Promise.all(
       cacheNames
-        .filter(isDevelopmentAppCache)
+        .filter(isVersionedAppCache)
         .map((cacheName) => caches.delete(cacheName)),
     );
   }

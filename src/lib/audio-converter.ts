@@ -78,8 +78,6 @@ export async function convertAudioBuffer(
   switch (options.format) {
     case "wav":
       return convertToWav(audioBuffer);
-    case "mp3":
-      return convertWithMediaRecorder(audioBuffer, options);
     case "ogg":
     case "opus":
       return convertWithMediaRecorder(audioBuffer, options);
@@ -189,8 +187,6 @@ async function convertWithMediaRecorder(
       mimeType = "audio/ogg;codecs=vorbis";
     } else if (options.format === "aac") {
       mimeType = "audio/mp4;codecs=mp4a.40.2";
-    } else if (options.format === "mp3") {
-      mimeType = "audio/mpeg";
     }
 
     // Check if the MIME type is supported
@@ -244,20 +240,5 @@ export function getExtensionForFormat(format: OutputFormat): string {
     case "opus": return ".opus";
     case "wav": return ".wav";
     default: return ".flac";
-  }
-}
-
-/**
- * Get MIME type for format
- */
-export function getMimeTypeForFormat(format: OutputFormat): string {
-  switch (format) {
-    case "flac": return "audio/flac";
-    case "mp3": return "audio/mpeg";
-    case "aac": return "audio/mp4";
-    case "ogg": return "audio/ogg";
-    case "opus": return "audio/opus";
-    case "wav": return "audio/wav";
-    default: return "audio/flac";
   }
 }
