@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   shouldForwardMacMiniUserForPathname,
   spotiflacStatusKeyForEndpoint,
+  withSecurityHeaders,
 } from "../src/worker/index";
 
 describe("Mac mini proxy user forwarding", () => {
@@ -16,6 +17,42 @@ describe("Mac mini proxy user forwarding", () => {
   test("does not steal Spotify import routes from the Worker", () => {
     expect(shouldForwardMacMiniUserForPathname("/api/songs/spotify")).toBe(false);
     expect(shouldForwardMacMiniUserForPathname("/api/songs/spotify/batch")).toBe(false);
+  });
+});
+
+describe("security headers on proxied responses", () => {
+  test("rebuilds a response whose headers cannot be mutated in place", () => {
+    // workerd gives fetch() responses an immutable header guard, so set() throws.
+    // The Mac mini proxy returns those responses verbatim; the security-header
+    // middleware must not 500 on them (regression: TypeError: Can't modify
+    // immutable headers).
+    const upstream = new Response("partial-audio", {
+      status: 206,
+      statusText: "Partial Content",
+      headers: { "content-type": "audio/flac", etag: 'W/"abc123"' },
+    });
+    Object.defineProperty(upstream.headers, "set", {
+      value: () => {
+        throw new TypeError("Can't modify immutable headers.");
+      },
+    });
+
+    const secured = withSecurityHeaders(upstream);
+    expect(secured).not.toBe(upstream);
+    expect(secured.status).toBe(206);
+    expect(secured.statusText).toBe("Partial Content");
+    expect(secured.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(secured.headers.get("x-frame-options")).toBe("DENY");
+    // Original upstream headers are preserved.
+    expect(secured.headers.get("content-type")).toBe("audio/flac");
+    expect(secured.headers.get("etag")).toBe('W/"abc123"');
+  });
+
+  test("mutates in place and returns the same response when headers are writable", () => {
+    const res = new Response("{}", { headers: { "content-type": "application/json" } });
+    const secured = withSecurityHeaders(res);
+    expect(secured).toBe(res);
+    expect(secured.headers.get("x-frame-options")).toBe("DENY");
   });
 });
 

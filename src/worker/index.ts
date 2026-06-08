@@ -2765,11 +2765,27 @@ function applySecurityHeaders(headers: Headers): void {
   }
 }
 
+// Attach security headers in place when possible. Proxied/upstream responses
+// (e.g. streamed back from the Mac mini) carry immutable headers, so set()
+// throws — in that case rebuild with a mutable copy so the headers are never
+// dropped and a proxy response can't take down the whole API with a 500.
+export function withSecurityHeaders(res: Response): Response {
+  try {
+    applySecurityHeaders(res.headers);
+    return res;
+  } catch {
+    const headers = new Headers(res.headers);
+    applySecurityHeaders(headers);
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  }
+}
+
 const app = new Hono<AppEnv>();
 
 app.use("*", async (c, next) => {
   await next();
-  applySecurityHeaders(c.res.headers);
+  const secured = withSecurityHeaders(c.res);
+  if (secured !== c.res) c.res = secured;
 });
 
 app.use("/api/*", async (c, next) => {
