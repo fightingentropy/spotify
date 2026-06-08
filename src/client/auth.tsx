@@ -8,6 +8,7 @@ export type AuthUser = {
   email: string;
   name: string | null;
   image: string | null;
+  emailVerified: boolean;
 };
 
 type AuthContextValue = {
@@ -17,6 +18,7 @@ type AuthContextValue = {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   updateProfileImage: (file: File) => Promise<void>;
+  resendVerification: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -30,6 +32,7 @@ const LOCAL_OFFLINE_AUTH_USER: AuthUser = {
   email: "erlin@spotify.local",
   name: "Erlin",
   image: ERLIN_PROFILE_IMAGE_URL,
+  emailVerified: true,
 };
 
 function defaultAuthUserImage(email: string, name: string | null): string | null {
@@ -58,6 +61,9 @@ function coerceAuthUser(value: unknown): AuthUser | null {
     email: candidate.email,
     name,
     image: storedImage || defaultImage,
+    // Default to verified when the field is absent (older cached users / local
+    // owner) so we never falsely nag; the server sends an explicit boolean.
+    emailVerified: candidate.emailVerified !== false,
   };
 }
 
@@ -305,9 +311,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     warmProfileImage(nextUser.image);
   }, []);
 
+  const resendVerification = useCallback(async () => {
+    const response = await fetch("/api/auth/resend-verification", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(data.error || "Failed to resend verification email");
+    }
+  }, []);
+
   const value = useMemo(
-    () => ({ user, status, refresh, signIn, signOut, updateProfileImage }),
-    [refresh, signIn, signOut, status, updateProfileImage, user],
+    () => ({ user, status, refresh, signIn, signOut, updateProfileImage, resendVerification }),
+    [refresh, signIn, signOut, status, updateProfileImage, resendVerification, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

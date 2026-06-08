@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
+import EmailVerificationBanner from "@/components/EmailVerificationBanner";
 import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
 import InstallPrompt from "@/components/InstallPrompt";
 import LibrarySidebarClient from "@/components/LibrarySidebarClient";
@@ -269,6 +270,7 @@ function Shell() {
       />
       <NowPlayingSidebar />
       <main className="wf-main pt-[calc(3.5rem+env(safe-area-inset-top))]">
+        <EmailVerificationBanner />
         <div key={location.pathname} className="wf-route-surface">
         <Routes location={location}>
           <Route path="/" element={<HomePage />} />

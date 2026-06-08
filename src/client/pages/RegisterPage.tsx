@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
@@ -7,7 +7,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
+  const [submitted, setSubmitted] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,12 +23,30 @@ export default function RegisterPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error ?? "Registration failed");
       }
-      navigate("/signin");
+      setSubmitted(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (submitted) {
+    return (
+      <div className="max-w-md mx-auto py-16 px-4">
+        <h1 className="text-2xl font-semibold mb-4">Check your email</h1>
+        <p className="text-sm text-white/[0.68] mb-6">
+          If {email || "that address"} is new, we&apos;ve sent a verification link to it. You can sign in right away —
+          just verify when you get a chance.
+        </p>
+        <Link
+          to="/signin"
+          className="inline-flex h-10 items-center justify-center rounded bg-foreground px-4 text-background"
+        >
+          Go to sign in
+        </Link>
+      </div>
+    );
   }
 
   return (
@@ -67,10 +85,15 @@ export default function RegisterPage() {
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            aria-describedby={error ? "register-error" : undefined}
+            aria-describedby={error ? "register-error" : "register-password-hint"}
             className="w-full border rounded px-3 py-2 bg-transparent"
+            minLength={8}
+            maxLength={128}
             required
           />
+          <p id="register-password-hint" className="mt-1 text-xs text-white/[0.5]">
+            At least 8 characters.
+          </p>
         </div>
         {error && (
           <div id="register-error" role="alert" className="text-sm text-red-600">

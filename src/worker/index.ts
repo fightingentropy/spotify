@@ -62,6 +62,7 @@ type AuthUser = {
   email: string;
   name: string | null;
   image: string | null;
+  emailVerified?: string | Date | null;
 };
 
 const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
@@ -70,6 +71,7 @@ const LOCAL_MAC_MINI_AUTH_USER: AuthUser = {
   email: "erlin@spotify.local",
   name: "Erlin",
   image: ERLIN_PROFILE_IMAGE_URL,
+  emailVerified: "owner",
 };
 
 type ActionPayload = {
@@ -623,6 +625,84 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const VERIFY_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24;
+const DEFAULT_EMAIL_FROM = "noreply@fightingentropy.org";
+
+// Cloudflare Email Service binding (public beta). Optional: the feature
+// gracefully no-ops when the binding is not configured, so registration still
+// works before the sending domain is verified / the binding is added.
+type EmailSendMessage = {
+  from: string;
+  to: string | string[];
+  subject: string;
+  text?: string;
+  html?: string;
+  replyTo?: string;
+};
+type EmailBinding = { send: (message: EmailSendMessage) => Promise<{ messageId: string }> };
+
+function emailBinding(env: CloudflareEnv): EmailBinding | null {
+  const binding = (env as unknown as { EMAIL?: EmailBinding }).EMAIL;
+  return binding && typeof binding.send === "function" ? binding : null;
+}
+
+// Public origin used to build the email verification link. Prefers an explicit
+// APP_ORIGIN, then the public app origin (MAC_MINI_ORIGIN), then the request.
+function publicAppOrigin(env: CloudflareEnv, requestUrl: string): string {
+  const configured = envString(env, "APP_ORIGIN") || envString(env, "MAC_MINI_ORIGIN");
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {}
+  }
+  try {
+    return new URL(requestUrl).origin;
+  } catch {
+    return "";
+  }
+}
+
+async function createEmailVerificationToken(db: SqlTag, email: string): Promise<string> {
+  const raw = randomToken();
+  const tokenHash = await sha256Hex(raw);
+  const expires = new Date(Date.now() + VERIFY_TOKEN_MAX_AGE_SECONDS * 1000);
+  await db`DELETE FROM "VerificationToken" WHERE "identifier" = ${email}`;
+  await db`
+    INSERT INTO "VerificationToken" ("identifier", "token", "expires")
+    VALUES (${email}, ${tokenHash}, ${expires})
+  `;
+  return raw;
+}
+
+async function sendVerificationEmail(
+  env: CloudflareEnv,
+  requestUrl: string,
+  email: string,
+  rawToken: string,
+): Promise<boolean> {
+  const binding = emailBinding(env);
+  if (!binding) return false;
+  const from = envString(env, "EMAIL_FROM") || DEFAULT_EMAIL_FROM;
+  const link = `${publicAppOrigin(env, requestUrl)}/api/auth/verify?token=${encodeURIComponent(rawToken)}`;
+  const subject = "Verify your email";
+  const text = `Welcome to Spotify.\n\nConfirm your email address by opening this link:\n${link}\n\nThis link expires in 24 hours. If you did not create this account, you can ignore this email.`;
+  const html = `<div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
+  <h1 style="font-size:20px;margin:0 0 12px">Confirm your email</h1>
+  <p style="margin:0 0 20px;line-height:1.5">Welcome to Spotify. Tap the button below to verify your email address.</p>
+  <p style="margin:0 0 24px"><a href="${link}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 18px;border-radius:9999px">Verify email</a></p>
+  <p style="margin:0 0 8px;font-size:13px;color:#555">Or paste this link into your browser:</p>
+  <p style="margin:0 0 24px;font-size:13px;word-break:break-all"><a href="${link}">${link}</a></p>
+  <p style="margin:0;font-size:12px;color:#888">This link expires in 24 hours. If you did not create this account, you can ignore this email.</p>
+</div>`;
+  try {
+    await binding.send({ from, to: email, subject, text, html });
+    return true;
+  } catch (error) {
+    console.error("verification email send failed:", error instanceof Error ? error.message : String(error));
+    return false;
+  }
+}
+
 function getRequestIp(req: Request): string {
   const cfIp = req.headers.get("cf-connecting-ip");
   if (cfIp) return cfIp;
@@ -663,7 +743,7 @@ async function getCurrentUser(req: Request, db: SqlTag): Promise<AuthUser | null
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const rows = await db<AuthUser>`
-    SELECT u."id", u."email", u."name", u."image"
+    SELECT u."id", u."email", u."name", u."image", u."emailVerified"
     FROM "Session" s
     INNER JOIN "User" u ON u."id" = s."userId"
     WHERE s."sessionToken" = ${tokenHash}
@@ -680,6 +760,7 @@ function publicUser(user: AuthUser) {
     email: user.email,
     name: user.name,
     image: user.image || defaultImage || null,
+    emailVerified: Boolean(user.emailVerified),
   };
 }
 
@@ -2761,6 +2842,53 @@ app.post("/api/auth/signout", async (c) => {
   return new Response(null, { status: 204 });
 });
 
+app.get("/api/auth/verify", async (c) => {
+  const db = c.get("db");
+  const origin = publicAppOrigin(c.env, c.req.url);
+  const redirectTo = (status: string) => c.redirect(`${origin}/?verified=${status}`, 302);
+  const raw = toStringValue(c.req.query("token"));
+  if (!raw) return redirectTo("invalid");
+  const tokenHash = await sha256Hex(raw);
+  const rows = await db<{ identifier: string; expires: string }>`
+    SELECT "identifier", "expires"
+    FROM "VerificationToken"
+    WHERE "token" = ${tokenHash}
+    LIMIT 1
+  `;
+  const record = rows[0];
+  if (!record) return redirectTo("invalid");
+  // Single-use: consume the token regardless of outcome.
+  await db`DELETE FROM "VerificationToken" WHERE "token" = ${tokenHash}`;
+  if (new Date(record.expires).getTime() < Date.now()) return redirectTo("expired");
+  await db`
+    UPDATE "User"
+    SET "emailVerified" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "email" = ${record.identifier} AND "emailVerified" IS NULL
+  `;
+  return redirectTo("success");
+});
+
+app.post("/api/auth/resend-verification", async (c) => {
+  const limited = rateLimit(c.req.raw, "verify-resend", 5, 10 * 60 * 1000);
+  if (!limited.allowed) return c.json({ error: "Too many requests" }, { status: 429, headers: limited.headers });
+  const user = c.get("user");
+  if (!user) return jsonError("Unauthorized", 401);
+  const db = c.get("db");
+  const rows = await db<{ emailVerified: string | null }>`
+    SELECT "emailVerified" FROM "User" WHERE "id" = ${user.id} LIMIT 1
+  `;
+  // Generic OK whether or not we actually send (already verified / unknown user).
+  if (rows[0] && !rows[0].emailVerified) {
+    try {
+      const rawToken = await createEmailVerificationToken(db, user.email);
+      await sendVerificationEmail(c.env, c.req.url, user.email, rawToken);
+    } catch (error) {
+      console.error("verification resend failed:", error instanceof Error ? error.message : String(error));
+    }
+  }
+  return c.json({ ok: true });
+});
+
 app.post("/api/profile/image", async (c) => {
   const user = requireUser(c.get("user"));
   const form = await c.req.formData();
@@ -2818,6 +2946,14 @@ app.post("/api/register", async (c) => {
     INSERT INTO "User" ("id", "email", "name", "passwordHash", "image", "emailVerified", "createdAt", "updatedAt")
     VALUES (${crypto.randomUUID()}, ${email}, ${name || null}, ${passwordHash}, ${image}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `;
+  // Best-effort: send a verification email for genuinely new accounts only (the
+  // duplicate-email branch above never reaches here, preserving anti-enumeration).
+  try {
+    const rawToken = await createEmailVerificationToken(db, email);
+    await sendVerificationEmail(c.env, c.req.url, email, rawToken);
+  } catch (error) {
+    console.error("verification token/send failed:", error instanceof Error ? error.message : String(error));
+  }
   return c.json({ ok: true }, 201);
 });
 
