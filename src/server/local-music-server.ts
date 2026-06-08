@@ -964,36 +964,51 @@ async function scanLibrary(source: LibrarySource, usePersistentCache = true): Pr
     entries: {},
   };
 
-  const entries = await mapWithConcurrency(files, 8, async (file) => {
-    const fileStat = await stat(file.absolutePath);
-    const sidecarMtimeMs = await stat(sidecarPathForAudio(file.absolutePath))
-      .then((sidecarStat) => sidecarStat.mtimeMs)
-      .catch(() => undefined);
-    const cached = previous.entries[file.relativePath];
-    const song =
-      cachedStatMatches(cached, fileStat, sidecarMtimeMs)
-        ? cached.song
-        : await songFromFile(source, file.relativePath, file.absolutePath, fileStat, directoryCache);
+  const entries = await mapWithConcurrency(files, 8, async (file): Promise<LocalSongEntry | null> => {
+    try {
+      const fileStat = await stat(file.absolutePath);
+      const sidecarMtimeMs = await stat(sidecarPathForAudio(file.absolutePath))
+        .then((sidecarStat) => sidecarStat.mtimeMs)
+        .catch(() => undefined);
+      const cached = previous.entries[file.relativePath];
+      const song =
+        cachedStatMatches(cached, fileStat, sidecarMtimeMs)
+          ? cached.song
+          : await songFromFile(source, file.relativePath, file.absolutePath, fileStat, directoryCache);
 
-    nextCache.entries[file.relativePath] = {
-      size: fileStat.size,
-      mtimeMs: fileStat.mtimeMs,
-      sidecarMtimeMs,
-      song,
-    };
+      nextCache.entries[file.relativePath] = {
+        size: fileStat.size,
+        mtimeMs: fileStat.mtimeMs,
+        sidecarMtimeMs,
+        song,
+      };
 
-    return {
-      song,
-      absolutePath: file.absolutePath,
-      relativePath: file.relativePath,
-      size: fileStat.size,
-      mtimeMs: fileStat.mtimeMs,
-    };
+      return {
+        song,
+        absolutePath: file.absolutePath,
+        relativePath: file.relativePath,
+        size: fileStat.size,
+        mtimeMs: fileStat.mtimeMs,
+      };
+    } catch (error) {
+      // A file can vanish between the directory walk and this stat (e.g. an
+      // in-flight download that swaps .m4a for .flac) or be unreadable. Skip it
+      // so one bad file never aborts the whole library refresh. ENOENT is the
+      // expected transient case and stays quiet; anything else is logged.
+      if ((error as { code?: string } | null)?.code !== "ENOENT") {
+        console.error(
+          `Skipping ${file.relativePath} during library scan: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return null;
+    }
   });
+
+  const presentEntries = entries.filter((entry): entry is LocalSongEntry => entry !== null);
 
   await writePersistentCache(source, nextCache).catch(() => {});
 
-  return buildLibrarySnapshot(entries);
+  return buildLibrarySnapshot(presentEntries);
 }
 
 function refreshLibrary(source: LibrarySource, usePersistentCache = true): Promise<LibrarySnapshot> {
