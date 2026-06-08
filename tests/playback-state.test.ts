@@ -1,5 +1,40 @@
 import { describe, expect, test } from "bun:test";
-import { coercePlaybackState } from "../src/client/playback-state";
+import {
+  clearPlaybackStatePendingSync,
+  coercePlaybackState,
+  markPlaybackStatePendingSync,
+  readPlaybackStatePendingSyncUpdatedAt,
+  removeLocalPlaybackState,
+  writeLocalPlaybackState,
+  writeServerPlaybackState,
+} from "../src/client/playback-state";
+import { PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY, PLAYBACK_STATE_STORAGE_KEY } from "../src/lib/playback-state";
+
+function installBrowserState(options: { online?: boolean } = {}) {
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: globalThis,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { onLine: options.online ?? true },
+  });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      clear: () => storage.clear(),
+    },
+  });
+  return storage;
+}
 
 describe("playback state sync", () => {
   test("preserves podcast playback metadata", () => {
@@ -50,5 +85,64 @@ describe("playback state sync", () => {
     });
 
     expect(state).toBeNull();
+  });
+
+  test("marks playback state pending instead of fetching while offline", async () => {
+    const storage = installBrowserState({ online: false });
+    let fetchCalls = 0;
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async () => {
+        fetchCalls += 1;
+        return new Response("{}");
+      },
+    });
+
+    const state = coercePlaybackState({
+      accountScope: "user-1",
+      queue: [{
+        id: "song-1",
+        title: "Song",
+        artist: "Artist",
+        imageUrl: "/cover.jpg",
+        audioUrl: "/api/files/song.flac",
+      }],
+      currentIndex: 0,
+      currentTime: 12,
+      updatedAt: 123,
+      deviceId: "device-1",
+    });
+
+    expect(state).not.toBeNull();
+    const response = await writeServerPlaybackState(state!);
+    expect(response).toBeNull();
+    expect(fetchCalls).toBe(0);
+    expect(storage.get(PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY)).toBe("123");
+  });
+
+  test("clears pending playback marker when local state is removed", () => {
+    const storage = installBrowserState();
+    const state = coercePlaybackState({
+      accountScope: "user-1",
+      queue: [{
+        id: "song-1",
+        title: "Song",
+        artist: "Artist",
+        imageUrl: "/cover.jpg",
+        audioUrl: "/api/files/song.flac",
+      }],
+      currentIndex: 0,
+      updatedAt: 456,
+      deviceId: "device-1",
+    });
+
+    expect(state).not.toBeNull();
+    writeLocalPlaybackState(state!);
+    markPlaybackStatePendingSync(456);
+    expect(readPlaybackStatePendingSyncUpdatedAt()).toBe(456);
+    removeLocalPlaybackState();
+    expect(storage.has(PLAYBACK_STATE_STORAGE_KEY)).toBe(false);
+    expect(readPlaybackStatePendingSyncUpdatedAt()).toBeNull();
+    clearPlaybackStatePendingSync();
   });
 });

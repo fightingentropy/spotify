@@ -1,8 +1,8 @@
 import type { SongRow } from "@/lib/db-types";
+import { rewriteNativeApiUrl } from "@/lib/native-api";
 import type { PlayerSong } from "@/types/player";
 
 const SPOTIFY_FALLBACK_COVER = "/apple-icon.png";
-const NATIVE_API_ORIGIN = "https://spotify.fightingentropy.org";
 
 function isNativeCapacitorApp(): boolean {
   if (typeof window === "undefined") return false;
@@ -17,14 +17,7 @@ function isNativeCapacitorApp(): boolean {
 }
 
 export function resolveNativeApiUrl(url: string): string {
-  if (!isNativeCapacitorApp() || /^(blob:|data:|file:|capacitor:)/i.test(url)) return url;
-  try {
-    const parsed = new URL(url, window.location.href);
-    if (parsed.pathname.startsWith("/api/")) {
-      return `${NATIVE_API_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
-    }
-  } catch {}
-  return url;
+  return isNativeCapacitorApp() ? rewriteNativeApiUrl(url) : url;
 }
 
 export function normalizeCoverImageUrl(url: string | null | undefined): string {

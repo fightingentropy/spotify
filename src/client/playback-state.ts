@@ -2,6 +2,7 @@
 
 import {
   PLAYBACK_DEVICE_ID_STORAGE_KEY,
+  PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY,
   PLAYBACK_STATE_STORAGE_KEY,
   PLAYBACK_STATE_VERSION,
   type PlaybackStateSnapshot,
@@ -147,10 +148,40 @@ export function removeLocalPlaybackState(): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.removeItem(PLAYBACK_STATE_STORAGE_KEY);
+    clearPlaybackStatePendingSync();
   } catch {}
 }
 
+export function markPlaybackStatePendingSync(updatedAt: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY, String(Math.max(0, updatedAt)));
+  } catch {}
+}
+
+export function clearPlaybackStatePendingSync(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY);
+  } catch {}
+}
+
+export function readPlaybackStatePendingSyncUpdatedAt(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = Number(localStorage.getItem(PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY) || 0);
+    return Number.isFinite(stored) && stored > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+export function canSyncPlaybackState(): boolean {
+  return typeof navigator === "undefined" || navigator.onLine !== false;
+}
+
 export async function fetchServerPlaybackState(): Promise<PlaybackStateSnapshot | null> {
+  if (!canSyncPlaybackState()) return null;
   const response = await fetch("/api/playback-state", {
     credentials: "include",
     cache: "no-store",
@@ -166,6 +197,10 @@ export async function writeServerPlaybackState(
   state: PlaybackStateSnapshot,
   options?: { keepalive?: boolean },
 ): Promise<PlaybackStateSnapshot | null> {
+  if (!canSyncPlaybackState()) {
+    markPlaybackStatePendingSync(state.updatedAt);
+    return null;
+  }
   const response = await fetch("/api/playback-state", {
     method: "PUT",
     credentials: "include",

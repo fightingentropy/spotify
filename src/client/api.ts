@@ -134,6 +134,35 @@ function canSyncApiData(): boolean {
   return typeof navigator === "undefined" || navigator.onLine !== false;
 }
 
+function canReadApiThroughServiceWorkerCache(url: string): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false &&
+    "serviceWorker" in navigator &&
+    !!navigator.serviceWorker.controller &&
+    isPersistableApiUrl(url)
+  );
+}
+
+function offlineCacheMissMessage(url: string): string {
+  const path = getApiPath(url);
+  if (path === "/api/home") return "Your library has not been cached for offline use yet.";
+  if (path === "/api/search-index") return "Search has not been cached for offline use yet.";
+  if (path === "/api/library") return "Your library sidebar has not been cached for offline use yet.";
+  if (path === "/api/liked" || path === "/api/likes") return "Liked songs have not been cached for offline use yet.";
+  if (path.startsWith("/api/playlist/")) return "This playlist has not been cached for offline use yet.";
+  return "This data has not been cached for offline use yet.";
+}
+
+function apiErrorMessage(url: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : "Request failed";
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return offlineCacheMissMessage(url);
+  if (/offline|network and cache miss|failed to fetch|load failed|request timed out|abort/i.test(message)) {
+    return offlineCacheMissMessage(url);
+  }
+  return message;
+}
+
 function dispatchApiAuthRequired(url: string): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(API_AUTH_REQUIRED_EVENT, { detail: { url } }));
@@ -268,7 +297,7 @@ async function fetchApiData<T>(url: string): Promise<T> {
 
   const promise = (async () => {
     const headers = new Headers({ accept: "application/json" });
-    headers.set(API_REFRESH_HEADER, "1");
+    if (canSyncApiData()) headers.set(API_REFRESH_HEADER, "1");
     if (cached?.etag && cached.data !== undefined) headers.set("if-none-match", cached.etag);
 
     const response = await fetchWithTimeout(url, {
@@ -280,8 +309,9 @@ async function fetchApiData<T>(url: string): Promise<T> {
       return writeApiCache(url, cached.data, cached.etag ?? null);
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; offline?: boolean };
       if (response.status === 401) dispatchApiAuthRequired(url);
+      if (payload.offline) throw new Error(offlineCacheMissMessage(url));
       throw new Error(payload.error || `Request failed with ${response.status}`);
     }
     return writeApiCache(url, (await response.json()) as T, response.headers.get("etag"));
@@ -402,9 +432,9 @@ export function useApiData<T>(
         setLoading(false);
       }
 
-      if (!canSyncApiData()) {
+      if (!canSyncApiData() && !(cachedData === undefined && canReadApiThroughServiceWorkerCache(url))) {
         if (cachedData === undefined && !canReuseCurrentData) {
-          setError("You're offline and this data has not been cached yet.");
+          setError(offlineCacheMissMessage(url));
         }
         setLoading(false);
         return;
@@ -422,9 +452,7 @@ export function useApiData<T>(
         if (!cancelled) {
           setError(
             cachedData === undefined && !canReuseCurrentData
-              ? err instanceof Error
-                ? err.message
-                : "Request failed"
+              ? apiErrorMessage(url, err)
               : null,
           );
         }

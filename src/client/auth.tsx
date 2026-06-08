@@ -97,6 +97,10 @@ function warmProfileImage(imageUrl: string | null | undefined): void {
   })();
 }
 
+function isKnownOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
 function readLocalOfflineAuthUser(): AuthUser | null {
   if (typeof window === "undefined") return null;
   try {
@@ -134,6 +138,11 @@ function writeCachedAuthUser(user: AuthUser | null, options?: { signedOut?: bool
   } catch {}
 }
 
+function initialAuthStatus(user: AuthUser | null): AuthContextValue["status"] {
+  if (user) return "authenticated";
+  return isKnownOffline() ? "unauthenticated" : "loading";
+}
+
 function clearServiceWorkerApiCache(): void {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
   const message = { type: "CLEAR_RUNTIME_CACHE" };
@@ -169,10 +178,16 @@ async function fetchSession(): Promise<Response> {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [initialUser] = useState<AuthUser | null>(() => readCachedAuthUser());
   const [user, setUser] = useState<AuthUser | null>(initialUser);
-  const [status, setStatus] = useState<AuthContextValue["status"]>("loading");
+  const [status, setStatus] = useState<AuthContextValue["status"]>(() => initialAuthStatus(initialUser));
   const userIdRef = useRef<string | null>(initialUser?.id ?? null);
 
   const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    if (isKnownOffline()) {
+      const cachedUser = readCachedAuthUser();
+      setUser(cachedUser);
+      setStatus(cachedUser ? "authenticated" : "unauthenticated");
+      return;
+    }
     if (options?.showLoading) setStatus("loading");
     try {
       const response = await fetchSession();
@@ -199,6 +214,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOnline = () => {
+      void refresh();
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
   }, [refresh]);
 
   useEffect(() => {

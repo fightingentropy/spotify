@@ -18,7 +18,10 @@ import { resolveNativeApiUrl } from "@/lib/song-utils";
 import {
   fetchServerPlaybackState,
   getPlaybackDeviceId,
+  clearPlaybackStatePendingSync,
+  markPlaybackStatePendingSync,
   readLocalPlaybackState,
+  readPlaybackStatePendingSyncUpdatedAt,
   removeLocalPlaybackState,
   writeLocalPlaybackState,
   writeServerPlaybackState,
@@ -736,7 +739,7 @@ function PlayerBar(): React.ReactElement | null {
     if (!authSettled || restoredPlayerStateRef.current) return;
     restoredPlayerStateRef.current = true;
     let cancelled = false;
-    const localState = readLocalPlaybackState();
+	    const localState = readLocalPlaybackState();
     const scopedLocalState =
       localState && normalizeOfflineAccountScope(localState.accountScope) === accountScope
         ? localState
@@ -757,6 +760,7 @@ function PlayerBar(): React.ReactElement | null {
       if (serverState && serverState.updatedAt >= localUpdatedAt) {
         applyPlaybackStateSnapshot(serverState);
         lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(serverState);
+        clearPlaybackStatePendingSync();
         playbackSyncReadyRef.current = true;
         return;
       }
@@ -772,10 +776,15 @@ function PlayerBar(): React.ReactElement | null {
           if (acceptedState && acceptedState.updatedAt > localStateToPublish.updatedAt) {
             applyPlaybackStateSnapshot(acceptedState);
             lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(acceptedState);
-          } else {
+            clearPlaybackStatePendingSync();
+          } else if (acceptedState) {
             lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(localStateToPublish);
+            clearPlaybackStatePendingSync();
+          } else {
+            markPlaybackStatePendingSync(localStateToPublish.updatedAt);
           }
         } catch {
+          markPlaybackStatePendingSync(localStateToPublish.updatedAt);
           lastSyncedPlaybackStateSignatureRef.current = "";
         }
       }
@@ -1042,10 +1051,18 @@ function PlayerBar(): React.ReactElement | null {
       if (acceptedState && acceptedState.updatedAt > state.updatedAt) {
         applyPlaybackStateSnapshot(acceptedState);
         lastSyncedPlaybackStateSignatureRef.current = playbackStateSyncSignature(acceptedState);
+        clearPlaybackStatePendingSync();
         return;
       }
-      lastSyncedPlaybackStateSignatureRef.current = stateSignature;
-    } catch {}
+      if (acceptedState) {
+        lastSyncedPlaybackStateSignatureRef.current = stateSignature;
+        clearPlaybackStatePendingSync();
+      } else {
+        markPlaybackStatePendingSync(state.updatedAt);
+      }
+    } catch {
+      markPlaybackStatePendingSync(state.updatedAt);
+    }
   }, [applyPlaybackStateSnapshot, buildPlaybackStateSnapshot]);
 
   const schedulePlaybackStateSync = useCallback((delayMs = 1_000) => {
@@ -1058,6 +1075,45 @@ function PlayerBar(): React.ReactElement | null {
       void publishPlaybackState();
     }, delayMs);
   }, [publishPlaybackState]);
+
+  const flushPendingPlaybackState = useCallback(async () => {
+    if (!authSettled || !playbackSyncReadyRef.current) return;
+    const pendingUpdatedAt = readPlaybackStatePendingSyncUpdatedAt();
+    if (!pendingUpdatedAt) return;
+    const localState = readLocalPlaybackState();
+    if (!localState || normalizeOfflineAccountScope(localState.accountScope) !== accountScope) {
+      clearPlaybackStatePendingSync();
+      return;
+    }
+    try {
+      const acceptedState = await writeServerPlaybackState(localState);
+      if (!acceptedState) {
+        markPlaybackStatePendingSync(localState.updatedAt);
+        return;
+      }
+      clearPlaybackStatePendingSync();
+      const localSignature = playbackStateSyncSignature(localState);
+      lastSyncedPlaybackStateSignatureRef.current =
+        acceptedState.updatedAt > localState.updatedAt
+          ? playbackStateSyncSignature(acceptedState)
+          : localSignature;
+      if (acceptedState.updatedAt > localState.updatedAt) {
+        applyPlaybackStateSnapshot(acceptedState);
+      }
+    } catch {
+      markPlaybackStatePendingSync(localState.updatedAt);
+    }
+  }, [accountScope, applyPlaybackStateSnapshot, authSettled]);
+
+  useEffect(() => {
+    if (!authSettled) return;
+    const handleOnline = () => {
+      void flushPendingPlaybackState();
+    };
+    window.addEventListener("online", handleOnline);
+    void flushPendingPlaybackState();
+    return () => window.removeEventListener("online", handleOnline);
+  }, [authSettled, flushPendingPlaybackState]);
 
   useEffect(() => {
     if (!currentSong) return;

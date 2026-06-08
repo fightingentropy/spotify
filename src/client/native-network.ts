@@ -1,8 +1,8 @@
 "use client";
 
 import { Capacitor } from "@capacitor/core";
+import { rewriteNativeApiUrl } from "@/lib/native-api";
 
-const REMOTE_ORIGIN = "https://spotify.fightingentropy.org";
 let installed = false;
 
 function isNative(): boolean {
@@ -14,14 +14,7 @@ function isNative(): boolean {
 }
 
 function rewriteApiUrl(value: string): string {
-  if (!isNative() || /^(blob:|data:|file:)/i.test(value)) return value;
-  try {
-    const url = new URL(value, window.location.href);
-    if (url.pathname.startsWith("/api/")) {
-      return `${REMOTE_ORIGIN}${url.pathname}${url.search}${url.hash}`;
-    }
-  } catch {}
-  return value;
+  return isNative() ? rewriteNativeApiUrl(value) : value;
 }
 
 function rewriteFetchInput(input: RequestInfo | URL): RequestInfo | URL {

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-import { CheckCircle2, Database, HardDrive, RefreshCw, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, CheckCircle2, Database, HardDrive, RefreshCw, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
+import { readOfflineDiagnostics, type OfflineDiagnostics } from "@/client/offline-diagnostics";
 import { formatBytes, useOfflineStore } from "@/client/offline";
 
 export default function OfflineSettings() {
@@ -25,10 +26,25 @@ export default function OfflineSettings() {
   const verifyDownloads = useOfflineStore((state) => state.verifyDownloads);
   const syncMutations = useOfflineStore((state) => state.syncMutations);
   const refreshStorage = useOfflineStore((state) => state.refreshStorage);
+  const [diagnostics, setDiagnostics] = useState<OfflineDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
 
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  const refreshDiagnostics = async () => {
+    setDiagnosticsLoading(true);
+    try {
+      setDiagnostics(await readOfflineDiagnostics());
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshDiagnostics();
+  }, []);
 
   const downloads = Object.values(records);
   const downloaded = downloads.filter((record) => record.status === "downloaded").length;
@@ -67,6 +83,13 @@ export default function OfflineSettings() {
     if (!window.confirm("Clear all offline downloads from this device?")) return;
     void clearDownloads();
   };
+  const shellCaches = diagnostics?.caches.filter((cache) => /-(shell|static)$|app-assets/.test(cache.name)) ?? [];
+  const runtimeCaches = diagnostics?.caches.filter((cache) => cache.name.endsWith("-runtime")) ?? [];
+  const mediaCaches = diagnostics?.caches.filter((cache) => /media|playback/.test(cache.name)) ?? [];
+  const shellEntries = shellCaches.reduce((total, cache) => total + cache.entries, 0);
+  const runtimeEntries = runtimeCaches.reduce((total, cache) => total + cache.entries, 0);
+  const mediaEntries = mediaCaches.reduce((total, cache) => total + cache.entries, 0);
+  const mediaKnownBytes = mediaCaches.reduce((total, cache) => total + (cache.estimatedBytes ?? 0), 0);
 
   return (
     <section className="rounded-lg border border-white/[0.12] bg-white/[0.04] p-4">
@@ -167,7 +190,10 @@ export default function OfflineSettings() {
         </button>
         <button
           type="button"
-          onClick={() => void refreshStorage()}
+          onClick={() => {
+            void refreshStorage();
+            void refreshDiagnostics();
+          }}
           className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white"
         >
           <RefreshCw size={16} />
@@ -189,6 +215,84 @@ export default function OfflineSettings() {
           <Trash2 size={16} />
           Clear downloads
         </button>
+      </div>
+
+      <div className="mt-5 border-t border-white/[0.1] pt-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-white/[0.86]">
+            <Activity size={16} />
+            Diagnostics
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshDiagnostics()}
+            disabled={diagnosticsLoading}
+            className="grid h-9 w-9 place-items-center rounded-full bg-white/[0.08] text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white disabled:cursor-wait disabled:opacity-60"
+            aria-label="Refresh offline diagnostics"
+            title="Refresh offline diagnostics"
+          >
+            <RefreshCw size={15} className={diagnosticsLoading ? "animate-spin" : undefined} />
+          </button>
+        </div>
+        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+          <div className="rounded-md bg-black/20 p-3">
+            <dt className="text-white/[0.55]">App shell</dt>
+            <dd className="mt-1 font-medium">
+              {diagnostics
+                ? `${shellEntries} cached ${shellEntries === 1 ? "asset" : "assets"}`
+                : "Checking"}
+            </dd>
+          </div>
+          <div className="rounded-md bg-black/20 p-3">
+            <dt className="text-white/[0.55]">Service worker</dt>
+            <dd className="mt-1 font-medium">
+              {diagnostics?.serviceWorker.controlled
+                ? "Controlling"
+                : diagnostics?.serviceWorker.supported
+                  ? diagnostics.serviceWorker.registrationState ?? "Registered"
+                  : "Unavailable"}
+            </dd>
+          </div>
+          <div className="rounded-md bg-black/20 p-3">
+            <dt className="text-white/[0.55]">API snapshots</dt>
+            <dd className="mt-1 font-medium">
+              {diagnostics?.indexedDb.apiSnapshots == null
+                ? "Unknown"
+                : diagnostics.indexedDb.apiSnapshots}
+              {runtimeEntries > 0 ? ` · ${runtimeEntries} SW` : ""}
+            </dd>
+          </div>
+          <div className="rounded-md bg-black/20 p-3">
+            <dt className="text-white/[0.55]">Media cache</dt>
+            <dd className="mt-1 font-medium">
+              {mediaEntries} {mediaEntries === 1 ? "entry" : "entries"}
+              {mediaKnownBytes > 0 ? ` · ${formatBytes(mediaKnownBytes)}` : ""}
+            </dd>
+          </div>
+          <div className="rounded-md bg-black/20 p-3">
+            <dt className="text-white/[0.55]">Offline database</dt>
+            <dd className="mt-1 font-medium">
+              {diagnostics?.indexedDb.error
+                ? "Needs attention"
+                : diagnostics?.indexedDb.available
+                  ? `${diagnostics.indexedDb.downloads ?? 0} downloads · ${diagnostics.indexedDb.mutations ?? 0} mutations`
+                  : "Unavailable"}
+            </dd>
+          </div>
+          <div className="rounded-md bg-black/20 p-3">
+            <dt className="text-white/[0.55]">Playback sync</dt>
+            <dd className="mt-1 font-medium">
+              {diagnostics?.playbackState.pendingSync
+                ? "Pending"
+                : diagnostics?.playbackState.saved
+                  ? "Saved"
+                  : "Empty"}
+            </dd>
+          </div>
+        </dl>
+        {diagnostics?.indexedDb.error ? (
+          <div className="mt-3 text-sm text-amber-300">{diagnostics.indexedDb.error}</div>
+        ) : null}
       </div>
     </section>
   );

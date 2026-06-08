@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v46";
+const CACHE_VERSION = "spotify-v47";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -51,6 +51,10 @@ function offlineJsonResponse(message = "You're offline and this data has not bee
   });
 }
 
+function isKnownOffline() {
+  return self.navigator && self.navigator.onLine === false;
+}
+
 function isRetainedVersionedAppCache(key) {
   const match = key.match(/^spotify-v(\d+)-(shell|static|runtime)$/);
   if (!match) return false;
@@ -93,6 +97,12 @@ async function cacheFirst(request, cacheName, fallbackResponse) {
 }
 
 async function networkFirst(request, cacheName, fallbackResponse) {
+  if (isKnownOffline()) {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    if (fallbackResponse) return fallbackResponse;
+  }
+
   try {
     const response = await fetch(request);
     await putCache(cacheName, request, response);
@@ -107,6 +117,10 @@ async function networkFirst(request, cacheName, fallbackResponse) {
 
 async function staleWhileRevalidate(event, request, cacheName, fallbackResponse) {
   const cached = await caches.match(request);
+  if (isKnownOffline()) {
+    if (cached) return cached;
+    if (fallbackResponse) return fallbackResponse;
+  }
   const refreshed = refreshCache(cacheName, request);
   event.waitUntil(refreshed.then(() => undefined));
   if (cached) {
@@ -404,8 +418,30 @@ async function mediaResponse(request) {
   }
 }
 
+async function cachedNavigationResponse(cache, request) {
+  return (
+    (await cache.match(request, { ignoreSearch: true })) ||
+    (await cache.match("/", { ignoreSearch: true })) ||
+    (await caches.match(request, { ignoreSearch: true })) ||
+    (await caches.match("/", { ignoreSearch: true }))
+  );
+}
+
+function offlineNavigationResponse() {
+  return new Response("<!doctype html><title>Spotify</title><body>Spotify is offline.</body>", {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+    status: 503,
+  });
+}
+
 async function navigationResponse(request) {
   const cache = await caches.open(SHELL_CACHE);
+
+  if (isKnownOffline()) {
+    const cached = await cachedNavigationResponse(cache, request);
+    if (cached) return cached;
+    return offlineNavigationResponse();
+  }
 
   try {
     const response = await fetch(request, { cache: "reload" });
@@ -413,16 +449,9 @@ async function navigationResponse(request) {
     await putCache(SHELL_CACHE, request, response.clone());
     return response;
   } catch {
-    const cached =
-      (await cache.match(request, { ignoreSearch: true })) ||
-      (await cache.match("/", { ignoreSearch: true })) ||
-      (await caches.match(request, { ignoreSearch: true })) ||
-      (await caches.match("/", { ignoreSearch: true }));
+    const cached = await cachedNavigationResponse(cache, request);
     if (cached) return cached;
-    return new Response("<!doctype html><title>Spotify</title><body>Spotify is offline.</body>", {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      status: 503,
-    });
+    return offlineNavigationResponse();
   }
 }
 
