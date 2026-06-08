@@ -683,7 +683,9 @@ async function sendVerificationEmail(
   const binding = emailBinding(env);
   if (!binding) return false;
   const from = envString(env, "EMAIL_FROM") || DEFAULT_EMAIL_FROM;
-  const link = `${publicAppOrigin(env, requestUrl)}/api/auth/verify?token=${encodeURIComponent(rawToken)}`;
+  // Path-based token (no "=" query param): a raw "=" in the URL gets mangled by
+  // quoted-printable email encoding, corrupting the link. A hex path segment is safe.
+  const link = `${publicAppOrigin(env, requestUrl)}/api/auth/verify/${rawToken}`;
   const subject = "Verify your email";
   const text = `Welcome to Spotify.\n\nConfirm your email address by opening this link:\n${link}\n\nThis link expires in 24 hours. If you did not create this account, you can ignore this email.`;
   const html = `<div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
@@ -2803,7 +2805,7 @@ app.post("/api/auth/signin", async (c) => {
   if (!email || !password) return jsonError("Email and password are required", 400);
   const db = c.get("db");
   const users = await db<UserRow>`
-    SELECT "id", "email", "name", "image", "passwordHash"
+    SELECT "id", "email", "name", "image", "passwordHash", "emailVerified"
     FROM "User"
     WHERE "email" = ${email}
     LIMIT 1
@@ -2842,11 +2844,12 @@ app.post("/api/auth/signout", async (c) => {
   return new Response(null, { status: 204 });
 });
 
-app.get("/api/auth/verify", async (c) => {
+app.get("/api/auth/verify/:token?", async (c) => {
   const db = c.get("db");
   const origin = publicAppOrigin(c.env, c.req.url);
   const redirectTo = (status: string) => c.redirect(`${origin}/?verified=${status}`, 302);
-  const raw = toStringValue(c.req.query("token"));
+  // Prefer the path token; keep query support for any older links already sent.
+  const raw = toStringValue(c.req.param("token")) || toStringValue(c.req.query("token"));
   if (!raw) return redirectTo("invalid");
   const tokenHash = await sha256Hex(raw);
   const rows = await db<{ identifier: string; expires: string }>`
