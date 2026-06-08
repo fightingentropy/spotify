@@ -86,7 +86,7 @@ const SongListItemComponent = function SongListItem({
         aria-pressed={isActiveAndPlaying}
         onClick={handlePlay}
         onFocus={() => warmPlaybackSong(resolvedSong, true)}
-        className="wf-pressable flex min-w-0 flex-1 items-center gap-3 rounded-md bg-transparent text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        className="wf-pressable flex min-w-0 flex-1 items-center gap-3 rounded-md bg-transparent text-left focus:outline-none"
       >
         <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded">
           <CoverImage

@@ -501,7 +501,7 @@ export default function HomePage() {
           aria-pressed={active && isPlaying}
           onClick={() => handlePlaySong(index)}
           onFocus={() => warmSongSoon(displaySong)}
-          className="wf-pressable col-span-2 grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-3 rounded-md bg-transparent text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] md:grid-cols-[3rem_minmax(0,1fr)] xl:grid-cols-[4.25rem_minmax(0,1fr)] xl:gap-4"
+          className="wf-pressable col-span-2 grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)] items-center gap-3 rounded-md bg-transparent text-left focus:outline-none md:grid-cols-[3rem_minmax(0,1fr)] xl:grid-cols-[4.25rem_minmax(0,1fr)] xl:gap-4"
         >
           <span
             className={cn(
