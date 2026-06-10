@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v47";
+const CACHE_VERSION = "spotify-v48";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -7,7 +7,6 @@ const MEDIA_CACHE = "spotify-media-v1";
 const PLAYBACK_CACHE = "spotify-playback-v1";
 const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, RUNTIME_CACHE, APP_ASSETS_CACHE, MEDIA_CACHE, PLAYBACK_CACHE]);
 const CURRENT_CACHE_VERSION_NUMBER = Number(CACHE_VERSION.match(/spotify-v(\d+)/)?.[1] || 0);
-const MAX_CACHED_RANGE_BLOB_BYTES = 64 * 1024 * 1024;
 const OFFLINE_PLAYBACK_SEARCH_PARAM = "spotify_offline";
 const API_REFRESH_HEADER = "x-spotify-api-refresh";
 const APP_CACHE_RETENTION_COUNT = 3;
@@ -302,24 +301,19 @@ function parseRangeHeader(rangeHeader, size) {
   return { start, end };
 }
 
-async function cachedRangeResponse(request, options = {}) {
+async function cachedRangeResponse(request) {
   const rangeHeader = request.headers.get("range");
   if (!rangeHeader) return null;
 
   const cached = await matchCachedMedia(request.url);
   if (!cached || !cached.ok) return null;
-  const contentLength = Number(cached.headers.get("content-length") || 0);
-  if (!Number.isFinite(contentLength) || contentLength <= 0) {
-    return null;
-  }
-  if (!options.ignoreSizeLimit && Number.isFinite(contentLength) && contentLength > MAX_CACHED_RANGE_BLOB_BYTES) {
-    return null;
-  }
 
+  // Cache API blobs are disk-backed and sliced lazily, so serving ranges this
+  // way stays cheap even for large hi-res audio files. Refusing to serve a
+  // range here makes the media non-seekable in Safari/iOS, which breaks both
+  // resume position and the seek controls while offline.
   const blob = await cached.blob();
-  if (!options.ignoreSizeLimit && blob.size > MAX_CACHED_RANGE_BLOB_BYTES) {
-    return null;
-  }
+  if (blob.size <= 0) return null;
   const range = parseRangeHeader(rangeHeader, blob.size);
   if (!range) return null;
 
@@ -416,14 +410,14 @@ async function clearRuntimeCaches() {
 async function mediaResponse(request) {
   const url = new URL(request.url);
   if (url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1") {
-    const cached = await matchCachedMedia(request.url);
+    const cached = await cachedFullMediaResponse(request);
     if (cached) return cached;
   }
 
   try {
     return await fetch(request);
   } catch {
-    const cached = await matchCachedMedia(request.url);
+    const cached = await cachedFullMediaResponse(request);
     if (cached) return cached;
     throw new Error("network and cached media miss");
   }

@@ -1161,11 +1161,19 @@ function PlayerBar(): React.ReactElement | null {
       saveCurrentPlaybackStateToLocal();
     }
 
+    function saveStateWhenHidden() {
+      // iOS never fires pagehide/beforeunload when a backgrounded PWA is
+      // killed from the app switcher, so persist on backgrounding too.
+      if (document.visibilityState === "hidden") saveState();
+    }
+
     window.addEventListener("beforeunload", saveState);
     window.addEventListener("pagehide", saveState);
+    document.addEventListener("visibilitychange", saveStateWhenHidden);
     return () => {
       window.removeEventListener("beforeunload", saveState);
       window.removeEventListener("pagehide", saveState);
+      document.removeEventListener("visibilitychange", saveStateWhenHidden);
     };
   }, [publishPlaybackState, saveCurrentPlaybackStateToLocal]);
 

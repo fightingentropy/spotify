@@ -183,6 +183,42 @@ describe("service worker offline boot", () => {
     expect(runtime.fetchCalls).toEqual([]);
   });
 
+  test("serves 206 range responses for cached offline media so audio stays seekable", async () => {
+    const runtime = createRuntime();
+    const mediaCache = await runtime.caches.open("spotify-media-v1");
+    const bytes = new Uint8Array(1024 * 1024).fill(7);
+    // No content-length header: range serving must fall back to the blob size.
+    await mediaCache.put(`${runtime.origin}/api/files/audio/song-1.flac`, new Response(bytes, {
+      headers: { "content-type": "audio/flac" },
+    }));
+
+    const request = new Request(`${runtime.origin}/api/files/audio/song-1.flac?spotify_offline=1`, {
+      headers: { range: "bytes=100-199" },
+    });
+    const response = await dispatchFetch(runtime, request);
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe(`bytes 100-199/${bytes.byteLength}`);
+    expect(response.headers.get("content-length")).toBe("100");
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect((await response.arrayBuffer()).byteLength).toBe(100);
+    expect(runtime.fetchCalls).toEqual([]);
+  });
+
+  test("serves cached offline media with accept-ranges for non-range requests", async () => {
+    const runtime = createRuntime();
+    const mediaCache = await runtime.caches.open("spotify-media-v1");
+    await mediaCache.put(`${runtime.origin}/api/files/audio/song-2.mp3`, new Response(new Uint8Array(64), {
+      headers: { "content-type": "audio/mpeg", "content-length": "64" },
+    }));
+
+    const response = await dispatchFetch(runtime, new Request(`${runtime.origin}/api/files/audio/song-2.mp3?spotify_offline=1`));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(runtime.fetchCalls).toEqual([]);
+  });
+
   test("returns an offline JSON miss for uncached API data without touching network", async () => {
     const runtime = createRuntime();
     const response = await dispatchFetch(runtime, new Request(`${runtime.origin}/api/search-index?auth=user-1`));
