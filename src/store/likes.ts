@@ -63,10 +63,11 @@ function writeLocalLikedSongIds(likedSongIds: Record<string, true>): void {
 export const useLikesStore = create<LikesState>((set, get) => ({
   likedSongIds: readLocalLikedSongIds(),
   pending: {},
-  hydrated: true,
+  hydrated: false,
   mergeInitial: (ids) => {
     const list = Array.isArray(ids) ? ids : [];
     const current = get().likedSongIds;
+    const pending = get().pending;
     const next: Record<string, true> = {};
 
     for (const id of Object.keys(current)) {
@@ -76,6 +77,15 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     for (const id of list) {
       if (typeof id !== "string" || id.length === 0) continue;
       next[id] = true;
+    }
+
+    // Preserve in-flight optimistic likes: a pending id reflects an
+    // optimistic toggle the server list may not know about yet. Apply the
+    // optimistic direction (present in `current`) over the incoming list so
+    // the merge doesn't clobber a like/unlike that's still being saved.
+    for (const id of Object.keys(pending)) {
+      if (current[id]) next[id] = true;
+      else delete next[id];
     }
 
     const currentKeys = Object.keys(current);

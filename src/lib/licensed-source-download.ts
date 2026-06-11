@@ -9,6 +9,12 @@ import { fetchPublicHttpUrl } from "./safe-fetch";
 const DEFAULT_USER_AGENT = "spotify/1.0 (+https://spotify.fightingentropy.org)";
 const LICENSED_SOURCE_REQUEST_TIMEOUT_MS = 30_000;
 const LICENSED_SOURCE_MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+// A malicious DASH manifest can request billions of segments (e.g. a single
+// <S r="2000000000"/>) or an enormous zero-pad width; both blow up memory/CPU
+// before any byte is fetched. Cap the totals so manifest parsing is provably
+// bounded regardless of attacker input.
+const LICENSED_SOURCE_MAX_DASH_SEGMENTS = 5_000;
+const LICENSED_SOURCE_MAX_TEMPLATE_PAD_WIDTH = 12;
 
 // Caller- and provider-supplied stream headers are untrusted. Only forward a
 // small allowlist of innocuous request headers so a caller cannot inject
@@ -116,6 +122,49 @@ function assertMediaResponseSize(response: Response, maxBytes: number): void {
   }
 }
 
+// Read a response body into memory while enforcing a byte budget as bytes
+// arrive, so a response with an absent/NaN Content-Length (which would slip past
+// the header-only size check) still cannot exceed the budget. Aborts the stream
+// the moment the budget is crossed instead of buffering the whole body first.
+async function readBodyWithByteBudget(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (maxBytes < 0) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) {
+      throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+    }
+    return bytes;
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 function providerMetadata(payload: JsonObject, data: JsonObject, audio: JsonObject, stream: JsonObject): JsonObject {
   const metadata = {
     ...(toObject(payload.metadata) ?? {}),
@@ -183,7 +232,9 @@ async function fetchWithTimeout(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, {
-      redirect: "follow",
+      // Resolver calls expect the stream URL/JSON in the body, not via a 3xx, so
+      // don't auto-follow redirects out from under the SSRF guard.
+      redirect: "manual",
       ...init,
       signal: controller.signal,
     });
@@ -374,6 +425,12 @@ function substituteTemplate(template: string, values: Record<string, number | st
       const value = values[identifier];
       if (format) {
         const width = Number(format.slice(2, -1));
+        if (!Number.isFinite(width) || width > LICENSED_SOURCE_MAX_TEMPLATE_PAD_WIDTH) {
+          throw new LicensedSourceDownloadError(
+            "Licensed source DASH manifest uses an unreasonable template pad width",
+            502,
+          );
+        }
         return String(value).padStart(width, "0");
       }
       return String(value);
@@ -428,6 +485,11 @@ function segmentUrlsFromManifest(manifestXml: string, manifestUrl: string): stri
   if (!initialization || !media || !Number.isFinite(startNumber)) {
     throw new LicensedSourceDownloadError("Licensed source DASH manifest is missing segment URLs", 502);
   }
+  // startNumber is attacker-controlled and feeds the segment numbering; reject an
+  // out-of-range value before it can be used to inflate the loop bound below.
+  if (startNumber < 0 || startNumber > LICENSED_SOURCE_MAX_DASH_SEGMENTS) {
+    throw new LicensedSourceDownloadError("Licensed source DASH manifest uses an out-of-range startNumber", 502);
+  }
 
   const representation = chosenRepresentation(manifestXml);
   const baseUrl = manifestBaseUrl(manifestXml, manifestUrl);
@@ -454,8 +516,18 @@ function segmentUrlsFromManifest(manifestXml: string, manifestUrl: string): stri
     if (!Number.isFinite(repeat) || repeat < 0) {
       throw new LicensedSourceDownloadError("Licensed source DASH manifest uses unsupported open-ended segments", 502);
     }
+    // A single <S r="..."/> can request billions of segments. Reject any repeat
+    // count that would, on its own, exceed the overall cap before expanding it.
+    if (repeat > LICENSED_SOURCE_MAX_DASH_SEGMENTS) {
+      throw new LicensedSourceDownloadError("Licensed source DASH manifest requests too many segments", 502);
+    }
     if (explicitTime !== undefined) nextTime = Number(explicitTime);
     for (let i = 0; i <= repeat; i += 1) {
+      // Cap the cumulative segment count so a long run of <S> entries cannot
+      // grow the array without bound either.
+      if (segments.length >= LICENSED_SOURCE_MAX_DASH_SEGMENTS) {
+        throw new LicensedSourceDownloadError("Licensed source DASH manifest requests too many segments", 502);
+      }
       segments.push({ number: nextNumber, time: nextTime });
       nextNumber += 1;
       nextTime += duration;
@@ -522,12 +594,11 @@ export async function materializeLicensedSourceStream(
       headers: mediaRequestHeaders(stream.headers, userAgent),
     });
     if (!response.ok) throw new LicensedSourceDownloadError(`Licensed source segment returned ${response.status}`, response.status);
+    // A missing/NaN Content-Length would bypass a header-only pre-check, so the
+    // running byte budget is enforced while the body is read rather than after.
     assertMediaResponseSize(response, maxBytes - totalBytes);
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readBodyWithByteBudget(response, maxBytes - totalBytes);
     totalBytes += bytes.byteLength;
-    if (totalBytes > maxBytes) {
-      throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
-    }
     chunks.push(bytes);
   }
 

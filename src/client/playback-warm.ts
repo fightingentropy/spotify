@@ -176,6 +176,15 @@ export async function prefetchUpcomingPlayback(queue: PlayerSong[], currentIndex
   ).filter(sameOriginCacheableUrl);
 
   for (const url of audioUrls) {
+    // Route prefetch through the same dedupe set as warmPlaybackSong so a URL
+    // already warmed (or warmed recently) isn't refetched on every queue-identity
+    // change.
+    const resolved = resolveUrl(url);
+    const seenAt = warmPlaybackSeen.get(resolved);
+    const timestamp = now();
+    if (seenAt && timestamp - seenAt < PLAYBACK_WARM_DEDUPE_MS) continue;
+    sweepStalePlaybackSeen(timestamp);
+    warmPlaybackSeen.set(resolved, timestamp);
     await warmPlaybackUrl(url);
   }
   await Promise.all(sidecarUrls.map((url) => cacheSidecarUrl(url).catch(() => undefined)));

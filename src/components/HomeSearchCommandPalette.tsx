@@ -6,19 +6,15 @@ import { warmPlaybackSong } from "@/client/playback-warm";
 import { useApiData, withAccountScope, type SearchIndexPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { usePlayerStore } from "@/store/player";
-import type { PlayerSong } from "@/types/player";
 import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
+import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
 import { cn } from "@/lib/utils";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type HomeSearchCommandPaletteProps = {
   className?: string;
 };
-
-function normalizeSongPart(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
 
 export function HomeSearchCommandPalette({ className }: HomeSearchCommandPaletteProps) {
   const { user, status } = useAuth();
@@ -37,25 +33,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   );
   const songs = data.songs;
 
-  const dedupedSongs = useMemo(() => {
-    const unique = new Map<string, PlayerSong>();
-    for (const song of songs) {
-      const key = `${normalizeSongPart(song.title)}::${normalizeSongPart(song.artist)}`;
-      const current = unique.get(key);
-      if (!current) {
-        unique.set(key, song);
-        continue;
-      }
-      const currentTime = Date.parse(current.createdAt || "");
-      const nextTime = Date.parse(song.createdAt || "");
-      const a = Number.isFinite(currentTime) ? currentTime : 0;
-      const b = Number.isFinite(nextTime) ? nextTime : 0;
-      if (b >= a) {
-        unique.set(key, song);
-      }
-    }
-    return [...unique.values()];
-  }, [songs]);
+  const dedupedSongs = useMemo(() => dedupeSongsByTitleArtist(songs), [songs]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -78,6 +56,28 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
     if (!open) return;
     setQuery("");
     setActiveIndex(0);
+  }, [open]);
+
+  // Reset the active row whenever the result set changes (e.g. the query
+  // shrinks the list). Without this, activeIndex can point past the new
+  // results and Enter would no-op.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query]);
+
+  // Lock background scroll (body + the .wf-main scroll container) while the
+  // palette is open so the page underneath doesn't move.
+  useEffect(() => {
+    if (!open) return;
+    const main = document.querySelector<HTMLElement>(".wf-main");
+    const prevBody = document.body.style.overflow;
+    const prevMain = main?.style.overflow ?? "";
+    document.body.style.overflow = "hidden";
+    if (main) main.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevBody;
+      if (main) main.style.overflow = prevMain;
+    };
   }, [open]);
 
   useEffect(() => {
@@ -190,7 +190,13 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
               <input
                 ref={inputRef}
                 type="search"
+                role="combobox"
                 aria-label="Search songs"
+                aria-expanded={resolvedResults.length > 0}
+                aria-controls="home-search-results"
+                aria-activedescendant={
+                  resolvedResults.length > 0 ? `home-search-option-${activeIndex}` : undefined
+                }
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
@@ -204,7 +210,12 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
               </kbd>
             </div>
 
-            <div className="max-h-[60vh] overflow-y-auto p-2">
+            <div
+              id="home-search-results"
+              role="listbox"
+              aria-label="Search results"
+              className="max-h-[60vh] overflow-y-auto p-2"
+            >
               {loading ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
                   Loading songs...
@@ -225,6 +236,9 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                 resolvedResults.map((song, index) => (
                   <button
                     key={song.id}
+                    id={`home-search-option-${index}`}
+                    role="option"
+                    aria-selected={index === activeIndex}
                     type="button"
                     onPointerEnter={() => warmPlaybackSong(song, true)}
                     onFocus={() => warmPlaybackSong(song, true)}

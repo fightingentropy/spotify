@@ -6,36 +6,19 @@ import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
+import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type MobileSearchProps = {
   songs: PlayerSong[];
 };
 
-function normalizeSongPart(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
 export default function MobileSearch({ songs }: MobileSearchProps) {
   const [query, setQuery] = useState("");
   const setQueue = usePlayerStore((state) => state.setQueue);
   const offlineRecords = useOfflineStore((state) => state.records);
 
-  const dedupedSongs = useMemo(() => {
-    const unique = new Map<string, PlayerSong>();
-    for (const song of songs) {
-      const key = `${normalizeSongPart(song.title)}::${normalizeSongPart(song.artist)}`;
-      const current = unique.get(key);
-      if (!current) {
-        unique.set(key, song);
-        continue;
-      }
-      const currentTime = Date.parse(current.createdAt || "");
-      const nextTime = Date.parse(song.createdAt || "");
-      if (nextTime >= currentTime) unique.set(key, song);
-    }
-    return [...unique.values()];
-  }, [songs]);
+  const dedupedSongs = useMemo(() => dedupeSongsByTitleArtist(songs), [songs]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();

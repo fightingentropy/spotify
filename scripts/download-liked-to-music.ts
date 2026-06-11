@@ -4,8 +4,10 @@ import { mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { parseFile } from "music-metadata";
+import { createWriteStream } from "node:fs";
 import { resolveAmazonStreamUrl, type AmazonStream } from "../src/lib/amazon-download";
 import { resolveQobuzStreamUrl } from "../src/lib/qobuz-download";
+import { fetchPublicHttpUrl } from "../src/lib/safe-fetch";
 import { fetchSpotifyLikedTracks, type SpotifyBatchTrack } from "../src/lib/spotify-pathfinder";
 import { resolveTidalStreamUrl } from "../src/lib/tidal-download";
 
@@ -32,6 +34,72 @@ type Options = {
 
 const AUDIO_EXTENSIONS = new Set([".flac"]);
 const execFileAsync = promisify(execFile);
+// Cap a single downloaded audio/segment file so a hostile or runaway stream
+// can't fill the disk. Matches the Worker/Mac-mini licensed-source ceiling.
+const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+
+// Stream an already-fetched Response body to disk while enforcing a byte cap, so
+// a hostile/runaway stream (incl. one with a missing/NaN Content-Length) can't
+// fill the disk or be buffered whole in memory via arrayBuffer().
+async function writeResponseBodyToFile(
+  response: Response,
+  destPath: string,
+  maxBytes = MAX_DOWNLOAD_BYTES,
+): Promise<void> {
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Audio file exceeds ${maxBytes} byte limit`);
+  }
+  if (!response.body) {
+    throw new Error("Audio server returned an empty body");
+  }
+
+  const out = createWriteStream(destPath);
+  const reader = response.body.getReader();
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`Audio file exceeds ${maxBytes} byte limit`);
+      }
+      await new Promise<void>((resolve, reject) => {
+        out.write(value, (error) => (error ? reject(error) : resolve()));
+      });
+    }
+  } catch (error) {
+    out.destroy();
+    await unlink(destPath).catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock?.();
+  }
+  await new Promise<void>((resolve, reject) => {
+    out.end((error?: Error | null) => (error ? reject(error) : resolve()));
+  });
+}
+
+// Fetch a resolved provider stream URL through the SSRF guard (fetchPublicHttpUrl
+// blocks private/LAN hosts and re-validates each redirect hop) and stream the
+// body to disk with a byte cap.
+async function downloadStreamToFile(
+  streamUrl: string,
+  destPath: string,
+  headers: Record<string, string>,
+  maxBytes = MAX_DOWNLOAD_BYTES,
+): Promise<void> {
+  const response = await fetchPublicHttpUrl(new URL(streamUrl), { headers }, 120_000);
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Audio server returned ${response.status}`);
+  }
+  await writeResponseBodyToFile(response, destPath, maxBytes);
+}
 
 function parseArgs(argv: string[]): Options {
   const options: Options = {
@@ -350,7 +418,9 @@ async function writeResponseAudioToFlac(
   const tempName = tempFileBase(track);
   const tempPath = join(options.musicDir, sourceExt === ".flac" ? `${tempName}.flac` : `${tempName}${sourceExt || ".audio"}`);
   const tempFlacPath = sourceExt === ".flac" ? tempPath : join(options.musicDir, `${tempName}.flac`);
-  await Bun.write(tempPath, await response.arrayBuffer());
+  // Stream the body to disk with a byte cap instead of buffering it all in
+  // memory via arrayBuffer().
+  await writeResponseBodyToFile(response, tempPath);
   try {
     if (sourceExt !== ".flac") {
       await transcodeToFlac(tempPath, tempFlacPath, track);
@@ -374,14 +444,6 @@ async function writeAmazonStreamToFlac(
   track: SpotifyTrack,
   targetPath: string,
 ): Promise<void> {
-  const response = await fetch(stream.streamUrl, {
-    redirect: "follow",
-    headers: stream.headers,
-  });
-  if (!response.ok) {
-    throw new Error(`Amazon audio server returned ${response.status}`);
-  }
-
   const tempName = tempFileBase(track);
   const encryptedPath = join(options.musicDir, `${tempName}.amazon.enc`);
   const sourceExt = extensionFromAmazonCodec(stream.codec);
@@ -390,7 +452,9 @@ async function writeAmazonStreamToFlac(
     : encryptedPath;
   const tempFlacPath = sourceExt === ".flac" ? sourcePath : join(options.musicDir, `${tempName}.flac`);
 
-  await Bun.write(encryptedPath, await response.arrayBuffer());
+  // Route the provider stream through the SSRF guard and stream it to disk with
+  // a byte cap rather than buffering the whole file via arrayBuffer().
+  await downloadStreamToFile(stream.streamUrl, encryptedPath, stream.headers);
   try {
     if (stream.decryptionKey) {
       await decryptAudio(encryptedPath, sourcePath, stream.decryptionKey);
@@ -534,14 +598,21 @@ async function fetchDirectProviderAudio(
     provider ? { ...options, provider } : options,
     track,
   );
-  const response = await fetch(streamUrl, {
-    redirect: "follow",
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+  // Route the resolved provider URL through the SSRF guard (blocks private/LAN
+  // hosts, re-validates each redirect hop) instead of a plain follow-redirect
+  // fetch. The body is streamed to disk with a cap by writeResponseAudioToFlac.
+  const response = await fetchPublicHttpUrl(
+    new URL(streamUrl),
+    {
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      },
     },
-  });
+    120_000,
+  );
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(`Audio server returned ${response.status}`);
   }
   return response;

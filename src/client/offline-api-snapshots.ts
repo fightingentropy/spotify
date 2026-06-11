@@ -1,5 +1,10 @@
 "use client";
 
+// The IndexedDB schema + open/upgrade path is owned by offline.ts. Importing the
+// shared opener (and the API snapshot store name) here keeps a single source of
+// truth so a DB_VERSION bump can never desync the two modules.
+import { API_SNAPSHOT_STORE, openOfflineDb } from "@/client/offline";
+
 export type OfflineApiSnapshot<T = unknown> = {
   url: string;
   data: T;
@@ -8,67 +13,8 @@ export type OfflineApiSnapshot<T = unknown> = {
   updatedAt: number;
 };
 
-const DB_NAME = "spotify_offline_v1";
-const DB_VERSION = 3;
-const DOWNLOAD_STORE = "downloads_v2";
-const API_SNAPSHOT_STORE = "api_snapshots";
-const MUTATION_STORE = "mutations";
-const DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT = "accountScope_updatedAt";
-const DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT = "accountScope_status_updatedAt";
-
-let dbPromise: Promise<IDBDatabase> | null = null;
-
 function hasIndexedDb(): boolean {
   return typeof indexedDB !== "undefined";
-}
-
-function ensureDownloadIndexes(store: IDBObjectStore): void {
-  if (!store.indexNames.contains(DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT)) {
-    store.createIndex(DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT, ["accountScope", "updatedAt"]);
-  }
-  if (!store.indexNames.contains(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT)) {
-    store.createIndex(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT, ["accountScope", "status", "updatedAt"]);
-  }
-}
-
-function openOfflineDb(): Promise<IDBDatabase> {
-  if (!hasIndexedDb()) return Promise.reject(new Error("IndexedDB is not available"));
-  dbPromise ??= new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      let downloadStore: IDBObjectStore | null = null;
-      if (!db.objectStoreNames.contains(DOWNLOAD_STORE)) {
-        downloadStore = db.createObjectStore(DOWNLOAD_STORE, { keyPath: ["accountScope", "songId"] });
-      } else {
-        downloadStore = request.transaction?.objectStore(DOWNLOAD_STORE) ?? null;
-      }
-      if (downloadStore) ensureDownloadIndexes(downloadStore);
-      if (!db.objectStoreNames.contains(API_SNAPSHOT_STORE)) {
-        db.createObjectStore(API_SNAPSHOT_STORE, { keyPath: "url" });
-      }
-      if (!db.objectStoreNames.contains(MUTATION_STORE)) {
-        db.createObjectStore(MUTATION_STORE, { keyPath: "id" });
-      }
-    };
-    request.onsuccess = () => {
-      const db = request.result;
-      db.onversionchange = () => {
-        db.close();
-        dbPromise = null;
-      };
-      resolve(db);
-    };
-    request.onerror = () => {
-      dbPromise = null;
-      reject(request.error ?? new Error("Failed to open offline database"));
-    };
-    request.onblocked = () => {
-      dbPromise = null;
-      reject(new Error("Offline database upgrade is blocked by another tab"));
-    };
-  });
-  return dbPromise;
 }
 
 async function idbGet<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {

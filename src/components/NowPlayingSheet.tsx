@@ -69,6 +69,8 @@ export default function NowPlayingSheet({
 
   const [showLyrics, setShowLyrics] = useState(false);
   const touchStartYRef = useRef<number | null>(null);
+  const swipeDismissAllowedRef = useRef(false);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const offlineRecords = useOfflineStore((state) => state.records);
   const lyricsSong = useMemo(
@@ -123,13 +125,24 @@ export default function NowPlayingSheet({
 
   function handleTouchStart(event: TouchEvent<HTMLElement>) {
     touchStartYRef.current = event.touches[0]?.clientY ?? null;
+    // Only allow swipe-to-dismiss when the scroll container is already at the
+    // top (so a downward drag isn't actually scrolling content) and the touch
+    // didn't start on the seek/range input (so dragging the scrubber down can't
+    // close the sheet).
+    const target = event.target;
+    const startedOnRange =
+      target instanceof HTMLInputElement && target.type.toLowerCase() === "range";
+    const atTop = (scrollContainerRef.current?.scrollTop ?? 0) <= 0;
+    swipeDismissAllowedRef.current = atTop && !startedOnRange;
   }
 
   function handleTouchEnd(event: TouchEvent<HTMLElement>) {
     const startY = touchStartYRef.current;
     const endY = event.changedTouches[0]?.clientY;
+    const dismissAllowed = swipeDismissAllowedRef.current;
     touchStartYRef.current = null;
-    if (startY == null || endY == null) return;
+    swipeDismissAllowedRef.current = false;
+    if (!dismissAllowed || startY == null || endY == null) return;
     if (endY - startY > 80) {
       onClose();
     }
@@ -166,7 +179,10 @@ export default function NowPlayingSheet({
         )}
         data-open={open ? "true" : "false"}
       >
-        <div className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0">
+        <div
+          ref={scrollContainerRef}
+          className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0"
+        >
           <div className="p-4 sm:p-6 min-h-full flex flex-col">
             <div className="flex items-center justify-between mb-4 lg:mb-4">
               <button

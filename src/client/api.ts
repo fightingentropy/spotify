@@ -156,8 +156,15 @@ function offlineCacheMissMessage(url: string): string {
 
 function apiErrorMessage(url: string, error: unknown): string {
   const message = error instanceof Error ? error.message : "Request failed";
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return offlineCacheMissMessage(url);
-  if (/offline|network and cache miss|failed to fetch|load failed|request timed out|abort/i.test(message)) {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (offline) return offlineCacheMissMessage(url);
+  // A timeout/abort while we still appear online is not an offline-cache miss —
+  // the request just took too long. Surface a generic retry message instead of
+  // the misleading "not cached for offline use yet" copy.
+  if (/request timed out|abort/i.test(message)) {
+    return "Taking too long to load — please retry.";
+  }
+  if (/offline|network and cache miss|failed to fetch|load failed/i.test(message)) {
     return offlineCacheMissMessage(url);
   }
   return message;

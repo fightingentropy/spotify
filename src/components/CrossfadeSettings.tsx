@@ -1,24 +1,15 @@
 "use client";
 
-import { useEffect } from "react";
 import { usePlayerStore } from "@/store/player";
 
 export default function CrossfadeSettings() {
+  // Crossfade settings are hydrated once by the player store's lazy initializer
+  // (the single source of truth reading the stored crossfade keys), so this
+  // component just reads from / writes to the store.
   const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
   const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
   const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
   const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
-
-  // Hydrate settings from localStorage on client to avoid SSR mismatch
-  useEffect(() => {
-    try {
-      const storedEnabled = localStorage.getItem("spotify_crossfade_enabled");
-      const enabled = storedEnabled === null ? true : storedEnabled === "1";
-      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("spotify_crossfade_seconds") ?? 4)));
-      setCrossfadeEnabled(enabled);
-      setCrossfadeSeconds(secs);
-    } catch {}
-  }, [setCrossfadeEnabled, setCrossfadeSeconds]);
 
   return (
     <div className="space-y-6">

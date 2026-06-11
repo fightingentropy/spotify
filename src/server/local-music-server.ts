@@ -188,6 +188,12 @@ let librarySnapshot: LibrarySnapshot | null = null;
 let scanPromise: Promise<LibrarySnapshot> | null = null;
 const userLibrarySnapshots = new Map<string, LibrarySnapshot>();
 const userScanPromises = new Map<string, Promise<LibrarySnapshot>>();
+// Serializes likes read-modify-write per source so concurrent toggles don't
+// lose updates (last-writer-wins). Keyed by source.key.
+const likeWriteChains = new Map<string, Promise<unknown>>();
+// Tracks sources whose one-time legacy-likes backfill has already been
+// attempted this process, so side-effect-free GETs never re-run the migration.
+const likesBackfilled = new Set<string>();
 
 function json(payload: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -524,26 +530,24 @@ async function serveFile(
   cacheControl = "public, max-age=3600",
   knownFileStat?: KnownFileStat,
 ): Promise<Response> {
-  let size: number;
-  let mtimeMs: number;
-  let mtime: Date;
-
-  if (knownFileStat) {
-    size = knownFileStat.size;
-    mtimeMs = knownFileStat.mtimeMs;
-    mtime = new Date(mtimeMs);
-  } else {
-    let fileStat;
-    try {
-      fileStat = await stat(path);
-    } catch {
-      return notFound();
-    }
-    if (!fileStat.isFile()) return notFound();
-    size = fileStat.size;
-    mtimeMs = fileStat.mtimeMs;
-    mtime = fileStat.mtime;
+  // Always stat() for the byte math. A stat is cheap relative to streaming the
+  // file, and using a stale `knownFileStat` size/mtime for Content-Length /
+  // Content-Range / etag while streaming the CURRENT bytes (Bun.file below)
+  // corrupts range responses and 304s when a file is overwritten in place
+  // within the scan TTL. `knownFileStat` is intentionally ignored here so the
+  // headers always reflect the on-disk file we actually serve; the parameter is
+  // kept for call-site compatibility.
+  void knownFileStat;
+  let fileStat;
+  try {
+    fileStat = await stat(path);
+  } catch {
+    return notFound();
   }
+  if (!fileStat.isFile()) return notFound();
+  const size = fileStat.size;
+  const mtimeMs = fileStat.mtimeMs;
+  const mtime = fileStat.mtime;
 
   const headers = new Headers();
   headers.set("accept-ranges", "bytes");
@@ -693,7 +697,7 @@ async function readSidecar(audioPath: string): Promise<LocalSidecar> {
 async function writeSidecar(audioPath: string, sidecar: LocalSidecar): Promise<void> {
   const target = sidecarPathForAudio(audioPath);
   await mkdir(dirname(target), { recursive: true });
-  const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(sidecar, null, 2)}\n`, "utf8");
   await rename(tempPath, target);
 }
@@ -893,7 +897,7 @@ async function readPersistentCache(source: LibrarySource): Promise<PersistentSon
 
 async function writePersistentCache(source: LibrarySource, cache: PersistentSongCache): Promise<void> {
   await mkdir(dirname(source.cachePath), { recursive: true });
-  const tempPath = `${source.cachePath}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${source.cachePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(cache)}\n`, "utf8");
   await rename(tempPath, source.cachePath);
 }
@@ -1050,7 +1054,12 @@ async function getLibrary(source: LibrarySource, force = false): Promise<Library
     }
     return snapshot;
   }
-  return refreshLibrary(source, !force);
+  // `force` only means "scan now instead of serving a (possibly stale) snapshot".
+  // The on-disk stat cache must still be honored so unchanged files reuse their
+  // parsed metadata; only new/changed/removed files (a stat mismatch) are
+  // re-parsed. Passing usePersistentCache=false here would seed an empty cache
+  // and re-run music-metadata on the entire library for every mutation.
+  return refreshLibrary(source, true);
 }
 
 function currentUserIdentityForRequest(request: Request): RequestUserIdentity | null {
@@ -1196,12 +1205,27 @@ async function writePersistentLikes(source: LibrarySource, likedSongIds: Iterabl
     likedSongIds: Array.from(new Set(likedSongIds)),
   };
   await mkdir(dirname(path), { recursive: true });
-  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(cache)}\n`, "utf8");
   await rename(tempPath, path);
 }
 
-async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]): Promise<string[]> {
+// Runs `task` after any pending likes write for this source has settled, so a
+// read-modify-write sequence never races another. Returns the task's result.
+function withLikeWriteLock<T>(source: LibrarySource, task: () => Promise<T>): Promise<T> {
+  const previous = likeWriteChains.get(source.key) ?? Promise.resolve();
+  // Run regardless of whether the previous task resolved or rejected.
+  const next = previous.then(task, task);
+  // The stored tail must never reject (a rejected tail would block the source
+  // forever); the caller still observes failures through the returned `next`.
+  likeWriteChains.set(source.key, next.catch(() => undefined));
+  return next;
+}
+
+// Reads the persisted likes set. Returns null when no valid cache exists yet
+// (so callers can distinguish "never initialized" from "explicitly empty").
+// This is side-effect-free: it never writes a backfill.
+async function readPersistentLikes(source: LibrarySource): Promise<string[] | null> {
   try {
     const raw = await readFile(likesCachePath(source), "utf8");
     const parsed = JSON.parse(raw) as Partial<PersistentLikesCache> | null;
@@ -1210,16 +1234,40 @@ async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]):
       parsed.root === source.root &&
       Array.isArray(parsed.likedSongIds)
     ) {
-      return filterVisibleLikedSongIds(
-        parsed.likedSongIds.filter((id): id is string => typeof id === "string"),
-        songs,
-      );
+      return parsed.likedSongIds.filter((id): id is string => typeof id === "string");
     }
   } catch {}
+  return null;
+}
 
-  const legacyLikedSongIds = songs.map((song) => song.id);
-  await writePersistentLikes(source, legacyLikedSongIds).catch(() => {});
-  return legacyLikedSongIds;
+// One-time migration: if a source has no likes cache yet, seed it with the
+// legacy "everything is liked" default. Serialized + write-once so GET requests
+// stay side-effect-free and concurrent callers don't double-write.
+async function backfillLegacyLikesForSource(source: LibrarySource, songs: PlayerSong[]): Promise<void> {
+  if (likesBackfilled.has(source.key)) return;
+  await withLikeWriteLock(source, async () => {
+    if (likesBackfilled.has(source.key)) return;
+    const existing = await readPersistentLikes(source);
+    if (existing === null) {
+      await writePersistentLikes(source, songs.map((song) => song.id)).catch(() => {});
+    }
+    likesBackfilled.add(source.key);
+  });
+}
+
+async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]): Promise<string[]> {
+  const stored = await readPersistentLikes(source);
+  if (stored !== null) {
+    return filterVisibleLikedSongIds(stored, songs);
+  }
+  // No cache yet: report the legacy default (all songs liked) WITHOUT writing on
+  // this GET path. The shared source is backfilled at startup; per-user sources
+  // are created on demand, so kick off their one-time backfill in the
+  // background (serialized + write-once) without blocking the response.
+  if (!source.shared && !likesBackfilled.has(source.key)) {
+    void backfillLegacyLikesForSource(source, songs).catch(() => {});
+  }
+  return songs.map((song) => song.id);
 }
 
 async function setSongLikedForSource(
@@ -1230,12 +1278,18 @@ async function setSongLikedForSource(
 ): Promise<string[] | null> {
   const visible = visibleSongIds(songs);
   if (!visible.has(songId)) return null;
-  const liked = new Set(await likedSongIdsForSongs(source, songs));
-  if (nextLiked) liked.add(songId);
-  else liked.delete(songId);
-  const likedSongIds = filterVisibleLikedSongIds(liked, songs);
-  await writePersistentLikes(source, likedSongIds);
-  return likedSongIds;
+  // Serialize the whole read-modify-write so concurrent toggles can't clobber
+  // each other (the previous version re-read and wrote without a lock).
+  return withLikeWriteLock(source, async () => {
+    const liked = new Set(await likedSongIdsForSongs(source, songs));
+    if (nextLiked) liked.add(songId);
+    else liked.delete(songId);
+    const likedSongIds = filterVisibleLikedSongIds(liked, songs);
+    await writePersistentLikes(source, likedSongIds);
+    // A successful explicit write satisfies the legacy backfill too.
+    likesBackfilled.add(source.key);
+    return likedSongIds;
+  });
 }
 
 async function markSongLikedForSource(source: LibrarySource, songs: PlayerSong[], songId: string): Promise<void> {
@@ -2006,10 +2060,16 @@ async function lookupRemoteArtwork(song: PlayerSong): Promise<DownloadedArtwork 
   return { data, contentType, sourceUrl: artworkUrl };
 }
 
+// Response.redirect requires an absolute URL per spec; a 302 with a relative
+// `location` header is what we actually want for the fallback icon.
+function fallbackArtworkRedirect(): Response {
+  return new Response(null, { status: 302, headers: { location: "/apple-icon.png" } });
+}
+
 async function handleArtwork(source: LibrarySource, id: string, request: Request): Promise<Response> {
   const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
-  if (!entry) return Response.redirect("/apple-icon.png", 302);
+  if (!entry) return fallbackArtworkRedirect();
 
   const safeId = id.replace(/[^a-zA-Z0-9:_-]/g, "_");
   const cacheMetaPath = resolve(source.artworkDir, `${safeId}.json`);
@@ -2025,7 +2085,7 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
       sourceUrl?: string;
     };
     if (meta.version === ARTWORK_CACHE_VERSION && meta.signature === signature) {
-      if (meta.empty) return Response.redirect("/apple-icon.png", 302);
+      if (meta.empty) return fallbackArtworkRedirect();
       if (meta.fileName) {
         const cachedArtwork = resolve(source.artworkDir, meta.fileName);
         return serveFile(cachedArtwork, request, "public, max-age=86400");
@@ -2068,14 +2128,14 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
       `${JSON.stringify({ version: ARTWORK_CACHE_VERSION, signature, empty: true })}\n`,
       "utf8",
     );
-    return Response.redirect("/apple-icon.png", 302);
+    return fallbackArtworkRedirect();
   } catch {
     await writeFile(
       cacheMetaPath,
       `${JSON.stringify({ version: ARTWORK_CACHE_VERSION, signature, empty: true })}\n`,
       "utf8",
     ).catch(() => {});
-    return Response.redirect("/apple-icon.png", 302);
+    return fallbackArtworkRedirect();
   }
 }
 
@@ -2121,7 +2181,8 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/profile/image" && request.method === "POST") {
     if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
-    const form = await request.formData();
+    const form = await request.formData().catch(() => null);
+    if (!form) return json({ error: "Invalid form body" }, { status: 400 });
     const image = form.get("image");
     if (!(image instanceof File) || image.size <= 0) {
       return json({ error: "Image file is required" }, { status: 400 });
@@ -2352,7 +2413,8 @@ async function initializeLibrary(): Promise<void> {
       `Spotify local music server listening on http://${host}:${port} with ${cachedSnapshot.songs.length} cached tracks from ${source.root}`,
     );
     void refreshLibrary(source, true)
-      .then((snapshot) => {
+      .then(async (snapshot) => {
+        await backfillLegacyLikesForSource(source, snapshot.songs).catch(() => {});
         console.log(`Spotify local music server refreshed ${snapshot.songs.length} tracks from ${source.root}`);
       })
       .catch((error) => {
@@ -2362,6 +2424,8 @@ async function initializeLibrary(): Promise<void> {
   }
 
   const snapshot = await refreshLibrary(source, true);
+  // One-time legacy likes migration at startup keeps GET handlers side-effect-free.
+  await backfillLegacyLikesForSource(source, snapshot.songs).catch(() => {});
   console.log(
     `Spotify local music server listening on http://${host}:${port} with ${snapshot.songs.length} tracks from ${source.root}`,
   );

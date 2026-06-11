@@ -32,7 +32,12 @@ export default function LikedPage() {
       keepPreviousData: true,
     },
   );
-  const isAuthError = error === "Unauthorized" || error === "Request failed with 401";
+  // useApiData surfaces errors as plain strings (no status code), so detect
+  // auth failures by matching the 401/Unauthorized copy the Worker returns.
+  // Broadened from exact equality to a substring check so variants like
+  // "Request failed with 401" or a server-supplied "Unauthorized" message all
+  // trigger a session refresh.
+  const isAuthError = !!error && (/\b401\b/.test(error) || /unauthor/i.test(error));
   const songs = Array.isArray(data.songs) ? data.songs : [];
   const legacyLikes = (data as unknown as { likes?: unknown }).likes;
   const likedSongIds = Array.isArray(data.likedSongIds)

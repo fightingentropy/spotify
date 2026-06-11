@@ -96,7 +96,14 @@ export default function LibraryPage() {
               </>
             ) : loading ? (
               <PlaylistSkeletonRows />
-            ) : null
+            ) : (
+              <div className="px-3 pb-2 pt-4">
+                <div className="text-xs uppercase tracking-wide opacity-60">Playlists</div>
+                <div className="mt-2 text-sm opacity-70">
+                  You don&apos;t have any playlists yet.
+                </div>
+              </div>
+            )
           ) : (
             <div className="px-3 py-6 text-sm opacity-70">
               <Link className="text-emerald-500 underline" to="/signin">Sign in</Link> to view your playlists.

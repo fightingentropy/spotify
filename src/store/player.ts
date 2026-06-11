@@ -48,6 +48,11 @@ type AdvanceToIndexOptions = {
 
 const MAX_PLAY_HISTORY = 200;
 const SHUFFLE_STORAGE_KEY = "spotify_shuffle_enabled";
+const VOLUME_STORAGE_KEY = "spotify_volume";
+const MUTED_STORAGE_KEY = "spotify_muted";
+const REPEAT_MODE_STORAGE_KEY = "spotify_repeat_mode";
+const CROSSFADE_ENABLED_STORAGE_KEY = "spotify_crossfade_enabled";
+const CROSSFADE_SECONDS_STORAGE_KEY = "spotify_crossfade_seconds";
 
 function readStoredShuffle(): boolean {
   try {
@@ -63,6 +68,74 @@ function writeStoredShuffle(enabled: boolean): void {
       localStorage.setItem(SHUFFLE_STORAGE_KEY, enabled ? "1" : "0");
     }
   } catch {}
+}
+
+function readStoredVolume(): number {
+  try {
+    if (typeof window === "undefined") return 0.9;
+    const raw = localStorage.getItem(VOLUME_STORAGE_KEY);
+    if (raw === null) return 0.9;
+    const value = Number(raw);
+    return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.9;
+  } catch {
+    return 0.9;
+  }
+}
+
+function writeStoredVolume(value: number): void {
+  try {
+    if (typeof window !== "undefined") localStorage.setItem(VOLUME_STORAGE_KEY, String(value));
+  } catch {}
+}
+
+function readStoredMuted(): boolean {
+  try {
+    return typeof window !== "undefined" && localStorage.getItem(MUTED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredMuted(muted: boolean): void {
+  try {
+    if (typeof window !== "undefined") localStorage.setItem(MUTED_STORAGE_KEY, muted ? "1" : "0");
+  } catch {}
+}
+
+function readStoredRepeatMode(): PlayerState["repeatMode"] {
+  try {
+    if (typeof window === "undefined") return "off";
+    const raw = localStorage.getItem(REPEAT_MODE_STORAGE_KEY);
+    return raw === "one" || raw === "all" || raw === "off" ? raw : "off";
+  } catch {
+    return "off";
+  }
+}
+
+function writeStoredRepeatMode(mode: PlayerState["repeatMode"]): void {
+  try {
+    if (typeof window !== "undefined") localStorage.setItem(REPEAT_MODE_STORAGE_KEY, mode);
+  } catch {}
+}
+
+function readStoredCrossfadeEnabled(): boolean {
+  try {
+    if (typeof window === "undefined") return true;
+    const raw = localStorage.getItem(CROSSFADE_ENABLED_STORAGE_KEY);
+    return raw === null ? true : raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+function readStoredCrossfadeSeconds(): number {
+  try {
+    if (typeof window === "undefined") return 4;
+    const raw = localStorage.getItem(CROSSFADE_SECONDS_STORAGE_KEY);
+    return Math.max(0, Math.min(12, Number(raw ?? 4)));
+  } catch {
+    return 4;
+  }
 }
 
 function pushHistory(history: number[], index: number): number[] {
@@ -135,13 +208,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playFuture: [],
   shuffleRemaining: [],
   isPlaying: false,
-  volume: 0.9,
-  isMuted: false,
+  volume: readStoredVolume(),
+  isMuted: readStoredMuted(),
   shuffle: readStoredShuffle(),
-  repeatMode: "off",
-  // Initialize deterministic values to avoid SSR/CSR hydration mismatch; rehydrate from localStorage on client mount
-  crossfadeEnabled: true,
-  crossfadeSeconds: 4,
+  repeatMode: readStoredRepeatMode(),
+  // Lazy initializers read persisted values on the client and fall back to
+  // deterministic SSR defaults (true / 4) so there's no hydration mismatch.
+  // This is the single source of truth for crossfade hydration.
+  crossfadeEnabled: readStoredCrossfadeEnabled(),
+  crossfadeSeconds: readStoredCrossfadeSeconds(),
   setQueue: (songs, startIndex, options) => {
     const start = resolveQueueStartIndex(
       songs.length,
@@ -160,7 +235,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }));
     return currentSong;
   },
-  setSong: (song) => set({ currentSong: song, playHistory: [], playFuture: [], shuffleRemaining: [] }),
+  setSong: (song) =>
+    set({
+      currentSong: song,
+      queue: song ? [song] : [],
+      currentIndex: song ? 0 : -1,
+      playHistory: [],
+      playFuture: [],
+      shuffleRemaining: [],
+    }),
   advanceToIndex: (index, options) =>
     set((s) => {
       if (index < 0 || index >= s.queue.length || index === s.currentIndex) return s;
@@ -190,7 +273,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   replaceSong: (song) =>
     set((s) => {
-      const queue = s.queue.map((item) => (item.id === song.id ? song : item));
+      // Preserve the original queue array reference when nothing actually
+      // changed, so consumers keying off queue identity (e.g. prefetch
+      // effects) don't re-run on every refresh of the current song.
+      const matchIndex = s.queue.findIndex((item) => item.id === song.id);
+      if (matchIndex < 0) {
+        return s.currentSong?.id === song.id ? { currentSong: song } : s;
+      }
+      const queue = s.queue.slice();
+      queue[matchIndex] = song;
       return {
         queue,
         currentSong: s.currentSong?.id === song.id ? song : s.currentSong,
@@ -210,6 +301,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
         const future = s.playFuture.slice();
         const idxFromFuture = future.pop();
+        if (idxFromFuture === undefined) {
+          // When the shuffle pool is exhausted, only refill if repeat "all" is
+          // on; otherwise stop at the end of the shuffle cycle, mirroring linear
+          // mode's behavior with repeat "off".
+          const remaining = validShuffleRemaining(s.queue.length, s.currentIndex, s.shuffleRemaining);
+          if (remaining.length === 0 && s.repeatMode !== "all") {
+            return s.isPlaying ? { ...s, isPlaying: false } : s;
+          }
+        }
         const shufflePool =
           idxFromFuture === undefined
             ? getNextShufflePool(s.queue.length, s.currentIndex, s.shuffleRemaining)
@@ -268,8 +368,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const idx = s.currentIndex - 1;
       return { ...s, currentIndex: idx, currentSong: s.queue[idx], isPlaying: true };
     }),
-  setVolume: (v) => set({ volume: Math.max(0, Math.min(1, v)) }),
-  toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
+  setVolume: (v) => {
+    const volume = Math.max(0, Math.min(1, v));
+    writeStoredVolume(volume);
+    set({ volume });
+  },
+  toggleMute: () =>
+    set((s) => {
+      const isMuted = !s.isMuted;
+      writeStoredMuted(isMuted);
+      return { isMuted };
+    }),
   toggleShuffle: () =>
     set((s) => {
       const shuffle = !s.shuffle;
@@ -282,14 +391,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       };
     }),
   cycleRepeatMode: () =>
-    set((s) => ({ repeatMode: s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off" })),
+    set((s) => {
+      const repeatMode = s.repeatMode === "off" ? "all" : s.repeatMode === "all" ? "one" : "off";
+      writeStoredRepeatMode(repeatMode);
+      return { repeatMode };
+    }),
   setCrossfadeEnabled: (enabled) => {
-    try { if (typeof window !== "undefined") localStorage.setItem("spotify_crossfade_enabled", enabled ? "1" : "0"); } catch {}
+    try { if (typeof window !== "undefined") localStorage.setItem(CROSSFADE_ENABLED_STORAGE_KEY, enabled ? "1" : "0"); } catch {}
     set({ crossfadeEnabled: enabled });
   },
   setCrossfadeSeconds: (seconds) => {
     const clamped = Math.max(0, Math.min(12, seconds));
-    try { if (typeof window !== "undefined") localStorage.setItem("spotify_crossfade_seconds", String(clamped)); } catch {}
+    try { if (typeof window !== "undefined") localStorage.setItem(CROSSFADE_SECONDS_STORAGE_KEY, String(clamped)); } catch {}
     set({ crossfadeSeconds: clamped });
   },
 }));

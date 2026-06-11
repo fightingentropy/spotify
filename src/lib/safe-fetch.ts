@@ -66,7 +66,10 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs =
   }
 }
 
-export async function assertPublicHttpUrl(url: URL): Promise<void> {
+// Resolve the hostname and assert it maps only to public/global addresses.
+// Returns the validated address set so the caller can pin against it and detect
+// a DNS rebind that flips the host to a private address between resolutions.
+export async function assertPublicHttpUrl(url: URL): Promise<string[]> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new RemoteUrlError("Only valid http(s) URLs are supported");
   }
@@ -77,10 +80,38 @@ export async function assertPublicHttpUrl(url: URL): Promise<void> {
     throw new RemoteUrlError("Remote URL host is not allowed");
   }
 
+  // A literal-IP host needs no DNS round-trip (and can't be rebound); its
+  // address is the hostname itself, already screened by isBlockedRemoteHostname.
+  if (isIP(url.hostname) !== 0) {
+    return [url.hostname.toLowerCase()];
+  }
+
   const addresses = await lookup(url.hostname, { all: true }).catch(() => []);
   if (!addresses.length) throw new RemoteUrlError("Remote URL host could not be resolved");
   if (addresses.some(({ address }) => isPrivateOrReservedIpAddress(address))) {
     throw new RemoteUrlError("Remote URL host resolves to a private network address");
+  }
+  return addresses.map(({ address }) => address.toLowerCase());
+}
+
+// Re-resolve immediately before connecting and require that the host still
+// resolves only to public addresses and still overlaps the address set we
+// validated a moment earlier. Bun's native fetch (the Mac-mini runtime) ignores
+// an undici dispatcher, so a connect-time lookup hook that pins the literal IP
+// isn't available here; this double-resolve check instead shrinks the
+// time-of-check/time-of-use window to the gap between the two lookups and
+// rejects a rebind that flips the host to a private (or entirely different)
+// address before the request goes out.
+async function assertNoDnsRebind(url: URL, validatedAddresses: string[]): Promise<void> {
+  if (isIP(url.hostname) !== 0) return;
+  const addresses = await lookup(url.hostname, { all: true }).catch(() => []);
+  if (!addresses.length) throw new RemoteUrlError("Remote URL host could not be resolved");
+  if (addresses.some(({ address }) => isPrivateOrReservedIpAddress(address))) {
+    throw new RemoteUrlError("Remote URL host resolves to a private network address");
+  }
+  const validated = new Set(validatedAddresses);
+  if (!addresses.some(({ address }) => validated.has(address.toLowerCase()))) {
+    throw new RemoteUrlError("Remote URL host changed address between resolution and connect");
   }
 }
 
@@ -89,7 +120,8 @@ export async function fetchPublicHttpUrl(url: URL, init: RequestInit = {}, timeo
   let nextInit = { ...init };
 
   for (let redirectCount = 0; redirectCount <= MAX_REMOTE_REDIRECTS; redirectCount += 1) {
-    await assertPublicHttpUrl(nextUrl);
+    const validatedAddresses = await assertPublicHttpUrl(nextUrl);
+    await assertNoDnsRebind(nextUrl, validatedAddresses);
     const response = await fetchWithTimeout(
       nextUrl.toString(),
       { ...nextInit, redirect: "manual" },

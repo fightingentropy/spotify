@@ -126,6 +126,8 @@ function UserMenu({
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -145,12 +147,27 @@ function UserMenu({
     };
   }, [open]);
 
+  // Treated as a disclosure (not an ARIA menu), so items keep normal tab
+  // order. On open, move focus to the first item; on close, restore focus to
+  // the trigger so keyboard users aren't dropped at the top of the page.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open) {
+      const first = panelRef.current?.querySelector<HTMLElement>("a, button");
+      first?.focus();
+    } else if (wasOpenRef.current) {
+      triggerRef.current?.focus();
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
   return (
     <div className="relative" ref={menuRef}>
       <button
+        ref={triggerRef}
         className="inline-flex h-9 items-center gap-2 rounded-full border border-white/[0.12] px-2.5 text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
         onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
+        aria-haspopup="true"
         aria-expanded={open}
         aria-label="Account menu"
      >
@@ -160,13 +177,12 @@ function UserMenu({
       </button>
       {open && (
         <div
-          role="menu"
+          ref={panelRef}
           className="absolute right-0 mt-2 w-48 rounded-md border border-white/[0.12] bg-background text-white shadow-lg z-50 overflow-hidden"
         >
           <Link
             to="/profile"
             className="flex items-center gap-2 px-3 py-2.5 text-[15px] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
-            role="menuitem"
             onClick={() => setOpen(false)}
           >
             <UserRound size={16} />
@@ -175,7 +191,6 @@ function UserMenu({
           <Link
             to="/settings"
             className="flex items-center gap-2 px-3 py-2.5 text-[15px] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
-            role="menuitem"
             onClick={() => setOpen(false)}
           >
             <Settings size={16} />
@@ -183,7 +198,6 @@ function UserMenu({
           </Link>
           <button
             className="w-full text-left flex items-center gap-2 px-3 py-2.5 text-[15px] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
-            role="menuitem"
             onClick={onSignOut}
           >
             <LogOut size={16} />

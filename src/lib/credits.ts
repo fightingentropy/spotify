@@ -2,8 +2,12 @@ import { useEffect, useRef, useState } from "react";
 
 export function parseCredits(artist: string): Array<{ name: string; role: string }> {
   const seen = new Set<string>();
+  // Split on commas and explicit feature/ampersand separators that have
+  // surrounding spaces. Requiring spaces around "&" keeps names like "R&B"
+  // and "Simon & Garfunkel" intact (the latter stays one credit, which is the
+  // conservative, correct choice for a band name).
   const names = artist
-    .split(/,|&| feat\.? | ft\.? /i)
+    .split(/,| & | feat\.? | ft\.? /i)
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
     .filter((part) => {

@@ -4,6 +4,7 @@ const SPOTIFY_PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v1/qu
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 const PAGE_SIZE = 100;
+const PATHFINDER_REQUEST_TIMEOUT_MS = 20_000;
 const TOKEN_PRODUCT_TYPE = "web-player";
 const TOKEN_TOTP_PERIOD_SECONDS = 30;
 const TOKEN_TOTP_DIGITS = 6;
@@ -99,6 +100,26 @@ function cookieKey(cookie?: string): string {
   return normalizeCookie(cookie) || "__anonymous__";
 }
 
+// Bare fetch() has no timeout, so a hung Spotify endpoint would stall the
+// import/token flow indefinitely (browser + Worker). Wrap each request with an
+// AbortController-backed timeout; on timeout/network error resolve to null so
+// callers keep their existing `response?.ok`/`.catch(() => null)` handling.
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = PATHFINDER_REQUEST_TIMEOUT_MS,
+): Promise<Response | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function tokenSecretBytes(secret: string): Uint8Array {
   const decoded = secret
     .split("")
@@ -150,11 +171,11 @@ async function generateTotp(secret: Uint8Array, timestampMs: number): Promise<st
 }
 
 async function fetchSpotifyServerTime(): Promise<number | null> {
-  const response = await fetch(SPOTIFY_SERVER_TIME_URL, {
+  const response = await fetchWithTimeout(SPOTIFY_SERVER_TIME_URL, {
     headers: {
       accept: "application/json",
     },
-  }).catch(() => null);
+  });
   if (!response?.ok) return null;
   const payload = toObject(await response.json().catch(() => null));
   const serverTime = Number(payload?.serverTime);
@@ -268,10 +289,10 @@ async function fetchSpotifyAccessToken(spotifyCookie?: string): Promise<string> 
   if (cookie) headers.cookie = cookie;
 
   const tokenUrl = `${SPOTIFY_TOKEN_URL}?${(await tokenQueryParams("transport", TOKEN_PRODUCT_TYPE)).toString()}`;
-  const response = await fetch(tokenUrl, {
+  const response = await fetchWithTimeout(tokenUrl, {
     headers,
     credentials: "include",
-  }).catch(() => null);
+  });
   if (!response?.ok) {
     throw new SpotifyPathfinderError(
       cookie
@@ -311,13 +332,13 @@ async function pathfinderQuery(
     }),
   });
 
-  const response = await fetch(`${SPOTIFY_PATHFINDER_URL}?${params.toString()}`, {
+  const response = await fetchWithTimeout(`${SPOTIFY_PATHFINDER_URL}?${params.toString()}`, {
     headers: {
       authorization: `Bearer ${accessToken}`,
       "user-agent": DEFAULT_USER_AGENT,
       accept: "application/json",
     },
-  }).catch(() => null);
+  });
 
   if (!response?.ok) {
     throw new SpotifyPathfinderError(`Spotify pathfinder returned ${response?.status ?? "unknown"}`, 502);

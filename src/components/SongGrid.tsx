@@ -68,7 +68,6 @@ export function SongGrid({
   emptyLabel,
   viewToggleClassName,
 }: SongGridProps) {
-  const [localSongs, setLocalSongs] = useState<PlayerSong[]>(songs);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [sortMode, setSortMode] = useState<SongSortMode>("default");
   const [preferencesReady, setPreferencesReady] = useState(false);
@@ -93,10 +92,6 @@ export function SongGrid({
   const likedLookup = useLikesStore((state) => state.likedSongIds);
   const pendingLookup = useLikesStore((state) => state.pending);
   const hydrated = useLikesStore((state) => state.hydrated);
-
-  useEffect(() => {
-    setLocalSongs(songs);
-  }, [songs]);
 
   useEffect(() => {
     try {
@@ -155,7 +150,7 @@ export function SongGrid({
   // likedMap. Keeping it in its own memo prevents every like toggle from
   // re-running it on pages where `hideIfUnliked` is false.
   const sortedDedupedSongs = useMemo(() => {
-    const sorted = sortMode === "default" ? localSongs : [...localSongs];
+    const sorted = sortMode === "default" ? songs : [...songs];
     if (sortMode !== "default") {
       sorted.sort((left, right) => {
         const leftTime = Date.parse(left.createdAt || "");
@@ -174,7 +169,7 @@ export function SongGrid({
       deduped.push(song);
     }
     return deduped;
-  }, [localSongs, sortMode]);
+  }, [songs, sortMode]);
 
   const visibleSongs = useMemo(() => {
     if (!hideIfUnliked) return sortedDedupedSongs;

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearPlaybackStatePendingSync,
   coercePlaybackState,
@@ -10,16 +10,45 @@ import {
 } from "../src/client/playback-state";
 import { PLAYBACK_STATE_PENDING_SYNC_STORAGE_KEY, PLAYBACK_STATE_STORAGE_KEY } from "../src/lib/playback-state";
 
+// Track which globals installBrowserState (and the offline test) overrode so we
+// can restore them after each test instead of leaking the mutated globalThis.
+type PatchedGlobal = "window" | "navigator" | "localStorage" | "fetch";
+const originalDescriptors = new Map<PatchedGlobal, PropertyDescriptor | undefined>();
+
+function captureGlobal(key: PatchedGlobal): void {
+  if (!originalDescriptors.has(key)) {
+    originalDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+  }
+}
+
+function restorePatchedGlobals(): void {
+  for (const [key, descriptor] of originalDescriptors) {
+    if (descriptor) {
+      Object.defineProperty(globalThis, key, descriptor);
+    } else {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+  originalDescriptors.clear();
+}
+
+afterEach(() => {
+  restorePatchedGlobals();
+});
+
 function installBrowserState(options: { online?: boolean } = {}) {
   const storage = new Map<string, string>();
+  captureGlobal("window");
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: globalThis,
   });
+  captureGlobal("navigator");
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
     value: { onLine: options.online ?? true },
   });
+  captureGlobal("localStorage");
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     value: {
@@ -90,6 +119,7 @@ describe("playback state sync", () => {
   test("marks playback state pending instead of fetching while offline", async () => {
     const storage = installBrowserState({ online: false });
     let fetchCalls = 0;
+    captureGlobal("fetch");
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       value: async () => {

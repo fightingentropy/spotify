@@ -14,6 +14,10 @@ const QOBUZ_DEFAULT_APP_ID = "712109809";
 const QOBUZ_DEFAULT_APP_SECRET = "589be88e4538daea11f509d29e4a23b1";
 const QOBUZ_OPEN_TRACK_PROBE_URL = "https://open.qobuz.com/track/1";
 const QOBUZ_REQUEST_TIMEOUT_MS = 60_000;
+// The provider fallback chain runs ~12 sequential attempts (20-25s each), which
+// can serialize for minutes. Cap the whole chain with a wall-clock deadline so
+// the request can't tie up the Worker/Mac-mini indefinitely.
+const QOBUZ_STREAM_RESOLUTION_BUDGET_MS = 90_000;
 const QOBUZ_GDSTUDIO_VERSION = "2026.5.10";
 
 const qobuzOpenBundleScriptPattern =
@@ -674,15 +678,24 @@ export async function resolveQobuzStreamUrl(options: {
     () => downloadFromMusicDL(trackId, options.quality),
   ];
 
+  const deadline = Date.now() + QOBUZ_STREAM_RESOLUTION_BUDGET_MS;
+  const errors: string[] = [];
   for (const attempt of attempts) {
+    if (Date.now() >= deadline) {
+      errors.push("overall Qobuz stream resolution budget exceeded");
+      break;
+    }
     try {
       const streamUrl = await attempt();
       if (streamUrl) return streamUrl;
-    } catch {}
+      errors.push("provider returned no stream URL");
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "Qobuz stream provider failed");
+    }
   }
 
   throw new QobuzDownloadError(
-    `Qobuz found track ${trackId}, but its stream providers are currently unavailable`,
+    `Qobuz found track ${trackId}, but its stream providers are currently unavailable: ${errors.join(" | ")}`,
   );
 }
 

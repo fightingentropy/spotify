@@ -125,10 +125,14 @@ async function networkFirst(request, cacheName, fallbackResponse) {
   }
 }
 
-async function staleWhileRevalidate(event, request, cacheName, fallbackResponse) {
+async function staleWhileRevalidate(event, request, cacheName, fallbackResponse, mediaFallback = false) {
   const cached = await caches.match(request);
   if (isKnownOffline()) {
     if (cached) return cached;
+    if (mediaFallback) {
+      const offlineMedia = await matchCachedMedia(request.url);
+      if (offlineMedia) return offlineMedia;
+    }
     if (fallbackResponse) return fallbackResponse;
   }
   const refreshed = refreshCache(cacheName, request);
@@ -139,6 +143,10 @@ async function staleWhileRevalidate(event, request, cacheName, fallbackResponse)
 
   const response = await refreshed;
   if (response) return response;
+  if (mediaFallback) {
+    const offlineMedia = await matchCachedMedia(request.url);
+    if (offlineMedia) return offlineMedia;
+  }
   if (fallbackResponse) return fallbackResponse;
   return fetch(request);
 }
@@ -161,13 +169,22 @@ async function cacheStaticUrls(urls, options = {}) {
   const uniqueUrls = [...new Set(urls)];
   if (uniqueUrls.length === 0) return;
 
+  const staticCache = await caches.open(STATIC_CACHE);
   const results = await Promise.all(
     uniqueUrls.map(async (url) => {
       try {
         const parsed = new URL(url, self.location.origin);
         if (parsed.origin !== self.location.origin) return true;
-        const cached = await caches.match(parsed.toString());
-        if (cached) return true;
+        // Dedupe against the TARGET cache only. A hashed asset that survives several
+        // version bumps may live solely in a soon-to-be-deleted old versioned cache,
+        // so a global caches.match would leave it in no cache after activation.
+        const cachedInTarget = await staticCache.match(parsed.toString());
+        if (cachedInTarget) return true;
+        const cachedElsewhere = await caches.match(parsed.toString());
+        if (cachedElsewhere) {
+          await staticCache.put(parsed.toString(), cachedElsewhere.clone()).catch(() => undefined);
+          return true;
+        }
         const response = await fetch(parsed.toString(), { cache: "reload" });
         await putCache(STATIC_CACHE, parsed.toString(), response);
         return isCacheableResponse(response);
@@ -365,7 +382,8 @@ async function rangeResponse(request) {
 
 async function cacheMediaUrls(urls, cacheName = PLAYBACK_CACHE) {
   if (!Array.isArray(urls) || urls.length === 0) return;
-  const cache = await caches.open(cacheName);
+  const targetCache = cacheName === MEDIA_CACHE || cacheName === PLAYBACK_CACHE ? cacheName : PLAYBACK_CACHE;
+  const cache = await caches.open(targetCache);
   await Promise.all(
     urls.map(async (value) => {
       if (typeof value !== "string" || !value) return;
@@ -380,7 +398,7 @@ async function cacheMediaUrls(urls, cacheName = PLAYBACK_CACHE) {
         const cached = await cache.match(url.toString());
         if (cached) return;
         const response = await fetch(request);
-        await putCache(cacheName, url.toString(), response);
+        await putCache(targetCache, url.toString(), response);
       } catch {}
     }),
   );
@@ -545,7 +563,13 @@ self.addEventListener("fetch", (event) => {
     request.destination === "script" ||
     url.pathname.startsWith("/api/artwork/")
   ) {
-    event.respondWith(staleWhileRevalidate(event, request, RUNTIME_CACHE));
+    // Downloaded artwork is stored under the param-less URL in MEDIA, but offline
+    // songs render /api/artwork/X?spotify_offline=1, so on a network miss fall back
+    // to the query-ignoring media lookup for artwork / offline-param'd images.
+    const mediaFallback =
+      url.pathname.startsWith("/api/artwork/") ||
+      (request.destination === "image" && url.searchParams.get(OFFLINE_PLAYBACK_SEARCH_PARAM) === "1");
+    event.respondWith(staleWhileRevalidate(event, request, RUNTIME_CACHE, undefined, mediaFallback));
   }
 });
 

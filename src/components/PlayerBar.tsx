@@ -117,6 +117,7 @@ const NowPlayingSheet = lazy(() => import("@/components/NowPlayingSheet"));
 const SEEK_LANDING_TOLERANCE_SECONDS = 0.75;
 const STICKY_SEEK_RETRY_MS = 180;
 const MAX_STICKY_SEEK_ATTEMPTS = 30;
+const MAX_CONSECUTIVE_AUDIO_ERRORS = 3;
 
 function loadHlsConstructor(): Promise<HlsConstructor | null> {
   hlsConstructorPromise ??= import("hls.js/light")
@@ -128,6 +129,26 @@ function loadHlsConstructor(): Promise<HlsConstructor | null> {
 function errorName(error: unknown): string {
   if (typeof error !== "object" || error === null || !("name" in error)) return "";
   return String((error as { name?: unknown }).name || "");
+}
+
+// iOS/iPadOS ignore writes to HTMLMediaElement.volume (the element stays at 1).
+// Detect this once and cache it so we can skip the overlapping volume-ramp
+// crossfade on those platforms (a clean cut is used instead, so two tracks never
+// play simultaneously at full volume).
+let audioVolumeWritableCache: boolean | null = null;
+function audioVolumeIsWritable(audio: HTMLAudioElement): boolean {
+  if (audioVolumeWritableCache !== null) return audioVolumeWritableCache;
+  const original = audio.volume;
+  try {
+    const probe = original > 0.5 ? 0.123 : 0.876;
+    audio.volume = probe;
+    audioVolumeWritableCache = Math.abs(audio.volume - probe) < 0.01;
+  } catch {
+    audioVolumeWritableCache = false;
+  } finally {
+    try { audio.volume = original; } catch {}
+  }
+  return audioVolumeWritableCache;
 }
 
 function PlayerBar(): React.ReactElement | null {
@@ -157,8 +178,6 @@ function PlayerBar(): React.ReactElement | null {
   const advanceToIndex = usePlayerStore((s) => s.advanceToIndex);
   const replaceSong = usePlayerStore((s) => s.replaceSong);
   const pause = usePlayerStore((s) => s.pause);
-  const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
-  const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
 
   const navigate = useNavigate();
   const { user, status: authStatus } = useAuth();
@@ -210,6 +229,11 @@ function PlayerBar(): React.ReactElement | null {
   const crossfadingRef = useRef<boolean>(false);
   const crossfadeCancelRef = useRef<(() => void) | null>(null);
   const crossfadeCommitSongIdRef = useRef<string | null>(null);
+  const crossfadeStartedRef = useRef<boolean>(false);
+  // Latest crossfade trigger / force-commit, called from the active element's
+  // timeupdate/ended handlers (which fire even when the tab is backgrounded).
+  const maybeStartCrossfadeRef = useRef<() => void>(() => {});
+  const forceCommitCrossfadeRef = useRef<() => void>(() => {});
   const suppressAutoLoadRef = useRef<boolean>(false);
   const resumeAfterSeekRef = useRef<boolean>(false);
   const pendingSeekTimeoutRef = useRef<number | null>(null);
@@ -231,12 +255,18 @@ function PlayerBar(): React.ReactElement | null {
   const playbackDeviceIdRef = useRef("");
   const accountScopeRef = useRef<string | null>(null);
 
-  const savedSeekRef = useRef<number | null>(null);
+  const savedSeekRef = useRef<{ songId: string; time: number } | null>(null);
   const lockedPlaybackSourceRef = useRef<{ songId: string; src: string } | null>(null);
   const nowPlayingOpenFrameRef = useRef<number | null>(null);
   const nowPlayingCloseTimeoutRef = useRef<number | null>(null);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
+  // Mirrors currentTime without forcing the snapshot/sync callbacks to rebuild on
+  // every 4Hz timeupdate; read by buildPlaybackStateSnapshot for a stable identity.
+  const currentTimeRef = useRef<number>(0);
+  const consecutiveAudioErrorsRef = useRef<number>(0);
+  const erroredSrcRetryRef = useRef<string | null>(null);
+  const refreshNotFoundCountRef = useRef<{ id: string | null; count: number }>({ id: null, count: 0 });
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
   const [nowPlayingMounted, setNowPlayingMounted] = useState(false);
 
@@ -271,7 +301,7 @@ function PlayerBar(): React.ReactElement | null {
     const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
     if (persistableIndex < 0) return null;
     const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
-    const time = Math.max(0, active?.currentTime ?? currentTime);
+    const time = Math.max(0, active?.currentTime ?? currentTimeRef.current);
     return {
       version: 1,
       accountScope,
@@ -283,18 +313,24 @@ function PlayerBar(): React.ReactElement | null {
       updatedAt,
       deviceId: getPlaybackStateDeviceId(),
     };
-  }, [accountScope, activeIdx, currentSong, currentTime, getPlaybackStateDeviceId, isPlaying, queue]);
+  }, [accountScope, activeIdx, currentSong, getPlaybackStateDeviceId, isPlaying, queue]);
 
   const saveCurrentPlaybackStateToLocal = useCallback((): PlaybackStateSnapshot | null => {
     const updatedAt = playbackStateUpdatedAtRef.current || Date.now();
     const state = buildPlaybackStateSnapshot(updatedAt);
     if (!state) {
-      removeLocalPlaybackState();
+      // Only delete the persisted resume state once restore has finished AND the
+      // queue is genuinely empty. Otherwise (e.g. backgrounding before the
+      // restore effect runs) leave the saved state untouched so we don't wipe a
+      // resume point we haven't loaded yet.
+      if (playbackSyncReadyRef.current && queue.length === 0) {
+        removeLocalPlaybackState();
+      }
       return null;
     }
     writeLocalPlaybackState(state);
     return state;
-  }, [buildPlaybackStateSnapshot]);
+  }, [buildPlaybackStateSnapshot, queue]);
 
   const applyPlaybackStateSnapshot = useCallback((state: PlaybackStateSnapshot) => {
     const restoredQueue = state.queue.filter(isPersistablePlayerSong);
@@ -317,7 +353,8 @@ function PlayerBar(): React.ReactElement | null {
       setSong(state.song);
     }
     pause();
-    savedSeekRef.current = state.currentTime;
+    savedSeekRef.current = { songId: restoredSongId, time: state.currentTime };
+    currentTimeRef.current = state.currentTime;
     setCurrentTime(state.currentTime);
     window.setTimeout(() => {
       applyingSyncedPlaybackStateRef.current = false;
@@ -428,6 +465,7 @@ function PlayerBar(): React.ReactElement | null {
     crossfadeCancelRef.current = null;
     suppressAutoLoadRef.current = false;
     crossfadingRef.current = false;
+    crossfadeStartedRef.current = false;
     cancel?.();
   }, []);
 
@@ -452,6 +490,7 @@ function PlayerBar(): React.ReactElement | null {
 
   const resetPlaybackClock = useCallback((nextDuration = 0) => {
     resetPendingSeek();
+    currentTimeRef.current = 0;
     setCurrentTime(0);
     setDuration(finiteMediaDuration(nextDuration) ?? 0);
   }, [resetPendingSeek]);
@@ -508,6 +547,7 @@ function PlayerBar(): React.ReactElement | null {
 
   const queueStickySeek = useCallback((request: StickySeekRequest, delay = STICKY_SEEK_RETRY_MS) => {
     stickySeekRef.current = request;
+    currentTimeRef.current = request.time;
     setCurrentTime(request.time);
     scheduleStickySeekRetry(delay);
   }, [scheduleStickySeekRetry]);
@@ -548,6 +588,7 @@ function PlayerBar(): React.ReactElement | null {
       return;
     }
 
+    currentTimeRef.current = nextTime;
     setCurrentTime(nextTime);
     if (seekIsCloseEnough(request.audio.currentTime, nextTime)) {
       clearStickySeek();
@@ -565,8 +606,9 @@ function PlayerBar(): React.ReactElement | null {
 
   const performSeek = useCallback((active: HTMLAudioElement, nextTime: number, seekDuration: number) => {
     if (active !== getActiveAudio()) return;
+    // Cancelling the crossfade clears crossfadingRef, so there's no in-flight
+    // inactive element to keep in sync afterwards.
     if (crossfadingRef.current) cancelActiveCrossfade();
-    const inactive = getInactiveAudio();
     const resumePlayback = isPlayingRef.current;
     resumeAfterSeekRef.current = resumePlayback;
     clearStickySeek();
@@ -576,19 +618,14 @@ function PlayerBar(): React.ReactElement | null {
       queueStickySeek({ audio: active, time: nextTime, duration: seekDuration, resumePlayback, attempts: 0 });
       return;
     }
-    if (crossfadingRef.current && inactive) {
-      try {
-        const inactiveDuration = finiteMediaDuration(inactive.duration) ?? seekDuration;
-        inactive.currentTime = Math.max(0, Math.min(inactiveDuration, nextTime));
-      } catch {}
-    }
+    currentTimeRef.current = nextTime;
     setCurrentTime(nextTime);
     if (!seekIsCloseEnough(active.currentTime, nextTime)) {
       queueStickySeek({ audio: active, time: nextTime, duration: seekDuration, resumePlayback, attempts: 0 });
       return;
     }
     if (resumeAfterSeekRef.current) resumeActivePlayback(active);
-  }, [cancelActiveCrossfade, clearStickySeek, getActiveAudio, getInactiveAudio, queueStickySeek, resumeActivePlayback]);
+  }, [cancelActiveCrossfade, clearStickySeek, getActiveAudio, queueStickySeek, resumeActivePlayback]);
 
   const onSeek = useCallback((value: number) => {
     const active = getActiveAudio();
@@ -598,6 +635,7 @@ function PlayerBar(): React.ReactElement | null {
     const nextTime = Math.max(0, Math.min(seekDuration, value));
     lastSeekTargetRef.current = nextTime;
     pendingSeekRef.current = { audio: active, time: nextTime, duration: seekDuration };
+    currentTimeRef.current = nextTime;
     setCurrentTime(nextTime);
 
     if (pendingSeekTimeoutRef.current != null) {
@@ -670,19 +708,8 @@ function PlayerBar(): React.ReactElement | null {
     };
   }, []);
 
-  // Client hydration of crossfade settings to ensure feature works without visiting /settings
-  const hydratedRef = useRef(false);
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    hydratedRef.current = true;
-    try {
-      const storedEnabled = localStorage.getItem("spotify_crossfade_enabled");
-      const enabled = storedEnabled === null ? true : storedEnabled === "1";
-      const secs = Math.max(0, Math.min(12, Number(localStorage.getItem("spotify_crossfade_seconds") ?? 4)));
-      if (enabled !== crossfadeEnabled) setCrossfadeEnabled(enabled);
-      if (secs !== crossfadeSeconds) setCrossfadeSeconds(secs);
-    } catch {}
-  }, []);
+  // Crossfade settings are hydrated by the player store's lazy initializer
+  // (single source of truth), so no separate client hydration effect is needed.
 
   // Keep mute state in sync on both elements
   useEffect(() => {
@@ -806,21 +833,41 @@ function PlayerBar(): React.ReactElement | null {
     let cancelled = false;
     const songId = currentSongId;
 
+    function clearStaleCurrentSong() {
+      removeLocalPlaybackState();
+      setQueue([], 0);
+      pause();
+    }
+
     async function refreshCurrentSong() {
       try {
         const response = await fetch(`/api/songs/${encodeURIComponent(songId)}`, {
           cache: "no-store",
         });
-        if (response.status === 401 || response.status === 403 || response.status === 404) {
+        if (response.status === 401 || response.status === 403) {
+          // Auth genuinely lost — clear the queue and persisted resume state.
           if (cancelled) return;
-          localStorage.removeItem("spotify_player_state");
-          setQueue([], 0);
-          pause();
+          clearStaleCurrentSong();
+          return;
+        }
+        if (response.status === 404) {
+          // A single 404 can be transient (e.g. mid-deploy / proxy hiccup); only
+          // wipe the queue after two consecutive 404s for the same song.
+          if (cancelled) return;
+          const count = refreshNotFoundCountRef.current.id === songId
+            ? refreshNotFoundCountRef.current.count + 1
+            : 1;
+          refreshNotFoundCountRef.current = { id: songId, count };
+          if (count >= 2) {
+            refreshNotFoundCountRef.current = { id: null, count: 0 };
+            clearStaleCurrentSong();
+          }
           return;
         }
         if (!response.ok) return;
         const song = (await response.json()) as PlayerSong;
         if (cancelled || !song?.id || song.id !== songId) return;
+        refreshNotFoundCountRef.current = { id: null, count: 0 };
         replaceSong(song);
       } catch {}
     }
@@ -870,7 +917,15 @@ function PlayerBar(): React.ReactElement | null {
         ? lockedSource.src
         : desiredSrc;
     const sourceChanged = audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(src);
-    if (sourceChanged) resetPlaybackClock(playbackSong?.duration ?? 0);
+    if (sourceChanged) {
+      resetPlaybackClock(playbackSong?.duration ?? 0);
+      // Drop any pending resume seek that targets a different song so it can't be
+      // applied to this newly-loaded track. A seek saved for the current song
+      // (the resume case) is preserved and applied in onLoadedMetadata.
+      if (savedSeekRef.current && savedSeekRef.current.songId !== playbackSong.id) {
+        savedSeekRef.current = null;
+      }
+    }
     if (sourceChanged || lockedSource?.songId !== playbackSong.id) {
       lockedPlaybackSourceRef.current = { songId: playbackSong.id, src };
     }
@@ -889,173 +944,221 @@ function PlayerBar(): React.ReactElement | null {
     }
   }, [desiredSrc, isPlaying, playbackSong?.duration, playbackSong?.id, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio, resetPlaybackClock]);
 
-  // Crossfade: if enabled, monitor active element time and overlap next track
+  // Crossfade: triggered from the active element's `timeupdate` event (which keeps
+  // firing while the tab/app is backgrounded, unlike requestAnimationFrame). The
+  // fade ramp itself runs on a setInterval timer for the same reason. On platforms
+  // where HTMLMediaElement.volume is not writable (iOS/iPadOS) the overlapping
+  // ramp is skipped entirely in favor of a clean cut, so two tracks never play at
+  // full volume at once.
   useEffect(() => {
-    if (!crossfadeEnabled) return;
-    const audio = getActiveAudio();
-    if (!audio) return;
-    if (!Number.isFinite(duration) || duration <= 0) return;
-    const fadeWindow = Math.min(crossfadeSeconds, Math.max(0, duration / 2));
-    if (fadeWindow <= 0) return;
+    // Reset the per-effect "started" latch whenever the inputs change (e.g. a new
+    // song loaded, settings changed) so a fresh fade can arm. Don't disturb an
+    // in-flight fade.
+    if (!crossfadingRef.current) crossfadeStartedRef.current = false;
 
-    let raf: number | null = null;
-    let started = false;
-    let isMounted = true;
-    let cancelFade: (() => void) | null = null;
-
-    function step() {
-      if (!isMounted) return;
-      const current = getActiveAudio();
-      if (!current) return;
-      const remaining = (duration || 0) - (current.currentTime || 0);
-      if (!started && remaining <= fadeWindow + 0.05 && isPlaying && repeatMode !== "one") {
-        started = true;
-        crossfadingRef.current = true;
-
-        const fromAudio = current;
-        const toAudio = getInactiveAudio();
-        if (!toAudio) {
-          crossfadingRef.current = false;
-          return;
+    const computeNextTarget = ():
+      | { song: PlayerSong; playbackSong: PlayerSong; index: number; fromFuture: boolean }
+      | null => {
+      if (!Array.isArray(queue) || queue.length === 0) return null;
+      let nextIdx = currentIndex;
+      let nextFromFuture = false;
+      if (shuffle) {
+        if (queue.length === 1) return null;
+        // Mirror next(): consume the redo stack (playFuture) before drawing a
+        // fresh index from the shuffle pool, so the crossfade target matches
+        // what next() would have chosen.
+        const peekedFuture = playFuture[playFuture.length - 1];
+        const fromFuture =
+          peekedFuture !== undefined &&
+          peekedFuture >= 0 &&
+          peekedFuture < queue.length &&
+          peekedFuture !== currentIndex;
+        const idx = fromFuture
+          ? peekedFuture
+          : chooseNextShuffleIndex(queue.length, currentIndex, shuffleRemaining);
+        if (idx === currentIndex || idx < 0 || idx >= queue.length) return null;
+        // Mirror next()'s shuffle-with-repeat-off stop behavior: if the pool is
+        // exhausted and we're not repeating, don't crossfade into a refilled pool.
+        if (!fromFuture && repeatMode !== "all") {
+          const remaining = queue
+            .map((_, index) => index)
+            .filter((index) => index !== currentIndex && shuffleRemaining.includes(index));
+          if (remaining.length === 0) return null;
         }
-        const incoming = toAudio as HTMLAudioElement;
-        
-        // Compute upcoming track based on current queue snapshot
-        let nextIdx = currentIndex;
-        let nextFromFuture = false;
-        let nextSong = undefined as undefined | PlayerSong;
-        if (Array.isArray(queue) && queue.length > 0) {
-          if (shuffle) {
-            if (queue.length === 1) {
-              crossfadingRef.current = false;
-              return;
-            }
-            // Mirror next(): consume the redo stack (playFuture) before drawing a
-            // fresh index from the shuffle pool, so the crossfade target matches
-            // what next() would have chosen.
-            const peekedFuture = playFuture[playFuture.length - 1];
-            const fromFuture =
-              peekedFuture !== undefined &&
-              peekedFuture >= 0 &&
-              peekedFuture < queue.length &&
-              peekedFuture !== currentIndex;
-            const idx = fromFuture
-              ? peekedFuture
-              : chooseNextShuffleIndex(queue.length, currentIndex, shuffleRemaining);
-            if (idx === currentIndex || idx < 0 || idx >= queue.length) {
-              crossfadingRef.current = false;
-              return;
-            }
-            nextIdx = idx;
-            nextFromFuture = fromFuture;
-          } else {
-            const atEnd = currentIndex >= queue.length - 1;
-            if (atEnd) {
-              if (repeatMode === "all") nextIdx = 0;
-              else {
-                crossfadingRef.current = false;
-                return;
-              }
-            } else {
-              nextIdx = currentIndex + 1;
-            }
-          }
-          nextSong = queue[nextIdx];
+        nextIdx = idx;
+        nextFromFuture = fromFuture;
+      } else {
+        const atEnd = currentIndex >= queue.length - 1;
+        if (atEnd) {
+          if (repeatMode === "all") nextIdx = 0;
+          else return null;
         } else {
-          crossfadingRef.current = false;
+          nextIdx = currentIndex + 1;
+        }
+      }
+      const nextSong = queue[nextIdx];
+      if (!nextSong) return null;
+      return {
+        song: nextSong,
+        playbackSong: resolvePlaybackSong(nextSong),
+        index: nextIdx,
+        fromFuture: nextFromFuture,
+      };
+    };
+
+    // Shared commit: advance the store index and swap the active element so the UI
+    // tracks the now-playing (incoming) element. Used by both the timer-driven
+    // finish and the force-commit-on-ended path.
+    const commit = (
+      incoming: HTMLAudioElement,
+      target: { playbackSong: PlayerSong; index: number; fromFuture: boolean },
+    ) => {
+      crossfadeCancelRef.current = null;
+      crossfadeCommitSongIdRef.current = target.playbackSong.id;
+      advanceToIndex(target.index, { fromFuture: target.fromFuture });
+      setActiveIdx(activeIdx === 0 ? 1 : 0);
+      setDuration(
+        finiteMediaDuration(incoming.duration) ??
+          finiteMediaDuration(target.playbackSong.duration ?? 0) ??
+          0,
+      );
+      suppressAutoLoadRef.current = false;
+      crossfadingRef.current = false;
+      crossfadeStartedRef.current = false;
+    };
+
+    const startCrossfade = () => {
+      if (!crossfadeEnabled) return;
+      if (crossfadeStartedRef.current || crossfadingRef.current) return;
+      if (!isPlaying || repeatMode === "one") return;
+      const fromAudio = getActiveAudio();
+      const incoming = getInactiveAudio();
+      if (!fromAudio || !incoming) return;
+      const total = finiteMediaDuration(fromAudio.duration) ?? finiteMediaDuration(duration);
+      if (total == null) return;
+      const fadeWindow = Math.min(crossfadeSeconds, Math.max(0, total / 2));
+      if (fadeWindow <= 0) return;
+      const remaining = total - (fromAudio.currentTime || 0);
+      if (remaining > fadeWindow + 0.05) return;
+
+      const target = computeNextTarget();
+      if (!target) return;
+
+      crossfadeStartedRef.current = true;
+      crossfadingRef.current = true;
+      suppressAutoLoadRef.current = true;
+
+      if (target.playbackSong.audioUrl) loadAudioSource(incoming, target.playbackSong.audioUrl);
+      try { incoming.currentTime = 0; } catch {}
+
+      // iOS/iPadOS: volume writes are ignored, so an overlapping ramp would play
+      // both tracks at full volume. Do a clean cut instead — commit immediately
+      // and let the normal load effect start the incoming track.
+      if (!audioVolumeIsWritable(fromAudio)) {
+        try { fromAudio.pause(); } catch {}
+        commit(incoming, target);
+        return;
+      }
+
+      incoming.volume = 0;
+      const fadeMs = fadeWindow * 1000;
+      const startTs = performance.now();
+      const fromStartTime = fromAudio.currentTime || 0;
+      const targetVol = mutedRef.current ? 0 : volumeRef.current;
+      incoming.play().catch(() => {});
+
+      let intervalId: number | null = null;
+      const clearTimer = () => {
+        if (intervalId != null) {
+          window.clearInterval(intervalId);
+          intervalId = null;
+        }
+      };
+
+      const finish = () => {
+        clearTimer();
+        if (crossfadeCancelRef.current !== cancelFade) return;
+        try { fromAudio.pause(); } catch {}
+        if (!isPlayingRef.current) { try { incoming.pause(); } catch {} }
+        fromAudio.volume = 0;
+        commit(incoming, target);
+      };
+
+      const cancelFade = () => {
+        clearTimer();
+        try { incoming.pause(); } catch {}
+        incoming.volume = 0;
+        fromAudio.volume = mutedRef.current ? 0 : volumeRef.current;
+        suppressAutoLoadRef.current = false;
+        crossfadingRef.current = false;
+        crossfadeStartedRef.current = false;
+      };
+      crossfadeCancelRef.current = cancelFade;
+
+      const tick = () => {
+        if (crossfadeCancelRef.current !== cancelFade) {
+          clearTimer();
           return;
         }
-        if (!nextSong) { crossfadingRef.current = false; return; }
-        const nextPlaybackSong = resolvePlaybackSong(nextSong);
-        const nextSongId = nextPlaybackSong.id;
-        const nextIndexToCommit = nextIdx;
-        const nextIndexFromFuture = nextFromFuture;
+        const elapsed = Math.min(fadeMs, performance.now() - startTs);
+        const t = fadeMs > 0 ? elapsed / fadeMs : 1;
+        const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * (1 - t));
+        const toVol = Math.max(0, targetVol * t);
+        if ((fromAudio.currentTime || 0) >= fromStartTime) fromAudio.volume = fromVol;
+        incoming.volume = toVol;
+        if (elapsed >= fadeMs) finish();
+      };
 
-        // Prepare incoming track
-        suppressAutoLoadRef.current = true;
-        if (nextPlaybackSong.audioUrl) loadAudioSource(incoming, nextPlaybackSong.audioUrl);
-        incoming.currentTime = 0;
-        incoming.volume = 0;
-
-        // Do not switch UI yet; we will switch after fade completes to keep time/progress stable
-
-        const fadeMs = fadeWindow * 1000;
-        const startTs = performance.now();
-        const targetVol = mutedRef.current ? 0 : volumeRef.current;
-        const fromStartTime = fromAudio.currentTime || 0;
-        // Lock the total duration snapshot used for remaining calculations during fade
-        // Start incoming playback, ensure it's running while we fade
-        incoming.play().catch(() => {});
-        cancelFade = () => {
-          isMounted = false;
-          if (raf) cancelAnimationFrame(raf);
-          try { incoming.pause(); } catch {}
-          incoming.volume = 0;
-          fromAudio.volume = mutedRef.current ? 0 : volumeRef.current;
-          suppressAutoLoadRef.current = false;
-          crossfadingRef.current = false;
-        };
-        crossfadeCancelRef.current = cancelFade;
-
-        function fade() {
-          const now = performance.now();
-          const elapsed = Math.min(fadeMs, now - startTs);
-          const t = elapsed / fadeMs;
-          // Ease linear
-          const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * (1 - t));
-          const toVol = Math.max(0, targetVol * t);
-          // Apply volumes only if still the same segment (avoid jumps after seeks)
-          if ((fromAudio.currentTime || 0) >= fromStartTime) {
-            fromAudio.volume = fromVol;
-          }
-          incoming.volume = toVol;
-
-          if (elapsed < fadeMs && isPlaying && isMounted) {
-            raf = requestAnimationFrame(fade);
-          } else {
-            // Finish: pause outgoing, keep incoming playing, then switch UI to the new track
-            try { fromAudio.pause(); } catch {}
-            if (!isPlaying) { try { incoming.pause(); } catch {} }
-            // Keep previous track silent to avoid bleed-through
-            fromAudio.volume = 0;
-            crossfadeCancelRef.current = null;
-            crossfadeCommitSongIdRef.current = nextSongId;
-            // Switch UI/active element now that audio is already running
-            advanceToIndex(nextIndexToCommit, { fromFuture: nextIndexFromFuture });
-            setActiveIdx(activeIdx === 0 ? 1 : 0);
-            // Update duration from incoming element if known
-            setDuration(
-              finiteMediaDuration(incoming.duration) ??
-                finiteMediaDuration(nextPlaybackSong.duration ?? 0) ??
-                0,
-            );
-            suppressAutoLoadRef.current = false;
-            crossfadingRef.current = false;
-          }
-        }
-        raf = requestAnimationFrame(fade);
-      }
-      if (!started && isMounted) raf = requestAnimationFrame(step);
-    }
-
-    raf = requestAnimationFrame(step);
-    // Ensure we don't pause or change volume elsewhere during fade
-    return () => { 
-      isMounted = false;
-      if (raf) cancelAnimationFrame(raf); 
-      if (cancelFade && crossfadeCancelRef.current === cancelFade) {
-        crossfadeCancelRef.current = null;
-        cancelFade();
-      }
+      // ~60ms ticks keep the ramp smooth while still firing when backgrounded.
+      intervalId = window.setInterval(tick, 60);
+      tick();
     };
+
+    // Force-commit immediately when the outgoing track ends mid-fade (e.g. a
+    // backgrounded/locked fade where the ramp timer was throttled): snap volumes
+    // to final, pause the outgoing element, and commit so the queue can't wedge.
+    const forceCommit = () => {
+      if (!crossfadingRef.current) return;
+      // Detach the running ramp timer: it self-clears once crossfadeCancelRef no
+      // longer points at its cancelFade closure.
+      crossfadeCancelRef.current = null;
+      const fromAudio = getActiveAudio();
+      const incoming = getInactiveAudio();
+      const target = computeNextTarget();
+      if (!incoming || !target) {
+        // Nothing to commit into; clear the fade so the onEnded fallback can run.
+        suppressAutoLoadRef.current = false;
+        crossfadingRef.current = false;
+        crossfadeStartedRef.current = false;
+        return;
+      }
+      try { fromAudio?.pause(); } catch {}
+      if (fromAudio) fromAudio.volume = 0;
+      incoming.volume = mutedRef.current ? 0 : volumeRef.current;
+      if (isPlayingRef.current) incoming.play().catch(() => {});
+      commit(incoming, target);
+    };
+
+    maybeStartCrossfadeRef.current = startCrossfade;
+    forceCommitCrossfadeRef.current = forceCommit;
   }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, shuffle, shuffleRemaining]);
+
+  // Cancel any in-flight crossfade ramp (and its timer) when the bar unmounts.
+  useEffect(() => {
+    return () => {
+      crossfadeCancelRef.current?.();
+      crossfadeCancelRef.current = null;
+    };
+  }, []);
 
   const publishPlaybackState = useCallback(async (options?: { keepalive?: boolean }) => {
     if (!playbackSyncReadyRef.current || applyingSyncedPlaybackStateRef.current) return;
     const updatedAt = Math.max(Date.now(), playbackStateUpdatedAtRef.current + 1);
     const state = buildPlaybackStateSnapshot(updatedAt);
     if (!state) {
-      removeLocalPlaybackState();
+      // Mirror saveCurrentPlaybackStateToLocal: only remove when the queue is
+      // genuinely empty (sync is already known ready here).
+      if (queue.length === 0) removeLocalPlaybackState();
       return;
     }
     const stateSignature = playbackStateSyncSignature(state);
@@ -1079,7 +1182,7 @@ function PlayerBar(): React.ReactElement | null {
     } catch {
       markPlaybackStatePendingSync(state.updatedAt);
     }
-  }, [applyPlaybackStateSnapshot, buildPlaybackStateSnapshot]);
+  }, [applyPlaybackStateSnapshot, buildPlaybackStateSnapshot, queue]);
 
   const schedulePlaybackStateSync = useCallback((delayMs = 1_000) => {
     if (!playbackSyncReadyRef.current || applyingSyncedPlaybackStateRef.current) return;
@@ -1183,9 +1286,11 @@ function PlayerBar(): React.ReactElement | null {
     retryStickySeekRef.current();
     const sticky = stickySeekRef.current;
     if (sticky?.audio === audio && !seekIsCloseEnough(audio.currentTime, sticky.time)) {
+      currentTimeRef.current = sticky.time;
       setCurrentTime(sticky.time);
       return;
     }
+    currentTimeRef.current = audio.currentTime || 0;
     setCurrentTime(audio.currentTime || 0);
     if (resumeAfterSeekRef.current) resumeActivePlayback(audio);
   }, [getActiveAudio, resumeActivePlayback]);
@@ -1193,15 +1298,54 @@ function PlayerBar(): React.ReactElement | null {
   const handleActiveAudioPlaying = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     if (event.currentTarget === getActiveAudio()) {
       resumeAfterSeekRef.current = false;
+      // A successful play clears the consecutive-error counter and the
+      // retried-source guard so future failures get a fresh retry budget.
+      consecutiveAudioErrorsRef.current = 0;
+      erroredSrcRetryRef.current = null;
       notePlaybackNetworkSuccess();
     }
   }, [getActiveAudio]);
 
   const handleActiveAudioError = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
-    if (event.currentTarget !== getActiveAudio()) return;
+    const audio = event.currentTarget;
+    if (audio !== getActiveAudio()) return;
+    // Radio / browser-local / offline sources have their own handling.
     if (currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast || currentSongIsOffline) return;
     notePlaybackNetworkFailure();
-  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, getActiveAudio]);
+
+    const state = audioSourceStateRef.current.get(audio);
+    const baseSrc = state?.src ?? audio.currentSrc ?? audio.src;
+    if (!baseSrc) return;
+
+    // Retry the same track once with a cache-busted URL before skipping. Don't
+    // touch HLS sources (managed by hls.js) — only retry plain element srcs.
+    if (!state?.hls && erroredSrcRetryRef.current !== baseSrc) {
+      erroredSrcRetryRef.current = baseSrc;
+      const sep = baseSrc.includes("?") ? "&" : "?";
+      const bustedSrc = `${baseSrc}${sep}__retry=${Date.now()}`;
+      try {
+        audio.src = bustedSrc;
+        audioSourceStateRef.current.set(audio, { src: baseSrc, hls: null });
+        audio.load();
+        if (isPlayingRef.current) void audio.play().catch(() => {});
+        return;
+      } catch {}
+    }
+
+    // Retry failed (or already retried): count it and skip to the next track,
+    // stopping after a few consecutive failures so we don't loop through a dead
+    // queue forever.
+    consecutiveAudioErrorsRef.current += 1;
+    if (consecutiveAudioErrorsRef.current >= MAX_CONSECUTIVE_AUDIO_ERRORS) {
+      consecutiveAudioErrorsRef.current = 0;
+      erroredSrcRetryRef.current = null;
+      console.error("Playback stopped after repeated track load failures.");
+      pause();
+      return;
+    }
+    erroredSrcRetryRef.current = null;
+    next();
+  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, getActiveAudio, next, pause]);
 
   const handleTogglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -1252,6 +1396,9 @@ function PlayerBar(): React.ReactElement | null {
     }
 
     function onKeyDown(e: KeyboardEvent) {
+      // No song loaded: don't hijack any keys app-wide (let the browser handle
+      // space/arrows normally).
+      if (!currentSongId) return;
       // Spacebar toggles play/pause
       if (isSpaceKey(e) && !e.metaKey && !e.ctrlKey && !e.altKey) {
         if (shouldPreserveSpaceKeyTarget(e.target)) return;
@@ -1261,20 +1408,9 @@ function PlayerBar(): React.ReactElement | null {
         return;
       }
       if (shouldPreserveArrowKeyTarget(e.target)) return;
-      // Meta + Arrow for previous/next track
-      if (e.metaKey && e.key === "ArrowRight") {
-        e.preventDefault();
-        e.stopPropagation();
-        next();
-        return;
-      }
-      if (e.metaKey && e.key === "ArrowLeft") {
-        e.preventDefault();
-        e.stopPropagation();
-        previous();
-        return;
-      }
-      // Arrow keys for seeking +/- 5 seconds
+      // Plain arrow keys seek +/- 5 seconds. Modifier+arrow is left untouched so
+      // it doesn't shadow browser navigation (e.g. Cmd+Left/Right Back/Forward).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "ArrowRight") {
         e.preventDefault();
         e.stopPropagation();
@@ -1291,6 +1427,7 @@ function PlayerBar(): React.ReactElement | null {
     }
 
     function onKeyUp(e: KeyboardEvent) {
+      if (!currentSongId) return;
       if (isSpaceKey(e) && !e.metaKey && !e.ctrlKey && !e.altKey && !shouldPreserveSpaceKeyTarget(e.target)) {
         e.preventDefault();
         e.stopPropagation();
@@ -1304,7 +1441,7 @@ function PlayerBar(): React.ReactElement | null {
       window.removeEventListener("keydown", onKeyDown, options);
       window.removeEventListener("keyup", onKeyUp, options);
     };
-  }, [next, previous, duration, handleTogglePlayback, getActiveAudio, onSeek, playbackDuration]);
+  }, [currentSongId, duration, handleTogglePlayback, getActiveAudio, onSeek, playbackDuration]);
 
   const renderAudio = (ref: React.RefObject<HTMLAudioElement | null>) => (
     <audio
@@ -1319,9 +1456,13 @@ function PlayerBar(): React.ReactElement | null {
         setDuration(mediaDuration ?? 0);
         const pending = savedSeekRef.current;
         const seekDuration = mediaDuration ?? finiteMediaDuration(duration);
-        if (typeof pending === "number" && seekDuration != null) {
-          const clamped = Math.max(0, Math.min(seekDuration, pending));
+        if (pending && seekDuration != null && pending.songId === playbackSong?.id) {
+          const clamped = Math.max(0, Math.min(seekDuration, pending.time));
           performSeek(audio, clamped, seekDuration);
+          savedSeekRef.current = null;
+        } else if (pending && pending.songId !== playbackSong?.id) {
+          // Stale resume target for a different track; drop it so it can't be
+          // applied to the wrong song.
           savedSeekRef.current = null;
         }
         retryStickySeekRef.current();
@@ -1331,10 +1472,15 @@ function PlayerBar(): React.ReactElement | null {
         if (e.currentTarget === getActiveAudio()) {
           const sticky = stickySeekRef.current;
           if (sticky?.audio === e.currentTarget && !seekIsCloseEnough(e.currentTarget.currentTime, sticky.time)) {
+            currentTimeRef.current = sticky.time;
             setCurrentTime(sticky.time);
             return;
           }
-          setCurrentTime(currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0);
+          const nextTime = currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0;
+          currentTimeRef.current = nextTime;
+          setCurrentTime(nextTime);
+          // Drive the crossfade trigger from timeupdate (fires while backgrounded).
+          if (!currentSongIsRadio) maybeStartCrossfadeRef.current();
         }
       }}
       onLoadedData={handleActiveAudioResumePoint}
@@ -1346,7 +1492,12 @@ function PlayerBar(): React.ReactElement | null {
       onError={handleActiveAudioError}
       onEnded={(e) => {
         if (e.currentTarget !== getActiveAudio()) return;
-        if (crossfadingRef.current) return;
+        if (crossfadingRef.current) {
+          // A backgrounded/locked fade may not have finished on the timer before
+          // the outgoing track ended. Force-commit now so the queue can't wedge.
+          forceCommitCrossfadeRef.current();
+          return;
+        }
         const audio = e.currentTarget;
         if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1)) {
           audio.currentTime = 0;
@@ -1365,15 +1516,21 @@ function PlayerBar(): React.ReactElement | null {
     </>
   );
 
-  if (!playbackSong) return audioElements;
   const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !currentSongIsRadio;
   const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
   const progress = hasSeekableDuration ? Math.min(100, Math.max(0, (safeCurrentTime / duration) * 100)) : 0;
 
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
 
+  // Always render the two <audio> nodes first, at a stable tree position, in
+  // both the null and non-null states. If they were reconciled away on a
+  // null<->song transition React would destroy+recreate them, causing double
+  // playback and breaking the iOS user-gesture chain.
   return (
     <>
+      {audioElements}
+      {!playbackSong ? null : (
+      <>
       {nowPlayingMounted ? (
         <Suspense fallback={null}>
           <NowPlayingSheet
@@ -1388,7 +1545,6 @@ function PlayerBar(): React.ReactElement | null {
         </Suspense>
       ) : null}
       <div className="fixed inset-x-0 z-40 border-t border-white/[0.12] bg-background text-white bottom-[var(--wf-mobile-nav-bottom-offset)] lg:bottom-0">
-      {audioElements}
       {/* Mobile mini player */}
       <div className="lg:hidden relative">
         <div
@@ -1576,6 +1732,8 @@ function PlayerBar(): React.ReactElement | null {
         </div>
       </div>
       </div>
+      </>
+      )}
     </>
   );
 }

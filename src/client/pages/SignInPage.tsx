@@ -1,6 +1,25 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/client/auth";
+
+function resolveRedirectTarget(
+  state: unknown,
+  search: string,
+): string {
+  // Prefer an explicit return-to passed via navigation state (e.g. from a
+  // guard that bounced the user to /signin), then fall back to ?next=, else
+  // home. Only accept same-origin path redirects to avoid open-redirects.
+  const fromState =
+    state && typeof state === "object" && "from" in state
+      ? (state as { from?: unknown }).from
+      : undefined;
+  const next =
+    typeof fromState === "string"
+      ? fromState
+      : new URLSearchParams(search).get("next");
+  if (next && next.startsWith("/") && !next.startsWith("//")) return next;
+  return "/";
+}
 
 export default function SignInPage() {
   const [email, setEmail] = useState("");
@@ -8,6 +27,7 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const { signIn } = useAuth();
 
   async function onSubmit(e: React.FormEvent) {
@@ -16,7 +36,7 @@ export default function SignInPage() {
     setLoading(true);
     try {
       await signIn(email, password);
-      navigate("/");
+      navigate(resolveRedirectTarget(location.state, location.search), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid email or password");
     } finally {

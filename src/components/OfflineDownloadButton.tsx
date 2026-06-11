@@ -6,6 +6,7 @@ import { CheckCircle2, CircleArrowDown, RefreshCw, X } from "lucide-react";
 import {
   getScopeDownloadState,
   getSongDownloadState,
+  readScopeDownloadState,
   type DownloadScope,
   useOfflineStore,
 } from "@/client/offline";
@@ -90,7 +91,8 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
   const queueDownloads = useOfflineStore((state) => state.queueDownloads);
   const removeDownload = useOfflineStore((state) => state.removeDownload);
   const status = getSongDownloadState(record);
-  const busy = actionPending || status === "queued" || status === "downloading";
+  const inFlight = status === "queued" || status === "downloading";
+  const busy = actionPending || inFlight;
   const progress = busy ? Math.max(0, Math.min(1, record?.progress ?? 0)) : 0;
   const progressPercent = Math.round(progress * 100);
 
@@ -134,9 +136,24 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
 
   async function handleClick(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
-    if (busy) return;
+    if (actionPending) return;
     if (status === "downloaded") {
       setConfirmOpen(true);
+      return;
+    }
+    // Allow cancelling a queued/in-flight download: removing the IDB record + cached
+    // URLs is enough because the download pump re-reads IDB each iteration and
+    // tolerates a vanished record.
+    if (inFlight) {
+      setActionError(null);
+      setActionPending(true);
+      try {
+        await removeDownload(song.id);
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : "Could not cancel download");
+      } finally {
+        setActionPending(false);
+      }
       return;
     }
     setActionError(null);
@@ -172,8 +189,8 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
         ? actionError
         : status === "failed"
         ? "Retry offline download"
-        : busy
-          ? `Downloading ${progressPercent}%`
+        : inFlight
+          ? `Downloading ${progressPercent}% · tap to cancel`
           : "Download for offline playback";
 
   const Icon =
@@ -190,19 +207,32 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
         aria-label={title}
         title={title}
         onClick={handleClick}
-        disabled={busy}
+        disabled={actionPending}
         className={cn(
-          "grid h-9 w-9 shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+          "group relative grid h-9 w-9 shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
           status === "downloaded"
             ? "text-emerald-500"
             : status === "failed" || actionError
               ? "text-red-300"
               : "text-white/[0.68] hover:bg-white/[0.09] hover:text-white",
-          busy && "cursor-wait text-emerald-400",
+          inFlight && "text-emerald-400 hover:text-white",
+          actionPending && "cursor-wait",
           className,
         )}
       >
-        {busy ? <DownloadProgressPie progress={progress} /> : <Icon size={18} />}
+        {inFlight ? (
+          <>
+            <DownloadProgressPie progress={progress} />
+            <X
+              size={14}
+              className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 group-hover:block group-focus-visible:block"
+            />
+          </>
+        ) : actionPending ? (
+          <DownloadProgressPie progress={progress} />
+        ) : (
+          <Icon size={18} />
+        )}
       </button>
 
       {confirmOpen && typeof document !== "undefined"
@@ -283,9 +313,14 @@ export function OfflineBulkDownloadButton({
   const actionPendingRef = useRef(false);
   const confirmTitleId = useId();
   const confirmDescriptionId = useId();
-  const status = getScopeDownloadState(records, songs, scope);
+  const inMemoryStatus = getScopeDownloadState(records, songs, scope);
+  const [idbStatus, setIdbStatus] = useState<ReturnType<typeof getScopeDownloadState> | null>(null);
+  // The in-memory record map is capped, so for big collections it can mis-report a
+  // fully-downloaded scope as "partial"/"none". Prefer the authoritative IDB read.
+  const status = idbStatus ?? inMemoryStatus;
   const cacheableSongs = songs.filter(canCacheSong);
-  const busy = actionPending || status === "downloading";
+  const inFlight = status === "downloading";
+  const busy = actionPending || inFlight;
   const downloaded = status === "downloaded";
   const progress = busy ? scopeProgress(records, songs, scope) : 0;
   const progressPercent = Math.round(progress * 100);
@@ -293,6 +328,18 @@ export function OfflineBulkDownloadButton({
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    readScopeDownloadState(songs, scope)
+      .then((next) => {
+        if (!cancelled) setIdbStatus(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [records, songs, scope]);
 
   useEffect(() => {
     actionPendingRef.current = actionPending;
@@ -329,10 +376,23 @@ export function OfflineBulkDownloadButton({
   if (downloaded && hideWhenDownloaded) return null;
 
   async function handleClick() {
-    if (busy || cacheableSongs.length === 0) return;
+    if (actionPending || cacheableSongs.length === 0) return;
     setActionError(null);
     if (downloaded) {
       setConfirmOpen(true);
+      return;
+    }
+    // Allow cancelling an in-progress collection download: removeScope clears the IDB
+    // records + cached URLs, and the pump tolerates the vanished records mid-run.
+    if (inFlight) {
+      setActionPending(true);
+      try {
+        await removeScope(scope);
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : "Could not cancel downloads");
+      } finally {
+        setActionPending(false);
+      }
       return;
     }
     setActionPending(true);
@@ -359,17 +419,17 @@ export function OfflineBulkDownloadButton({
     }
   }
 
-  const Icon = downloaded ? X : status === "failed" ? RefreshCw : CircleArrowDown;
+  const Icon = downloaded ? X : status === "failed" ? RefreshCw : inFlight ? X : CircleArrowDown;
   const text = actionError
     ? "Retry downloads"
     : downloaded
       ? "Remove downloads"
       : status === "failed"
         ? "Retry downloads"
-        : status === "partial"
-          ? "Finish download"
-          : busy
-            ? `Downloading ${progressPercent}%`
+        : inFlight
+          ? `Downloading ${progressPercent}% · cancel`
+          : status === "partial"
+            ? "Finish download"
             : label;
   const title = actionError || text;
 
@@ -379,7 +439,7 @@ export function OfflineBulkDownloadButton({
         type="button"
         aria-label={title}
         title={title}
-        disabled={busy || cacheableSongs.length === 0}
+        disabled={actionPending || cacheableSongs.length === 0}
         onClick={handleClick}
         className={cn(
           iconOnly
@@ -391,7 +451,8 @@ export function OfflineBulkDownloadButton({
             : actionError
               ? "bg-red-500/15 text-red-300 hover:bg-red-500/20"
               : "bg-white/[0.08] text-white/[0.78] hover:bg-white/[0.12] hover:text-white",
-          busy && "cursor-wait text-emerald-300",
+          inFlight && "text-emerald-300",
+          actionPending && "cursor-wait",
           cacheableSongs.length === 0 && "cursor-wait opacity-70",
           className,
         )}

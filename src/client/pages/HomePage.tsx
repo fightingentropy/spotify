@@ -177,12 +177,25 @@ function SaveToLikedButton({
 export default function HomePage() {
   const navigate = useNavigate();
   const { user, status } = useAuth();
-  const [viewMode, setViewMode] = useState<HomeViewMode>("list");
-  const [dateSortMode, setDateSortMode] = useState<HomeDateSortMode>("date_desc");
+  const [viewMode, setViewMode] = useState<HomeViewMode>(() => {
+    try {
+      const stored = localStorage.getItem(HOME_VIEW_MODE_KEY);
+      if (stored === "list" || stored === "grid") return stored;
+    } catch {}
+    return "list";
+  });
+  const [dateSortMode, setDateSortMode] = useState<HomeDateSortMode>(() => {
+    try {
+      const stored = localStorage.getItem(HOME_DATE_SORT_KEY);
+      if (stored === "date_desc" || stored === "date_asc") return stored;
+    } catch {}
+    return "date_desc";
+  });
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
   const durationLookupRef = useRef<Record<string, number | null>>({});
+  const mergedLikesRef = useRef(false);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const warmVisibleSongsRef = useRef<Map<Element, HomeSong>>(new Map());
   const warmObserverRef = useRef<IntersectionObserver | null>(null);
@@ -191,6 +204,10 @@ export default function HomePage() {
     {
       songs: [],
       likedSongIds: [],
+    },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
     },
   );
 
@@ -208,29 +225,35 @@ export default function HomePage() {
   const pendingLikes = useLikesStore((state) => state.pending);
   const likesHydrated = useLikesStore((state) => state.hydrated);
   const toggleLike = useLikesStore((state) => state.toggleLike);
-  const offlineRecords = useOfflineStore((state) => state.records);
+  // Subscribe to a stable signature of only the downloaded record ids rather
+  // than the whole records map. resolveOfflinePlaybackSong only swaps in
+  // records whose status is "downloaded", so per-tick progress updates on an
+  // active download no longer churn this value (and the duration-probe effect
+  // below). The signature changes only when a download completes/is removed.
+  const offlineRecordsSignature = useOfflineStore((state) => {
+    const ids: string[] = [];
+    for (const id of Object.keys(state.records)) {
+      if (state.records[id]?.status === "downloaded") ids.push(id);
+    }
+    return ids.sort().join("|");
+  });
 
   const resolveHomeSong = useCallback(
     (song: HomeSong): HomeSong => resolveOfflinePlaybackSong(song) as HomeSong,
-    [offlineRecords],
+    [offlineRecordsSignature],
   );
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(HOME_VIEW_MODE_KEY);
-      if (stored === "list" || stored === "grid") {
-        setViewMode(stored);
-      }
-      const storedDateSort = localStorage.getItem(HOME_DATE_SORT_KEY);
-      if (storedDateSort === "date_desc" || storedDateSort === "date_asc") {
-        setDateSortMode(storedDateSort);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => {
+    // A transient empty array can arrive mid-refetch (initialValue or a
+    // keepPreviousData reset). Merging it would wipe remote likes, so only
+    // merge once we have a real payload. An empty list is still merged when
+    // the fetch has genuinely settled (loading === false) so an account with
+    // zero likes hydrates correctly.
+    if (loading) return;
+    if (data.likedSongIds.length === 0 && !mergedLikesRef.current) return;
+    mergedLikesRef.current = true;
     mergeInitialLikes(data.likedSongIds);
-  }, [data.likedSongIds, mergeInitialLikes]);
+  }, [data.likedSongIds, loading, mergeInitialLikes]);
 
   useEffect(() => {
     durationLookupRef.current = durationLookup;
@@ -406,11 +429,9 @@ export default function HomePage() {
         audio.removeAttribute("src");
         audio.load();
       }
-      for (const song of songsToProbe) {
-        if (durationLookupRef.current[song.id] === undefined) {
-          durationProbeIdsRef.current.delete(song.id);
-        }
-      }
+      // Keep probe markers in the ref across effect re-runs. They're cleared
+      // explicitly in rememberDuration on success/failure; dropping them here
+      // would re-issue the same Audio() probes every time records change.
     };
   }, [enableVirtualList, isPlaying, listVirtualRange.end, listVirtualRange.start, resolveHomeSong, sortedSongs]);
 
@@ -575,7 +596,7 @@ export default function HomePage() {
     );
   };
 
-  if (loading) {
+  if (loading || status === "loading") {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
         <div className="opacity-70">Loading library...</div>

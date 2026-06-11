@@ -9,10 +9,14 @@ export default function SearchPage() {
     {
       songs: [],
     },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
+    },
   );
   const songs = data.songs;
 
-  if (loading) {
+  if (loading || status === "loading") {
     return (
       <div className="px-4 py-6 max-w-7xl mx-auto">
         <div className="mb-5 text-2xl font-semibold">Search</div>

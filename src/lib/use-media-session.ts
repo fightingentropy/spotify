@@ -94,13 +94,25 @@ function applyPlaybackState(isPlaying: boolean): void {
 }
 
 function applyPositionState(currentTime: number, duration: number): void {
-  if (!("mediaSession" in navigator) || duration <= 0) return;
+  if (!("mediaSession" in navigator)) return;
+  if (duration <= 0) {
+    clearPositionState();
+    return;
+  }
   try {
     navigator.mediaSession.setPositionState({
       duration,
       playbackRate: 1,
       position: Math.min(Math.max(0, currentTime), duration),
     });
+  } catch {}
+}
+
+function clearPositionState(): void {
+  if (!("mediaSession" in navigator) || typeof navigator.mediaSession.setPositionState !== "function") return;
+  try {
+    // Clear any stale position (e.g. when switching to a live radio stream).
+    navigator.mediaSession.setPositionState();
   } catch {}
 }
 
@@ -122,6 +134,8 @@ export function useMediaSession({
   const isPlayingRef = useRef(isPlaying);
   const currentTimeRef = useRef(currentTime);
   const durationRef = useRef(duration);
+  const lastPositionPublishRef = useRef(0);
+  const lastPublishedDurationRef = useRef(0);
 
   useEffect(() => {
     handlersRef.current = { onPlay, onPause, onPrevious, onNext, onSeek };
@@ -176,7 +190,15 @@ export function useMediaSession({
   }, [isPlaying, song]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator) || !song || duration <= 0) return;
+    if (!("mediaSession" in navigator) || !song) return;
+    // The OS interpolates position on its own, so there's no need to push every
+    // 4Hz currentTime tick. Publish immediately when the duration changes (so the
+    // lock-screen scrubber rescales for VBR/HLS), otherwise throttle to ~1Hz.
+    const durationChanged = duration !== lastPublishedDurationRef.current;
+    const elapsed = Date.now() - lastPositionPublishRef.current;
+    if (!durationChanged && elapsed < 1000) return;
+    lastPositionPublishRef.current = Date.now();
+    lastPublishedDurationRef.current = duration;
     applyPositionState(currentTime, duration);
   }, [currentTime, duration, song]);
 
@@ -189,6 +211,18 @@ export function useMediaSession({
       syncMediaSession();
     };
 
+    const onActiveDurationChange = (event: Event) => {
+      const active = getActiveAudio();
+      if (!active || event.currentTarget !== active) return;
+      // A VBR/HLS duration update should re-publish position state right away so
+      // the lock-screen scrubber rescales; bypass the ~1Hz throttle.
+      lastPositionPublishRef.current = 0;
+      lastPublishedDurationRef.current = -1;
+      const mediaDuration = active.duration;
+      if (Number.isFinite(mediaDuration)) durationRef.current = mediaDuration;
+      syncMediaSession();
+    };
+
     const elements = audioRefs
       .map((ref) => ref.current)
       .filter((element): element is HTMLAudioElement => element != null);
@@ -197,6 +231,7 @@ export function useMediaSession({
       element.addEventListener("loadedmetadata", onActiveAudioEvent);
       element.addEventListener("play", onActiveAudioEvent);
       element.addEventListener("playing", onActiveAudioEvent);
+      element.addEventListener("durationchange", onActiveDurationChange);
     }
 
     const active = getActiveAudio();
@@ -209,6 +244,7 @@ export function useMediaSession({
         element.removeEventListener("loadedmetadata", onActiveAudioEvent);
         element.removeEventListener("play", onActiveAudioEvent);
         element.removeEventListener("playing", onActiveAudioEvent);
+        element.removeEventListener("durationchange", onActiveDurationChange);
       }
       clearActionHandlers();
     };

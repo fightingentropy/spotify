@@ -65,6 +65,10 @@ export async function fetchWithTimeout(
     return await fetch(url, {
       method: options?.method ?? "GET",
       body: options?.body,
+      // Default to following redirects because several providers return the
+      // stream via a 3xx Location; resolver calls that must not be redirected
+      // out from under the caller (e.g. SSRF-sensitive hops) opt into
+      // redirect:"manual" explicitly via options.
       redirect: options?.redirect ?? "follow",
       signal: controller.signal,
       headers,

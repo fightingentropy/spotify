@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Activity, CheckCircle2, Database, HardDrive, RefreshCw, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
 import { readOfflineDiagnostics, type OfflineDiagnostics } from "@/client/offline-diagnostics";
-import { formatBytes, useOfflineStore } from "@/client/offline";
+import { formatBytes, readDownloadedBytesTotal, useOfflineStore } from "@/client/offline";
 
 export default function OfflineSettings() {
   const hydrate = useOfflineStore((state) => state.hydrate);
@@ -28,6 +28,7 @@ export default function OfflineSettings() {
   const refreshStorage = useOfflineStore((state) => state.refreshStorage);
   const [diagnostics, setDiagnostics] = useState<OfflineDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [downloadedBytes, setDownloadedBytes] = useState<number | null>(null);
 
   useEffect(() => {
     void hydrate();
@@ -46,14 +47,30 @@ export default function OfflineSettings() {
     void refreshDiagnostics();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    readDownloadedBytesTotal()
+      .then((total) => {
+        if (!cancelled) setDownloadedBytes(total);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // Recompute whenever records change (download completed/removed) or storage refreshes.
+  }, [records, storageUsage]);
+
   const downloads = Object.values(records);
   const downloaded = downloads.filter((record) => record.status === "downloaded").length;
   const failed = downloads.filter((record) => record.status === "failed").length;
   const active = downloads.filter((record) => record.status === "queued" || record.status === "downloading").length;
-  const downloadedBytes = downloads.reduce(
+  const inMemoryDownloadedBytes = downloads.reduce(
     (total, record) => total + (record.status === "downloaded" ? record.size : 0),
     0,
   );
+  // Prefer the IDB-backed total: the in-memory record map is capped, so summing it
+  // undercounts once there are more downloads than the cap.
+  const displayedDownloadedBytes = downloadedBytes ?? inMemoryDownloadedBytes;
   const quotaKnown = typeof storageQuota === "number" && storageQuota > 0;
   const usageKnown = typeof storageUsage === "number" && storageUsage >= 0;
   const usedPercent = quotaKnown && usageKnown ? Math.min(100, Math.round((storageUsage / storageQuota) * 100)) : null;
@@ -121,7 +138,7 @@ export default function OfflineSettings() {
         </div>
         <div className="rounded-md bg-black/20 p-3">
           <dt className="text-white/[0.55]">Downloaded media</dt>
-          <dd className="mt-1 font-medium">{formatBytes(downloadedBytes)}</dd>
+          <dd className="mt-1 font-medium">{formatBytes(displayedDownloadedBytes)}</dd>
         </div>
         <div className="rounded-md bg-black/20 p-3">
           <dt className="text-white/[0.55]">Storage mode</dt>

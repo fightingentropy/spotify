@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS "Song" (
   "duration" REAL,
   "audioBitDepth" INTEGER,
   "audioSampleRate" INTEGER,
+  "album" TEXT,
+  "albumArtist" TEXT,
+  "releaseDate" TEXT,
+  "trackNumber" INTEGER,
+  "totalTracks" INTEGER,
+  "discNumber" INTEGER,
+  "totalDiscs" INTEGER,
+  "genre" TEXT,
+  "isrc" TEXT,
+  "upc" TEXT,
+  "composer" TEXT,
+  "publisher" TEXT,
+  "copyright" TEXT,
+  "outputFormat" TEXT DEFAULT 'flac',
   "userId" TEXT NOT NULL,
   "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -114,6 +128,12 @@ CREATE TABLE IF NOT EXISTS "PlaybackState" (
   "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS "RateLimit" (
+  "key" TEXT NOT NULL PRIMARY KEY,
+  "count" INTEGER NOT NULL DEFAULT 0,
+  "resetAt" INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS "idx_song_title" ON "Song" ("title");
 CREATE INDEX IF NOT EXISTS "idx_song_createdAt" ON "Song" ("createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "createdAt" DESC);
@@ -124,6 +144,7 @@ CREATE INDEX IF NOT EXISTS "idx_offlinedownload_userId_updatedAt" ON "OfflineDow
 CREATE INDEX IF NOT EXISTS "idx_playbackstate_userId_updatedAt" ON "PlaybackState" ("userId", "updatedAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_account_userId" ON "Account" ("userId");
 CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");
+CREATE INDEX IF NOT EXISTS "idx_ratelimit_resetAt" ON "RateLimit" ("resetAt");
 `;
 
 export const D1_SCHEMA_STATEMENTS = D1_SCHEMA_SQL

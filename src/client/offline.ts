@@ -132,7 +132,9 @@ const DB_NAME = "spotify_offline_v1";
 const DB_VERSION = 3;
 const LEGACY_DOWNLOAD_STORE = "downloads";
 const DOWNLOAD_STORE = "downloads_v2";
-const API_SNAPSHOT_STORE = "api_snapshots";
+// Exported so offline-api-snapshots.ts shares the exact store name and a single
+// open/upgrade path (see openOfflineDb) — a DB_VERSION bump can't desync the two.
+export const API_SNAPSHOT_STORE = "api_snapshots";
 const MUTATION_STORE = "mutations";
 const DOWNLOAD_INDEX_ACCOUNT_UPDATED_AT = "accountScope_updatedAt";
 const DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT = "accountScope_status_updatedAt";
@@ -148,6 +150,9 @@ const DOWNLOAD_CACHE_WRITE_TIMEOUT_MS = 60_000;
 const DOWNLOAD_RETRY_ATTEMPTS = 3;
 const DOWNLOAD_RETRY_DELAY_MS = 1_000;
 const STALE_DOWNLOADING_MS = 2 * 60 * 1_000;
+const STALE_SYNCING_MUTATION_MS = 60 * 1_000;
+const MUTATION_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_MUTATION_ATTEMPTS = 5;
 const HYDRATE_DOWNLOAD_RECORD_LIMIT = 160;
 const MAX_DOWNLOAD_RECORDS_IN_MEMORY = 420;
 
@@ -326,6 +331,7 @@ function rawStoreGetAll<T>(db: IDBDatabase, storeName: string): Promise<T[]> {
     request.onsuccess = () => resolve(request.result as T[]);
     request.onerror = () => reject(request.error ?? new Error(`Failed to read ${storeName}`));
     tx.onerror = () => reject(tx.error ?? new Error(`Failed to read ${storeName}`));
+    tx.onabort = () => reject(tx.error ?? new Error(`Aborted reading ${storeName}`));
   });
 }
 
@@ -350,7 +356,7 @@ async function migrateLegacyDownloadStore(db: IDBDatabase): Promise<void> {
   if (migrated.length > 0) await rawStorePutAll(db, DOWNLOAD_STORE, migrated);
 }
 
-function openOfflineDb(): Promise<IDBDatabase> {
+export function openOfflineDb(): Promise<IDBDatabase> {
   if (!hasIndexedDb()) return Promise.reject(new Error("IndexedDB is not available"));
   dbPromise ??= new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -400,6 +406,7 @@ async function idbGetAll<T>(storeName: string): Promise<T[]> {
     request.onsuccess = () => resolve(request.result as T[]);
     request.onerror = () => reject(request.error ?? new Error(`Failed to read ${storeName}`));
     tx.onerror = () => reject(tx.error ?? new Error(`Failed to read ${storeName}`));
+    tx.onabort = () => reject(tx.error ?? new Error(`Aborted reading ${storeName}`));
   });
 }
 
@@ -449,6 +456,7 @@ async function countDownloadRecordsForAccount(options: DownloadRecordPageOptions
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Failed to count downloads"));
     tx.onerror = () => reject(tx.error ?? new Error("Failed to count downloads"));
+    tx.onabort = () => reject(tx.error ?? new Error("Aborted counting downloads"));
   });
 }
 
@@ -490,6 +498,7 @@ async function readDownloadRecordsForAccount(
     };
     request.onerror = () => reject(request.error ?? new Error("Failed to read downloads"));
     tx.onerror = () => reject(tx.error ?? new Error("Failed to read downloads"));
+    tx.onabort = () => reject(tx.error ?? new Error("Aborted reading downloads"));
   });
 
   return {
@@ -513,6 +522,7 @@ async function idbGet<T>(storeName: string, key: IDBValidKey): Promise<T | undef
     request.onsuccess = () => resolve(request.result as T | undefined);
     request.onerror = () => reject(request.error ?? new Error(`Failed to read ${storeName}`));
     tx.onerror = () => reject(tx.error ?? new Error(`Failed to read ${storeName}`));
+    tx.onabort = () => reject(tx.error ?? new Error(`Aborted reading ${storeName}`));
   });
 }
 
@@ -534,29 +544,7 @@ async function idbDelete(storeName: string, key: IDBValidKey): Promise<void> {
     tx.objectStore(storeName).delete(key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error ?? new Error(`Failed to delete from ${storeName}`));
-  });
-}
-
-async function idbDeleteMany(storeName: string, keys: IDBValidKey[]): Promise<void> {
-  if (keys.length === 0) return;
-  const db = await openOfflineDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    const store = tx.objectStore(storeName);
-    for (const key of keys) store.delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error(`Failed to delete from ${storeName}`));
     tx.onabort = () => reject(tx.error ?? new Error(`Failed to delete from ${storeName}`));
-  });
-}
-
-async function idbClear(storeName: string): Promise<void> {
-  const db = await openOfflineDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, "readwrite");
-    tx.objectStore(storeName).clear();
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error(`Failed to clear ${storeName}`));
   });
 }
 
@@ -868,6 +856,12 @@ async function cacheDurableUrlOnce(
   try {
     return await cacheUrl(url, OFFLINE_MEDIA_CACHE, onProgress);
   } catch (error) {
+    // Only evict cached media under genuine quota pressure. Pruning on any error
+    // (timeouts, transient network failures) needlessly destroyed half the
+    // playback cache and all runtime caches.
+    if (!(error instanceof DOMException && error.name === "QuotaExceededError")) {
+      throw error;
+    }
     await prunePlaybackCache();
     await pruneRuntimeCaches();
     return await cacheUrl(url, OFFLINE_MEDIA_CACHE, onProgress).catch(() => {
@@ -1006,6 +1000,31 @@ async function persistRecord(record: OfflineDownloadRecord): Promise<void> {
   const scoped = scopedDownloadRecord(record);
   await idbPut(DOWNLOAD_STORE, scoped);
   setRecordState(scoped);
+}
+
+// Persist the pump's terminal result without clobbering concurrent edits.
+// queueDownloads may have added a new scope to pinnedBy (or refreshed `song`)
+// while the download was in flight; re-read the latest record and merge the
+// completion patch so those changes survive the pump's stale `working` snapshot.
+async function persistDownloadResult(
+  working: OfflineDownloadRecord,
+  patch: Partial<OfflineDownloadRecord>,
+): Promise<OfflineDownloadRecord> {
+  const latest = await idbGet<OfflineDownloadRecord>(
+    DOWNLOAD_STORE,
+    downloadRecordKey(working.songId, working.accountScope),
+  ).catch(() => undefined);
+  const base = isOfflineRecordForAccount(latest, working.accountScope) ? latest : working;
+  const pinnedBy = Array.from(new Set([...base.pinnedBy, ...working.pinnedBy]));
+  const merged: OfflineDownloadRecord = {
+    ...working,
+    ...base,
+    ...patch,
+    pinnedBy,
+    nativeFiles: patch.nativeFiles ?? working.nativeFiles ?? base.nativeFiles,
+  };
+  await persistRecord(merged);
+  return merged;
 }
 
 async function readDownloadRecordsByStatus(
@@ -1197,8 +1216,8 @@ async function processDownloadQueue(): Promise<void> {
           setRecordState(working);
         }
 
-        working = {
-          ...working,
+        working = await persistDownloadResult(working, {
+          nativeFiles,
           status: "downloaded",
           progress: 1,
           size: totalBytes,
@@ -1206,12 +1225,10 @@ async function processDownloadQueue(): Promise<void> {
           updatedAt: now(),
           lastAccessedAt: now(),
           verifiedAt: now(),
-        };
-        await persistRecord(working);
+        });
       } catch (error) {
         const waitingForNetwork = isTransientNetworkError(error);
-        working = {
-          ...working,
+        working = await persistDownloadResult(working, {
           status: waitingForNetwork ? "queued" : "failed",
           progress: waitingForNetwork ? 0 : working.progress,
           error: waitingForNetwork
@@ -1220,8 +1237,7 @@ async function processDownloadQueue(): Promise<void> {
               ? error.message
               : "Download failed",
           updatedAt: now(),
-        };
-        await persistRecord(working);
+        });
         if (waitingForNetwork) break;
       }
 
@@ -1277,56 +1293,10 @@ function attachBrowserListeners(): void {
   });
 }
 
-export async function readOfflineApiSnapshot<T>(url: string): Promise<OfflineApiSnapshot<T> | undefined> {
-  if (!hasIndexedDb()) return undefined;
-  try {
-    return await idbGet<OfflineApiSnapshot<T>>(API_SNAPSHOT_STORE, url);
-  } catch {
-    return undefined;
-  }
-}
-
-export async function writeOfflineApiSnapshot<T>(
-  url: string,
-  data: T,
-  etag?: string | null,
-  fetchedAt = now(),
-): Promise<void> {
-  if (!hasIndexedDb()) return;
-  try {
-    const snapshot: OfflineApiSnapshot<T> = {
-      url,
-      data,
-      etag: etag ?? null,
-      fetchedAt,
-      updatedAt: now(),
-    };
-    await idbPut(API_SNAPSHOT_STORE, snapshot);
-  } catch {}
-}
-
-export async function removeOfflineApiSnapshots(
-  match?: string | RegExp | ((url: string) => boolean),
-): Promise<void> {
-  if (!hasIndexedDb()) return;
-  try {
-    if (!match) {
-      await idbClear(API_SNAPSHOT_STORE);
-      return;
-    }
-    const snapshots = await idbGetAll<OfflineApiSnapshot>(API_SNAPSHOT_STORE);
-    const keysToDelete = snapshots
-      .filter((snapshot) => {
-        return typeof match === "string"
-          ? snapshot.url === match || snapshot.url.startsWith(match)
-          : match instanceof RegExp
-            ? match.test(snapshot.url)
-            : match(snapshot.url);
-      })
-      .map((snapshot) => snapshot.url);
-    await idbDeleteMany(API_SNAPSHOT_STORE, keysToDelete);
-  } catch {}
-}
+// NOTE: The public readOfflineApiSnapshot / writeOfflineApiSnapshot /
+// removeOfflineApiSnapshots helpers live in offline-api-snapshots.ts (the module
+// api.ts imports). The duplicates that used to live here were unused and have been
+// removed to avoid a second, drift-prone copy of the snapshot logic.
 
 function hasStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -1469,6 +1439,26 @@ async function mutationCount(): Promise<number> {
   return currentAccountMutations(mutations).filter((mutation) => mutation.status !== "syncing").length;
 }
 
+// Mutations persisted as "syncing" before performMutation runs are stranded forever
+// if the tab crashes mid-sync. Requeue stale ones so they get retried, mirroring
+// requeueInterruptedDownloadRecords for downloads.
+async function requeueStaleSyncingMutations(mutations: OfflineMutation[]): Promise<OfflineMutation[]> {
+  const timestamp = now();
+  return Promise.all(
+    mutations.map(async (mutation) => {
+      if (mutation.status !== "syncing") return mutation;
+      if (timestamp - mutation.updatedAt < STALE_SYNCING_MUTATION_MS) return mutation;
+      const requeued = {
+        ...mutation,
+        status: "queued" as const,
+        updatedAt: timestamp,
+      } as OfflineMutation;
+      await idbPut(MUTATION_STORE, requeued).catch(() => undefined);
+      return requeued;
+    }),
+  );
+}
+
 function setMutationStatus(status: OfflineSyncStatus, error: string | null = null): void {
   useOfflineStore.setState({ syncStatus: status, syncError: error });
 }
@@ -1498,9 +1488,19 @@ export async function queueOfflineMutation(
   return queued;
 }
 
+async function mutationFetch(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MUTATION_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function performMutation(mutation: OfflineMutation): Promise<void> {
   if (mutation.type === "like") {
-    const response = await fetch("/api/likes", {
+    const response = await mutationFetch("/api/likes", {
       method: mutation.payload.nextLiked ? "POST" : "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ songId: mutation.payload.songId }),
@@ -1512,7 +1512,7 @@ async function performMutation(mutation: OfflineMutation): Promise<void> {
   }
 
   if (mutation.type === "playlist-reorder") {
-    const response = await fetch(`/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}/reorder`, {
+    const response = await mutationFetch(`/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}/reorder`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ songIds: mutation.payload.songIds }),
@@ -1523,7 +1523,7 @@ async function performMutation(mutation: OfflineMutation): Promise<void> {
     return;
   }
 
-  const metaResponse = await fetch(`/api/songs/${encodeURIComponent(mutation.payload.songId)}`, {
+  const metaResponse = await mutationFetch(`/api/songs/${encodeURIComponent(mutation.payload.songId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1540,7 +1540,7 @@ async function performMutation(mutation: OfflineMutation): Promise<void> {
     if (mutation.payload.coverFile) form.append("image", mutation.payload.coverFile);
     if (mutation.payload.lyricsFile) form.append("lyricsFile", mutation.payload.lyricsFile);
     if (mutation.payload.lyricsText?.trim()) form.append("lyricsText", mutation.payload.lyricsText.trim());
-    const assetResponse = await fetch(`/api/songs/${encodeURIComponent(mutation.payload.songId)}/assets`, {
+    const assetResponse = await mutationFetch(`/api/songs/${encodeURIComponent(mutation.payload.songId)}/assets`, {
       method: "POST",
       body: form,
       credentials: "include",
@@ -1561,9 +1561,16 @@ async function syncOfflineMutations(): Promise<void> {
   syncRunning = true;
   setMutationStatus("syncing");
   try {
-    const mutations = (await idbGetAll<OfflineMutation>(MUTATION_STORE))
-      .filter(isMutationForCurrentAccount)
+    const recovered = await requeueStaleSyncingMutations(
+      currentAccountMutations(await idbGetAll<OfflineMutation>(MUTATION_STORE)),
+    );
+    // Recovered mutations are now "queued", so the pending count picks them up again.
+    await refreshMutationCount();
+    const mutations = recovered
       .filter((mutation) => mutation.status !== "syncing")
+      // A permanently-rejected mutation (e.g. a 400) that has exhausted its retries
+      // stays terminally "failed" and is no longer re-synced automatically.
+      .filter((mutation) => !(mutation.status === "failed" && mutation.attempts >= MAX_MUTATION_ATTEMPTS))
       .sort((left, right) => left.createdAt - right.createdAt);
 
     if (mutations.length === 0) {
@@ -1588,10 +1595,12 @@ async function syncOfflineMutations(): Promise<void> {
       } catch (error) {
         const status = errorStatus(error);
         const nextStatus: OfflineMutationStatus = status === 401 || status === 403 ? "auth-required" : "failed";
+        const reachedAttemptCap = nextStatus === "failed" && syncing.attempts >= MAX_MUTATION_ATTEMPTS;
+        const baseError = error instanceof Error ? error.message : "Sync failed";
         const failed = {
           ...syncing,
           status: nextStatus,
-          error: error instanceof Error ? error.message : "Sync failed",
+          error: reachedAttemptCap ? `${baseError} (gave up after ${syncing.attempts} attempts)` : baseError,
           updatedAt: now(),
         } as OfflineMutation;
         await idbPut(MUTATION_STORE, failed);
@@ -1664,6 +1673,22 @@ export function resolveOfflineDownloadRecordSong(
   });
 }
 
+function scopeDownloadStateFromRecords(
+  scopedRecords: OfflineDownloadRecord[],
+  cacheableCount: number,
+  scope: DownloadScope,
+): OfflineDownloadStatus | "partial" | "none" {
+  const pinned = scopedRecords.filter((record) => record.pinnedBy.includes(scope));
+  if (cacheableCount === 0) return "none";
+  if (pinned.length === 0) return "none";
+  if (pinned.some((record) => record.status === "queued" || record.status === "downloading")) return "downloading";
+  if (pinned.some((record) => record.status === "failed")) return "failed";
+  if (pinned.length === cacheableCount && pinned.every((record) => record.status === "downloaded")) {
+    return "downloaded";
+  }
+  return "partial";
+}
+
 export function getScopeDownloadState(
   records: Record<string, OfflineDownloadRecord>,
   songs: PlayerSong[],
@@ -1673,14 +1698,62 @@ export function getScopeDownloadState(
   if (cacheableSongs.length === 0) return "none";
   const scopedRecords = cacheableSongs
     .map((song) => records[song.id])
-    .filter((record): record is OfflineDownloadRecord => !!record && record.pinnedBy.includes(scope));
-  if (scopedRecords.length === 0) return "none";
-  if (scopedRecords.some((record) => record.status === "queued" || record.status === "downloading")) return "downloading";
-  if (scopedRecords.some((record) => record.status === "failed")) return "failed";
-  if (scopedRecords.length === cacheableSongs.length && scopedRecords.every((record) => record.status === "downloaded")) {
-    return "downloaded";
+    .filter((record): record is OfflineDownloadRecord => !!record);
+  return scopeDownloadStateFromRecords(scopedRecords, cacheableSongs.length, scope);
+}
+
+// Authoritative scope state read straight from IndexedDB. The in-memory `records`
+// map is capped (HYDRATE_DOWNLOAD_RECORD_LIMIT / MAX_DOWNLOAD_RECORDS_IN_MEMORY), so
+// for scopes with more songs than the cap the synchronous selector can report a
+// fully-downloaded collection as "partial"/"none". Reading per-song from IDB avoids
+// that without loading the whole store.
+export async function readScopeDownloadState(
+  songs: PlayerSong[],
+  scope: DownloadScope,
+): Promise<OfflineDownloadStatus | "partial" | "none"> {
+  const cacheableSongs = songs.filter(canCacheSong);
+  if (cacheableSongs.length === 0) return "none";
+  if (!hasIndexedDb()) return getScopeDownloadState(useOfflineStore.getState().records, songs, scope);
+  const records = await Promise.all(
+    cacheableSongs.map((song) =>
+      idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, downloadRecordKey(song.id)).catch(() => undefined),
+    ),
+  );
+  const scopedRecords = records.filter(
+    (record): record is OfflineDownloadRecord => isOfflineRecordForAccount(record),
+  );
+  return scopeDownloadStateFromRecords(scopedRecords, cacheableSongs.length, scope);
+}
+
+// Total bytes of every downloaded record for the current account, read from IDB so
+// the OfflineSettings total stays correct beyond the in-memory record cap.
+export async function readDownloadedBytesTotal(scope: string = currentOfflineAccountScope): Promise<number> {
+  if (!hasIndexedDb()) {
+    return Object.values(useOfflineStore.getState().records).reduce(
+      (total, record) => total + (record.status === "downloaded" ? record.size : 0),
+      0,
+    );
   }
-  return "partial";
+  const db = await openOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DOWNLOAD_STORE, "readonly");
+    const store = tx.objectStore(DOWNLOAD_STORE);
+    const index = store.index(DOWNLOAD_INDEX_ACCOUNT_STATUS_UPDATED_AT);
+    const request = index.openCursor(downloadRangeForAccount(scope, "downloaded"));
+    let total = 0;
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(total);
+        return;
+      }
+      const record = cursor.value as OfflineDownloadRecord;
+      if (typeof record.size === "number" && record.size > 0) total += record.size;
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error ?? new Error("Failed to total downloads"));
+    tx.onerror = () => reject(tx.error ?? new Error("Failed to total downloads"));
+  });
 }
 
 export function formatBytes(value: number | null | undefined): string {

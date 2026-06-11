@@ -27,10 +27,12 @@ export default function LibrarySidebarClient({
   const [collapsed, setCollapsed] = useState(initialCollapsed);
 
   useEffect(() => {
+    // Persist to localStorage only. The cookie this used to write was a
+    // Next.js leftover that nothing server-side reads (the SPA renders the
+    // sidebar client-side and reads initialCollapsed from localStorage).
     try {
       localStorage.setItem(SIDEBAR_STATE_KEY, collapsed ? "1" : "0");
     } catch {}
-    document.cookie = `${SIDEBAR_STATE_KEY}=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
     document.documentElement.style.setProperty(
       "--wf-left-sidebar-width",
       collapsed ? "4rem" : "16rem",

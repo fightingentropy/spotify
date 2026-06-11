@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
@@ -79,11 +79,16 @@ function RouteLoading({ label = "Loading..." }: { label?: string }) {
 }
 
 function RouteUnavailable() {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white sm:px-6">
-      <h1 className="text-xl font-semibold">Page unavailable offline</h1>
+      <h1 className="text-xl font-semibold">
+        {offline ? "Page unavailable offline" : "Something went wrong"}
+      </h1>
       <p className="mt-2 max-w-md text-sm text-white/[0.62]">
-        Reconnect once to finish caching this page, then it will open offline.
+        {offline
+          ? "Reconnect once to finish caching this page, then it will open offline."
+          : "This page failed to load. Try reloading, or come back in a moment."}
       </p>
     </div>
   );
@@ -225,6 +230,9 @@ function Shell() {
     },
   );
   useIdleRoutePrefetch();
+  useLayoutEffect(() => {
+    document.querySelector(".wf-main")?.scrollTo(0, 0);
+  }, [location.pathname]);
   useEffect(() => {
     document.body.classList.toggle("wf-has-mobile-player", Boolean(currentSong));
     return () => {

@@ -8,7 +8,10 @@ const DISMISS_KEY = "spotify_ios_install_dismissed";
 
 function isIos(): boolean {
   if (typeof navigator === "undefined") return false;
-  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
+  // iPadOS 13+ reports a desktop "Macintosh" UA. Detect it via the Mac
+  // platform combined with touch support (real Macs report maxTouchPoints 0).
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
 
 function isStandalone(): boolean {

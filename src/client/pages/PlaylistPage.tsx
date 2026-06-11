@@ -34,9 +34,13 @@ export default function PlaylistPage() {
       songs: [],
       likedSongIds: [],
     },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
+    },
   );
 
-  if (loading) return <PlaylistLoadingSkeleton />;
+  if (loading || status === "loading") return <PlaylistLoadingSkeleton />;
   if (error) return <div className="px-6 py-8 max-w-7xl mx-auto text-red-500">{error}</div>;
   if (!data.playlist) return <div className="px-6 py-8 max-w-7xl mx-auto opacity-70">Playlist not found.</div>;
 

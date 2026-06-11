@@ -191,6 +191,9 @@ async function convertWithMediaRecorder(
 
     // Check if the MIME type is supported
     if (!MediaRecorder.isTypeSupported(mimeType)) {
+      // Close the just-created context on this early-reject path so we don't leak
+      // an AudioContext (browsers cap the number of live contexts).
+      audioContext.close();
       reject(new Error(`Format ${options.format} not supported`));
       return;
     }

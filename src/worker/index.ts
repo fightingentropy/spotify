@@ -242,8 +242,6 @@ const AUDIO_MIME_TYPES = new Set([
   "audio/wave",
 ]);
 
-type RateLimitEntry = { count: number; resetAt: number };
-const rateLimitStore = new Map<string, RateLimitEntry>();
 let schemaPromise: Promise<void> | null = null;
 let songColumnsPromise: Promise<void> | null = null;
 
@@ -713,30 +711,50 @@ function getRequestIp(req: Request): string {
   return "unknown";
 }
 
-const RATE_LIMIT_MAX_ENTRIES = 10_000;
-
-function rateLimit(req: Request, keyPrefix: string, max: number, windowMs: number) {
+// D1-backed so limits are shared across Cloudflare isolates (an in-memory Map
+// only constrains a single isolate). Resilient by design: any DB error fails
+// OPEN (request allowed) so a transient D1 hiccup cannot lock out the owner.
+async function rateLimit(
+  db: SqlTag,
+  req: Request,
+  keyPrefix: string,
+  max: number,
+  windowMs: number,
+): Promise<{ allowed: boolean; headers: Headers; ip: string }> {
   const ip = getRequestIp(req);
   const key = `${keyPrefix}:${ip}`;
   const now = Date.now();
-  // Opportunistically evict expired entries so the map cannot grow unbounded.
-  for (const [existingKey, existingEntry] of rateLimitStore) {
-    if (existingEntry.resetAt <= now) rateLimitStore.delete(existingKey);
+  let count = 1;
+  let resetAt = now + windowMs;
+  try {
+    // Opportunistically delete expired windows so the table cannot grow unbounded.
+    await db`DELETE FROM "RateLimit" WHERE "resetAt" <= ${now}`;
+    const rows = await db<{ count: number; resetAt: number }>`
+      SELECT "count", "resetAt" FROM "RateLimit" WHERE "key" = ${key} LIMIT 1
+    `;
+    const existing = rows[0];
+    if (existing && existing.resetAt > now) {
+      count = existing.count + 1;
+      resetAt = existing.resetAt;
+    }
+    await db`
+      INSERT INTO "RateLimit" ("key", "count", "resetAt")
+      VALUES (${key}, ${count}, ${resetAt})
+      ON CONFLICT ("key") DO UPDATE SET "count" = ${count}, "resetAt" = ${resetAt}
+    `;
+  } catch {
+    // Fail open: never let a DB problem block legitimate auth attempts.
+    const headers = new Headers();
+    headers.set("X-RateLimit-Limit", String(max));
+    headers.set("X-RateLimit-Remaining", String(max));
+    return { allowed: true, headers, ip };
   }
-  if (rateLimitStore.size >= RATE_LIMIT_MAX_ENTRIES) {
-    const oldestKey = rateLimitStore.keys().next().value;
-    if (oldestKey !== undefined) rateLimitStore.delete(oldestKey);
-  }
-  let entry = rateLimitStore.get(key);
-  if (!entry || entry.resetAt <= now) entry = { count: 0, resetAt: now + windowMs };
-  entry.count += 1;
-  rateLimitStore.set(key, entry);
-  const allowed = entry.count <= max;
+  const allowed = count <= max;
   const headers = new Headers();
   headers.set("X-RateLimit-Limit", String(max));
-  headers.set("X-RateLimit-Remaining", String(Math.max(0, max - entry.count)));
-  headers.set("X-RateLimit-Reset", String(Math.ceil(entry.resetAt / 1000)));
-  if (!allowed) headers.set("Retry-After", String(Math.ceil((entry.resetAt - now) / 1000)));
+  headers.set("X-RateLimit-Remaining", String(Math.max(0, max - count)));
+  headers.set("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
+  if (!allowed) headers.set("Retry-After", String(Math.ceil((resetAt - now) / 1000)));
   return { allowed, headers, ip };
 }
 
@@ -2813,13 +2831,13 @@ app.get("/api/auth/session", async (c) => {
 });
 
 app.post("/api/auth/signin", async (c) => {
-  const limited = rateLimit(c.req.raw, "auth", 20, 5 * 60 * 1000);
+  const db = c.get("db");
+  const limited = await rateLimit(db, c.req.raw, "auth", 20, 5 * 60 * 1000);
   if (!limited.allowed) return c.json({ error: "Too many requests" }, { status: 429, headers: limited.headers });
   const body = await readJson<{ email?: unknown; password?: unknown }>(c.req.raw);
   const email = toStringValue(body?.email).toLowerCase();
   const password = toStringValue(body?.password);
   if (!email || !password) return jsonError("Email and password are required", 400);
-  const db = c.get("db");
   const users = await db<UserRow>`
     SELECT "id", "email", "name", "image", "passwordHash", "emailVerified"
     FROM "User"
@@ -2888,11 +2906,11 @@ app.get("/api/auth/verify/:token?", async (c) => {
 });
 
 app.post("/api/auth/resend-verification", async (c) => {
-  const limited = rateLimit(c.req.raw, "verify-resend", 5, 10 * 60 * 1000);
+  const db = c.get("db");
+  const limited = await rateLimit(db, c.req.raw, "verify-resend", 5, 10 * 60 * 1000);
   if (!limited.allowed) return c.json({ error: "Too many requests" }, { status: 429, headers: limited.headers });
   const user = c.get("user");
   if (!user) return jsonError("Unauthorized", 401);
-  const db = c.get("db");
   const rows = await db<{ emailVerified: string | null }>`
     SELECT "emailVerified" FROM "User" WHERE "id" = ${user.id} LIMIT 1
   `;
@@ -2931,7 +2949,8 @@ app.post("/api/profile/image", async (c) => {
 });
 
 app.post("/api/register", async (c) => {
-  const limited = rateLimit(c.req.raw, "register", 5, 10 * 60 * 1000);
+  const db = c.get("db");
+  const limited = await rateLimit(db, c.req.raw, "register", 5, 10 * 60 * 1000);
   if (!limited.allowed) return c.json({ error: "Too many requests" }, { status: 429, headers: limited.headers });
   const body = await readJson<{ name?: unknown; email?: unknown; password?: unknown }>(c.req.raw);
   const email = toStringValue(body?.email).toLowerCase();
@@ -2946,7 +2965,6 @@ app.post("/api/register", async (c) => {
   if (normalizedName && configuredOwnerNames.some((owner) => owner.trim().toLowerCase() === normalizedName)) {
     return jsonError("Display name is not available", 400);
   }
-  const db = c.get("db");
   // Always hash so registration timing does not reveal whether the email exists.
   const passwordHash = await hash(password, 10);
   const existing = await db<UserRow>`
@@ -3272,7 +3290,8 @@ app.post("/api/songs/spotify/batch", async (c) => {
     if (error instanceof SpotifyPathfinderError) {
       return jsonError(error.message, error.status);
     }
-    return jsonError(error instanceof Error ? error.message : "Failed to process batch", 500);
+    // Don't echo internal error messages; match the global onError behavior.
+    return jsonError("Failed to process batch", 500);
   }
 });
 
