@@ -2934,16 +2934,43 @@ app.post("/api/auth/resend-verification", async (c) => {
 
 app.post("/api/profile/image", async (c) => {
   const user = requireUser(c.get("user"));
-  const form = await c.req.formData();
-  const image = form.get("image");
-  if (!(image instanceof File) || image.size <= 0) {
-    return jsonError("Image file is required", 400);
+  let imageBytes: ArrayBuffer;
+  let imageName = "profile.jpg";
+  let imageType = "";
+
+  if ((c.req.header("content-type") || "").toLowerCase().startsWith("application/json")) {
+    // The native app's HTTP bridge can't send multipart bodies reliably, so it
+    // uploads the image as base64 JSON.
+    const body = await readJson<{ image?: unknown; filename?: unknown; contentType?: unknown }>(c.req.raw);
+    const base64 = toStringValue(body?.image);
+    if (!base64) return jsonError("Image file is required", 400);
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    } catch {
+      return jsonError("Image data is not valid base64", 400);
+    }
+    if (bytes.byteLength <= 0) return jsonError("Image file is required", 400);
+    if (bytes.byteLength > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
+    imageBytes = bytes.buffer as ArrayBuffer;
+    imageName = toStringValue(body?.filename) || imageName;
+    imageType = toStringValue(body?.contentType);
+  } else {
+    const form = await c.req.formData();
+    const image = form.get("image");
+    if (!(image instanceof File) || image.size <= 0) {
+      return jsonError("Image file is required", 400);
+    }
+    if (image.size > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
+    imageBytes = await image.arrayBuffer();
+    imageName = image.name || imageName;
+    imageType = image.type;
   }
-  if (image.size > MAX_IMAGE_BYTES) return jsonError("Image file is too large", 413);
-  const imageExt = extensionForStoredFile("image", image.name || "profile.jpg", image.type || "image/jpeg");
+
+  const imageExt = extensionForStoredFile("image", imageName, imageType || "image/jpeg");
   const key = `users/${sanitizePathSegment(user.id)}/profile/${crypto.randomUUID()}${imageExt}`;
-  const contentType = image.type || inferContentTypeFromKey(key);
-  await putBuffer(c.env, key, await image.arrayBuffer(), contentType);
+  const contentType = imageType || inferContentTypeFromKey(key);
+  await putBuffer(c.env, key, imageBytes, contentType);
   const imageUrl = toApiFileUrl(key);
   const rows = await c.get("db")<UserRow>`
     UPDATE "User"

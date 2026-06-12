@@ -4,7 +4,7 @@ import type { PlayerSong } from "@/types/player";
 
 const SPOTIFY_FALLBACK_COVER = "/apple-icon.png";
 
-function isNativeCapacitorApp(): boolean {
+export function isNativeCapacitorApp(): boolean {
   if (typeof window === "undefined") return false;
   const capacitor = (window as Window & {
     Capacitor?: { isNativePlatform?: () => boolean };

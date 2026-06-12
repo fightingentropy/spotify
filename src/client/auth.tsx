@@ -1,7 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { API_AUTH_REQUIRED_EVENT, invalidateApiCache } from "@/client/api";
 import { setOfflineAccountScope } from "@/client/offline";
+import { isNativeCapacitorApp } from "@/lib/song-utils";
 import { useLikesStore } from "@/store/likes";
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const commaIndex = result.indexOf(",");
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export type AuthUser = {
   id: string;
@@ -293,13 +307,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateProfileImage = useCallback(async (file: File) => {
-    const form = new FormData();
-    form.append("image", file);
-    const response = await fetch("/api/profile/image", {
-      method: "POST",
-      credentials: "include",
-      body: form,
-    });
+    // The native app's HTTP bridge (CapacitorHttp) mangles multipart bodies,
+    // so on iOS/Android the image is uploaded as base64 JSON instead.
+    const response = isNativeCapacitorApp()
+      ? await fetch("/api/profile/image", {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            image: await fileToBase64(file),
+            filename: file.name,
+            contentType: file.type,
+          }),
+        })
+      : await (() => {
+          const form = new FormData();
+          form.append("image", file);
+          return fetch("/api/profile/image", {
+            method: "POST",
+            credentials: "include",
+            body: form,
+          });
+        })();
     const data = (await response.json().catch(() => ({}))) as { user?: unknown; error?: string };
     const nextUser = coerceAuthUser(data.user ?? null);
     if (!response.ok || !nextUser) {
