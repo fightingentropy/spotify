@@ -26,6 +26,7 @@ import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { impactLight } from "@/lib/haptics";
 import { CoverImage } from "@/components/CoverImage";
+import { MarqueeText } from "@/components/MarqueeText";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
@@ -280,8 +281,8 @@ export default function NowPlayingSheet({
               </div>
 
               <div className="text-center lg:text-left">
-                <div className="text-2xl sm:text-3xl font-bold leading-tight">{song.title}</div>
-                <div className="text-lg opacity-80 mt-1">{song.artist}</div>
+                <MarqueeText text={song.title} className="text-2xl sm:text-3xl font-bold leading-tight" />
+                <MarqueeText text={song.artist} className="text-lg opacity-80 mt-1" />
               </div>
 
               {liveStream ? (

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v51";
+const CACHE_VERSION = "spotify-v52";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;

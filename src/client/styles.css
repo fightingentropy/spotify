@@ -226,6 +226,63 @@ body.wf-now-playing-open {
   }
 }
 
+.wf-marquee {
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.wf-marquee-inner {
+  display: inline-block;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.wf-marquee-active .wf-marquee-inner {
+  max-width: none;
+  overflow: visible;
+  animation: wf-marquee-scroll var(--wf-marquee-duration, 9s) linear infinite;
+  animation-delay: 1.5s;
+}
+
+.wf-marquee-active {
+  mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+}
+
+@keyframes wf-marquee-scroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+
+  78%,
+  92% {
+    transform: translateX(calc(-1 * var(--wf-marquee-distance, 0px)));
+  }
+
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-marquee-active .wf-marquee-inner {
+    animation: none;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .wf-marquee-active {
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
+}
+
 @media (max-width: 1023px) {
   html,
   body,

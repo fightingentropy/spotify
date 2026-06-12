@@ -9,6 +9,7 @@ import { cn, formatTime } from "@/lib/utils";
 import { impactLight, selectionTap } from "@/lib/haptics";
 import { ChevronDown, ChevronUp, Heart, ListMusic, Moon, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
+import { MarqueeText } from "@/components/MarqueeText";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
@@ -1925,7 +1926,7 @@ function PlayerBar(): React.ReactElement | null {
               sizes="48px"
             />
             <div className="min-w-0">
-              <div className="text-[15px] font-medium leading-5 truncate text-white">{playbackSong.title}</div>
+              <MarqueeText text={playbackSong.title} className="text-[15px] font-medium leading-5 text-white" />
               <div className="text-[13px] leading-5 text-white/[0.62] truncate">{playbackSong.artist}</div>
             </div>
           </button>
