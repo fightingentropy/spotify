@@ -1677,7 +1677,6 @@ function errorStatus(error: unknown): number | undefined {
 async function syncOfflineMutations(): Promise<void> {
   if (syncRunning || typeof navigator !== "undefined" && !navigator.onLine) return;
   syncRunning = true;
-  setMutationStatus("syncing");
   try {
     const recovered = await requeueStaleSyncingMutations(
       currentAccountMutations(await idbGetAll<OfflineMutation>(MUTATION_STORE)),
@@ -1697,6 +1696,10 @@ async function syncOfflineMutations(): Promise<void> {
       return;
     }
 
+    // Only flip the visible status once there is real work: every app launch
+    // runs this sync, and marking it "syncing" before the empty check made the
+    // status pill flash at the top on each cold start.
+    setMutationStatus("syncing");
     for (const mutation of mutations) {
       const syncing = {
         ...mutation,
