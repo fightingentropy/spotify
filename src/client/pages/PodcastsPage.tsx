@@ -323,19 +323,6 @@ export default function PodcastsPage() {
                       </button>
 
                       <OfflineSongDownloadButton song={episode} className="h-10 w-10" />
-
-                      {episode.link ? (
-                        <a
-                          href={episode.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label={`Open show notes for ${episode.title}`}
-                          title="Open show notes"
-                          className="wf-control-button grid h-10 w-10 shrink-0 place-items-center rounded-full text-white/[0.62] transition hover:bg-white/[0.09] hover:text-white"
-                        >
-                          <ExternalLink size={17} />
-                        </a>
-                      ) : null}
                     </article>
                   );
                 })}
