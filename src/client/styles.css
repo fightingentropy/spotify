@@ -7,7 +7,7 @@
   --wf-mobile-nav-height: 3.25rem;
   --wf-mobile-player-height: 4.25rem;
   --wf-mobile-player-reserve-height: 0px;
-  --wf-mobile-bottom-gutter: 0px;
+  --wf-mobile-bottom-gutter: env(safe-area-inset-bottom, 0px);
   --wf-mobile-nav-bottom-offset: calc(var(--wf-mobile-nav-height) + var(--wf-mobile-bottom-gutter));
   color-scheme: dark;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
