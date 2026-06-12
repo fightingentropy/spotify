@@ -34,6 +34,10 @@ const AUDIO_EXTENSIONS = new Set([
 ]);
 
 const REQUEST_DELAY_MS = 350;
+// Modest parallelism: LRCLIB round-trips from here run 2-4s, which dominates
+// the runtime; three workers keeps the request rate around 1-2/s overall.
+const CONCURRENCY = 3;
+const REQUEST_TIMEOUT_MS = 8_000;
 const USER_AGENT = "spotify-selfhost-lyrics-backfill/1.0 (personal library; erlin.hx@gmail.com)";
 
 type LrclibRecord = {
@@ -98,7 +102,7 @@ function similarity(left: string, right: string): number {
 async function lrclibRequest(path: string): Promise<{ status: number; body: unknown }> {
   const response = await fetch(`https://lrclib.net${path}`, {
     headers: { accept: "application/json", "user-agent": USER_AGENT },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (response.status === 429) {
     console.log("rate limited by lrclib, sleeping 60s");
@@ -241,12 +245,19 @@ async function main(): Promise<void> {
   let miss = 0;
   let errors = 0;
   let processed = 0;
+  let nextIndex = 0;
 
-  for (const file of files) {
-    processed += 1;
+  const writeReport = () =>
+    writeFile(
+      reportPath,
+      `${JSON.stringify({ summary: { synced, plain, instrumental, miss, errors }, report }, null, 2)}\n`,
+      "utf8",
+    );
+
+  async function processFile(file: string): Promise<void> {
     if (hasLyricsSidecar(file)) {
       report.push({ file, title: "", artist: "", status: "skipped-existing" });
-      continue;
+      return;
     }
 
     try {
@@ -264,7 +275,7 @@ async function main(): Promise<void> {
       if (!artist) {
         report.push({ file, title, artist, status: "miss", matched: "no-artist-tag" });
         miss += 1;
-        continue;
+        return;
       }
 
       const found = await findLyrics({ artist, title, album, duration });
@@ -290,23 +301,39 @@ async function main(): Promise<void> {
       }
     } catch (error) {
       errors += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`error: ${file.split("/").pop()}: ${message}`);
       report.push({
         file,
         title: "",
         artist: "",
         status: "error",
-        matched: error instanceof Error ? error.message : String(error),
+        matched: message,
       });
-    }
-
-    if (processed % 25 === 0) {
-      console.log(
-        `${processed}/${files.length} | synced=${synced} plain=${plain} instrumental=${instrumental} miss=${miss} err=${errors}`,
-      );
     }
   }
 
-  await writeFile(reportPath, `${JSON.stringify({ summary: { synced, plain, instrumental, miss, errors }, report }, null, 2)}\n`, "utf8");
+  async function worker(): Promise<void> {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= files.length) return;
+      await processFile(files[index]);
+      processed += 1;
+      if (processed % 25 === 0) {
+        console.log(
+          `${processed}/${files.length} | synced=${synced} plain=${plain} instrumental=${instrumental} miss=${miss} err=${errors}`,
+        );
+      }
+      if (processed % 100 === 0) {
+        await writeReport().catch(() => {});
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+  await writeReport();
   console.log(
     `done: synced=${synced} plain=${plain} instrumental=${instrumental} miss=${miss} err=${errors} (report: ${reportPath})`,
   );

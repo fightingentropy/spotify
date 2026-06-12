@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ImgHTMLAttributes } from "react";
+import { isCapacitorFileUrl } from "@/client/capacitor-offline";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
 import { OFFLINE_PLAYBACK_SEARCH_PARAM } from "@/lib/player-song";
 
@@ -60,6 +61,7 @@ export function CoverImage({
 }: CoverImageProps) {
   // Index into the candidate-source chain; each load error advances it.
   const [sourceStage, setSourceStage] = useState(0);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   useEffect(() => {
     setSourceStage(0);
   }, [fallbackSrc, networkSrc, src]);
@@ -74,6 +76,19 @@ export function CoverImage({
   const resolvedSrc = normalizeCoverImageUrl(
     candidates[Math.min(sourceStage, candidates.length - 1)],
   );
+
+  // A missing _capacitor_file_ image never fires onerror in WKWebView (the
+  // scheme handler just never answers), so device-local sources also advance
+  // on a stall timeout instead of wedging the broken-image glyph forever.
+  const candidateCount = candidates.length;
+  useEffect(() => {
+    if (!isCapacitorFileUrl(resolvedSrc) || loadedSrc === resolvedSrc) return;
+    const timer = window.setTimeout(
+      () => setSourceStage((stage) => Math.min(stage + 1, candidateCount - 1)),
+      4_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [candidateCount, loadedSrc, resolvedSrc]);
   const generatedSrcSet = artworkSrcSet(resolvedSrc);
   const {
     fill,
@@ -112,6 +127,7 @@ export function CoverImage({
           : null),
         ...style,
       }}
+      onLoad={() => setLoadedSrc(resolvedSrc)}
       onError={() => setSourceStage((stage) => Math.min(stage + 1, candidates.length - 1))}
     />
   );

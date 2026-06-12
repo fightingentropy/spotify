@@ -6,6 +6,7 @@ import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong, preferOfflinePlaybackSong } from "@/lib/player-song";
 import {
   deleteNativeOfflineFiles,
+  isCapacitorFileUrl,
   isNativeOfflineStorageAvailable,
   nativeOfflineAssetWebUrl,
   saveNativeOfflineAsset,
@@ -1801,6 +1802,37 @@ export function getSongDownloadState(
   record: OfflineDownloadRecord | undefined,
 ): OfflineDownloadStatus | "none" {
   return record?.status ?? "none";
+}
+
+// Persisted playback snapshots must never resurrect device-local URLs: after a
+// reinstall (or cleared downloads) capacitor file URLs point at nothing, and a
+// missing _capacitor_file_ image never fires onerror in WKWebView, wedging the
+// cover render with no fallback. Swap in the download record's canonical song
+// when one exists; otherwise strip the device-local art/lyrics URLs.
+export function sanitizePersistedPlayerSong(song: PlayerSong): PlayerSong {
+  const audioLocal = isCapacitorFileUrl(song.audioUrl);
+  const imageLocal = isCapacitorFileUrl(song.imageUrl);
+  const lyricsLocal = isCapacitorFileUrl(song.lyricsUrl);
+  if (!audioLocal && !imageLocal && !lyricsLocal) return song;
+
+  const canonical = useOfflineStore.getState().records[song.id]?.song;
+  if (
+    canonical &&
+    !isCapacitorFileUrl(canonical.audioUrl) &&
+    !isCapacitorFileUrl(canonical.imageUrl)
+  ) {
+    return canonical;
+  }
+
+  // No canonical record (not downloaded here, or hydration hasn't finished):
+  // keep the song in the queue — a dead audio URL fails into the existing
+  // error-retry-skip path — but never let a device-local image wedge a cover.
+  return {
+    ...song,
+    imageUrl: imageLocal ? song.networkImageUrl || "/apple-icon.png" : song.imageUrl,
+    networkImageUrl: imageLocal ? undefined : song.networkImageUrl,
+    lyricsUrl: lyricsLocal ? undefined : song.lyricsUrl,
+  };
 }
 
 export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong;

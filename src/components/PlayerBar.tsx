@@ -34,7 +34,7 @@ import {
   notePlaybackNetworkSuccess,
   prefetchUpcomingPlayback,
 } from "@/client/playback-warm";
-import { normalizeOfflineAccountScope, resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
+import { normalizeOfflineAccountScope, resolveOfflinePlaybackSong, sanitizePersistedPlayerSong, useOfflineStore } from "@/client/offline";
 import {
   acquireNativeOfflineAudioObjectUrl,
   isCapacitorFileUrl,
@@ -351,7 +351,7 @@ function PlayerBar(): React.ReactElement | null {
 
   const buildPlaybackStateSnapshot = useCallback((updatedAt: number): PlaybackStateSnapshot | null => {
     if (!isPersistablePlayerSong(currentSong)) return null;
-    const persistableQueue = queue.filter(isPersistablePlayerSong);
+    const persistableQueue = queue.filter(isPersistablePlayerSong).map(sanitizePersistedPlayerSong);
     const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
     if (persistableIndex < 0) return null;
     const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
@@ -361,7 +361,7 @@ function PlayerBar(): React.ReactElement | null {
       accountScope,
       queue: persistableQueue,
       currentIndex: persistableIndex,
-      song: currentSong,
+      song: sanitizePersistedPlayerSong(currentSong),
       currentTime: time,
       isPlaying,
       updatedAt,
@@ -387,7 +387,9 @@ function PlayerBar(): React.ReactElement | null {
   }, [buildPlaybackStateSnapshot, queue]);
 
   const applyPlaybackStateSnapshot = useCallback((state: PlaybackStateSnapshot) => {
-    const restoredQueue = state.queue.filter(isPersistablePlayerSong);
+    // Sanitize on read too: legacy snapshots (and snapshots synced from other
+    // devices) can carry device-local URLs that mean nothing here.
+    const restoredQueue = state.queue.filter(isPersistablePlayerSong).map(sanitizePersistedPlayerSong);
     const restoredSongId = state.queue[state.currentIndex]?.id ?? state.song.id;
     const idxFromSong = restoredQueue.findIndex((song) => song.id === restoredSongId);
     const idxFromStateSong = restoredQueue.findIndex((song) => song.id === state.song.id);
@@ -404,7 +406,7 @@ function PlayerBar(): React.ReactElement | null {
     if (restoredQueue.length > 0) {
       setQueue(restoredQueue, idx);
     } else {
-      setSong(state.song);
+      setSong(sanitizePersistedPlayerSong(state.song));
     }
     pause();
     savedSeekRef.current = { songId: restoredSongId, time: state.currentTime };
