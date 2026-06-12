@@ -555,36 +555,6 @@ function parseHttpUrl(value: string): URL | null {
   }
 }
 
-function isSpotifyCdnUrl(url: URL): boolean {
-  if (url.username || url.password) return false;
-  const host = url.hostname.toLowerCase();
-  return host.endsWith(".scdn.co") || host.endsWith(".spotifycdn.com");
-}
-
-async function streamCappedBody(body: ReadableStream<Uint8Array>, maxBytes: number): Promise<ReadableStream<Uint8Array>> {
-  const reader = body.getReader();
-  let total = 0;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        controller.error(new Error("Upstream response exceeded maximum allowed size"));
-        return;
-      }
-      controller.enqueue(value);
-    },
-    async cancel(reason) {
-      await reader.cancel(reason).catch(() => {});
-    },
-  });
-}
-
 function outputFormatFromPayload(value: unknown): OutputFormat {
   const format = toStringValue(value).toLowerCase() as OutputFormat;
   return OUTPUT_FORMATS.has(format) ? format : SERVER_IMPORT_OUTPUT_FORMAT;
@@ -3212,32 +3182,6 @@ app.get("/api/playlist/:id", async (c) => {
     playlist,
     songs: songRows.map(songToPlayerSong),
     likedSongIds: await listLikedSongIds(db, user.id),
-  });
-});
-
-app.get("/api/songs/spotify/cover", async (c) => {
-  requireUser(c.get("user"));
-  const remoteUrlRaw = c.req.query("url") || "";
-  const fileName = sanitizeFileName(c.req.query("filename") || "cover");
-  const remoteUrl = parseHttpUrl(remoteUrlRaw);
-  if (!remoteUrl || !isSpotifyCdnUrl(remoteUrl)) {
-    return jsonError("Only Spotify CDN cover URLs are allowed", 400);
-  }
-  const upstream = await fetchWithTimeout(remoteUrl.toString(), SPOTIFY_REQUEST_TIMEOUT_MS, {
-    redirect: "manual",
-  });
-  if (!upstream.ok) throw new ApiError(`Upstream cover request returned ${upstream.status}`, 502);
-  const contentType = upstream.headers.get("content-type") || "";
-  if (!contentType.toLowerCase().startsWith("image/")) {
-    return jsonError("Upstream cover is not an image", 400);
-  }
-  if (!upstream.body) throw new ApiError("Upstream cover request returned no body", 502);
-  return new Response(await streamCappedBody(upstream.body, MAX_IMAGE_BYTES), {
-    headers: {
-      "content-type": contentType,
-      "content-disposition": `attachment; filename="${fileName.replaceAll('"', "'")}"`,
-      "cache-control": "no-store",
-    },
   });
 });
 

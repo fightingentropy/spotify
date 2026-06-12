@@ -41,8 +41,6 @@ the music files live on the Mac mini at `/Users/hermes/Music`.
 - Provider selection supports Auto, Qobuz, and Tidal.
 - Quality profiles are CD quality, 24-bit/48 kHz, and max available.
 - Server imports save FLAC/original audio to the Mac mini music folder.
-- Browser/local saves can convert to MP3, AAC/M4A, OGG, Opus, or WAV when the
-  current browser supports the encoder.
 - Imports can include synchronized LRC lyrics when available, with plain-text
   fallback.
 
