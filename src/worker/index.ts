@@ -5,7 +5,13 @@ import { basename, extname, join } from "node:path";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
 import type { OfflineDownloadRow, PlaybackStateRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
 import { PLAYBACK_STATE_VERSION, type PlaybackStateSnapshot } from "@/lib/playback-state";
-import { PODCAST_SHOWS } from "@/lib/podcasts";
+import {
+  PODCAST_SHOWS,
+  extractPodcastFeedMediaUrls,
+  podcastFeedAllowsMediaUrl,
+  safePodcastUrl,
+  type PodcastShow,
+} from "@/lib/podcasts";
 import { buildSql, statementReturnsRows, type SqlRow, type SqlTag, type TemplateValue } from "@/lib/sql-tag";
 import { songToPlayerSong } from "@/lib/song-utils";
 import { inferContentTypeFromKey, normalizeStorageKey } from "@/lib/storage-keys";
@@ -3019,17 +3025,74 @@ app.get("/api/library", async (c) => {
   });
 });
 
+const PODCAST_FEED_CACHE_TTL_MS = 5 * 60 * 1000;
+const podcastFeedXmlCache = new Map<string, { fetchedAt: number; xml: string }>();
+
+// Per-isolate feed cache: /api/podcast-media validates every request (including
+// each playback range request) against the feed, so it can't refetch a
+// multi-megabyte RSS document from the podcast host every time.
+async function fetchPodcastFeedXml(show: PodcastShow): Promise<string> {
+  const cached = podcastFeedXmlCache.get(show.feedUrl);
+  if (cached && Date.now() - cached.fetchedAt < PODCAST_FEED_CACHE_TTL_MS) return cached.xml;
+  const response = await fetchWithTimeout(show.feedUrl, SPOTIFY_REQUEST_TIMEOUT_MS);
+  if (!response.ok) {
+    if (cached) return cached.xml;
+    throw new ApiError(`Podcast feed returned ${response.status}`, 502);
+  }
+  const xml = await response.text();
+  podcastFeedXmlCache.set(show.feedUrl, { fetchedAt: Date.now(), xml });
+  return xml;
+}
+
 app.get("/api/podcast-feeds/:id", async (c) => {
   const podcastShow = PODCAST_SHOWS.find((show) => show.id === c.req.param("id"));
   if (!podcastShow) return jsonError("Podcast not found", 404);
-  const response = await fetchWithTimeout(podcastShow.feedUrl, SPOTIFY_REQUEST_TIMEOUT_MS);
-  if (!response.ok) throw new ApiError(`Podcast feed returned ${response.status}`, 502);
-  const body = await response.text();
+  const body = await fetchPodcastFeedXml(podcastShow);
   return new Response(body, {
     headers: {
-      "content-type": response.headers.get("content-type") || "application/rss+xml; charset=utf-8",
+      "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "public, max-age=300, stale-while-revalidate=1800",
     },
+  });
+});
+
+const PODCAST_MEDIA_PASSTHROUGH_HEADERS = [
+  "content-type",
+  "content-length",
+  "content-range",
+  "accept-ranges",
+  "etag",
+  "last-modified",
+];
+
+app.get("/api/podcast-media/:id", async (c) => {
+  const podcastShow = PODCAST_SHOWS.find((show) => show.id === c.req.param("id"));
+  if (!podcastShow) return jsonError("Podcast not found", 404);
+  const mediaUrl = safePodcastUrl(c.req.query("url") ?? "");
+  if (!mediaUrl) return jsonError("Invalid podcast media URL", 400);
+
+  // Only relay URLs that appear in the show's feed (or its cover art) so this
+  // endpoint can't be used as an open proxy.
+  const allowedUrls = extractPodcastFeedMediaUrls(await fetchPodcastFeedXml(podcastShow), podcastShow);
+  if (!podcastFeedAllowsMediaUrl(allowedUrls, mediaUrl)) {
+    return jsonError("Unknown podcast media URL", 403);
+  }
+
+  const range = c.req.header("range");
+  const upstream = await fetchWithTimeout(mediaUrl, SPOTIFY_REQUEST_TIMEOUT_MS, {
+    headers: range ? { range } : undefined,
+  });
+  if (!upstream.ok) throw new ApiError(`Podcast media returned ${upstream.status}`, 502);
+
+  const headers = new Headers({ "cache-control": "public, max-age=3600" });
+  for (const name of PODCAST_MEDIA_PASSTHROUGH_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
   });
 });
 

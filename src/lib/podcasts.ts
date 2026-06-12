@@ -106,6 +106,74 @@ export function safePodcastUrl(value: string, baseUrl?: string): string {
   }
 }
 
+// Podcast media is served through this same-origin Worker proxy instead of the
+// third-party feed CDNs so the offline download pipeline and the service
+// worker (which both only handle same-origin URLs) work for episodes too.
+export function podcastMediaProxyUrl(showId: string, mediaUrl: string): string {
+  return `/api/podcast-media/${encodeURIComponent(showId)}?url=${encodeURIComponent(mediaUrl)}`;
+}
+
+function safeCodePoint(code: number): string {
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return "";
+  }
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => safeCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => safeCodePoint(Number(decimal)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+// The Worker validates /api/podcast-media requests against the show's feed so
+// the proxy can't be used as an open relay. It has no XML parser, so candidate
+// URLs (enclosure url=, itunes:image href=, <url> elements) are pulled from
+// the raw feed text with regexes instead of mirroring parsePodcastFeed.
+export function extractPodcastFeedMediaUrls(xmlText: string, show: PodcastShow): Set<string> {
+  const urls = new Set<string>();
+  const add = (raw: string) => {
+    const normalized = safePodcastUrl(decodeXmlEntities(raw), show.feedUrl);
+    if (normalized) urls.add(normalized);
+  };
+  add(show.imageUrl);
+  for (const match of xmlText.matchAll(/\b(?:url|href)=(?:"([^"]*)"|'([^']*)')/gi)) {
+    add(match[1] ?? match[2] ?? "");
+  }
+  for (const match of xmlText.matchAll(/<url>([^<]*)<\/url>/gi)) {
+    add(match[1]);
+  }
+  return urls;
+}
+
+function urlOriginAndPath(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+export function podcastFeedAllowsMediaUrl(allowedUrls: Set<string>, mediaUrl: string): boolean {
+  if (allowedUrls.has(mediaUrl)) return true;
+  // Tracking params (e.g. megaphone's ?updated=) can drift between the feed
+  // snapshot the client parsed and the one the validator fetched, so fall
+  // back to matching on origin + path.
+  const target = urlOriginAndPath(mediaUrl);
+  if (!target) return false;
+  for (const allowed of allowedUrls) {
+    if (urlOriginAndPath(allowed) === target) return true;
+  }
+  return false;
+}
+
 function stripHtml(value: string): string {
   const trimmed = value.trim();
   if (!/<[a-z][\s\S]*>/i.test(trimmed)) return normalizeText(trimmed);
@@ -191,8 +259,8 @@ export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50)
         title,
         artist: channelTitle || channelAuthor || show.title,
         album: "Podcasts",
-        imageUrl,
-        audioUrl,
+        imageUrl: podcastMediaProxyUrl(show.id, imageUrl),
+        audioUrl: podcastMediaProxyUrl(show.id, audioUrl),
         createdAt: publishedAt,
         duration,
         source: "podcast",

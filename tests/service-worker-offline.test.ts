@@ -228,4 +228,41 @@ describe("service worker offline boot", () => {
     expect(payload.offline).toBe(true);
     expect(runtime.fetchCalls).toEqual([]);
   });
+
+  test("serves cached podcast media through the proxy URL while offline", async () => {
+    const runtime = createRuntime();
+    const mediaCache = await runtime.caches.open("spotify-media-v1");
+    const proxyUrl = `${runtime.origin}/api/podcast-media/test-show?url=${encodeURIComponent("https://cdn.example.com/ep1.mp3?updated=1")}`;
+    const bytes = new Uint8Array(2048).fill(3);
+    await mediaCache.put(proxyUrl, new Response(bytes, {
+      headers: { "content-type": "audio/mpeg", "content-length": String(bytes.byteLength) },
+    }));
+
+    const offlineUrl = `${proxyUrl}&spotify_offline=1`;
+    const full = await dispatchFetch(runtime, new Request(offlineUrl));
+    expect(full.status).toBe(200);
+    expect(full.headers.get("accept-ranges")).toBe("bytes");
+    expect((await full.arrayBuffer()).byteLength).toBe(bytes.byteLength);
+
+    const ranged = await dispatchFetch(runtime, new Request(offlineUrl, {
+      headers: { range: "bytes=0-99" },
+    }));
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-range")).toBe(`bytes 0-99/${bytes.byteLength}`);
+    expect((await ranged.arrayBuffer()).byteLength).toBe(100);
+    expect(runtime.fetchCalls).toEqual([]);
+  });
+
+  test("serves cached podcast feeds while offline", async () => {
+    const runtime = createRuntime();
+    const runtimeCache = await runtime.caches.open(`${cacheVersion()}-runtime`);
+    await runtimeCache.put(`${runtime.origin}/api/podcast-feeds/test-show`, new Response("<rss/>", {
+      headers: { "content-type": "application/rss+xml" },
+    }));
+
+    const response = await dispatchFetch(runtime, new Request(`${runtime.origin}/api/podcast-feeds/test-show`));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("<rss/>");
+    expect(runtime.fetchCalls).toEqual([]);
+  });
 });

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v48";
+const CACHE_VERSION = "spotify-v49";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -293,6 +293,7 @@ function isCacheableApiRequest(url) {
   if (url.pathname.startsWith("/api/auth/")) return false;
   if (url.pathname.startsWith("/api/files/")) return false;
   if (API_CACHE_PATHS.includes(url.pathname)) return true;
+  if (url.pathname.startsWith("/api/podcast-feeds/")) return true;
   return url.pathname.startsWith("/api/playlist/");
 }
 
@@ -540,7 +541,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.pathname.startsWith("/api/files/")) {
+  if (url.pathname.startsWith("/api/files/") || url.pathname.startsWith("/api/podcast-media/")) {
     event.respondWith(mediaResponse(request));
     return;
   }

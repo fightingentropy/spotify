@@ -11,9 +11,11 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
+import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import {
   PODCAST_SHOWS,
   parsePodcastFeed,
+  podcastMediaProxyUrl,
   type PodcastEpisode,
 } from "@/lib/podcasts";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
@@ -175,7 +177,7 @@ export default function PodcastsPage() {
                 )}
               >
                 <CoverImage
-                  src={podcastShow.imageUrl}
+                  src={podcastMediaProxyUrl(podcastShow.id, podcastShow.imageUrl)}
                   alt={podcastShow.title}
                   fill
                   loading={index === 0 ? "eager" : "lazy"}
@@ -209,7 +211,7 @@ export default function PodcastsPage() {
             <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
               <div className="flex min-w-0 gap-3">
                 <CoverImage
-                  src={selectedShow.imageUrl}
+                  src={podcastMediaProxyUrl(selectedShow.id, selectedShow.imageUrl)}
                   alt={selectedShow.title}
                   width={72}
                   height={72}
@@ -319,6 +321,8 @@ export default function PodcastsPage() {
                           ) : null}
                         </div>
                       </button>
+
+                      <OfflineSongDownloadButton song={episode} className="h-10 w-10" />
 
                       {episode.link ? (
                         <a
