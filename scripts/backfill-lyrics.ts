@@ -37,7 +37,9 @@ const REQUEST_DELAY_MS = 350;
 // Modest parallelism: LRCLIB round-trips from here run 2-4s, which dominates
 // the runtime; three workers keeps the request rate around 1-2/s overall.
 const CONCURRENCY = 3;
-const REQUEST_TIMEOUT_MS = 8_000;
+// LRCLIB latency under sustained traffic runs 6-13s; an aggressive timeout
+// just aborts requests that would have succeeded.
+const REQUEST_TIMEOUT_MS = 20_000;
 const USER_AGENT = "spotify-selfhost-lyrics-backfill/1.0 (personal library; erlin.hx@gmail.com)";
 
 type LrclibRecord = {
