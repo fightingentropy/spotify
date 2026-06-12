@@ -239,18 +239,17 @@ export default function NowPlayingSheet({
               >
                 <ChevronDown size={24} />
               </button>
-              <div className="text-xs uppercase tracking-wide opacity-70">Now Playing</div>
               <div className="-mr-1 flex items-center gap-1">
                 {showLibraryActions ? (
                   <>
-                    <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-10 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
+                    <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
                     <button
                       type="button"
                       aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
                       onClick={handleToggleLike}
                       disabled={!likesHydrated || likePending}
                       className={cn(
-                        "h-11 w-10 rounded-full grid place-items-center touch-manipulation",
+                        "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
                         "wf-control-button",
                         likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
                         songIsLiked ? "text-emerald-500" : "text-foreground/70",
@@ -268,7 +267,7 @@ export default function NowPlayingSheet({
                     aria-pressed={lyricsViewOpen}
                     onClick={() => setShowLyrics((value) => !value)}
                     className={cn(
-                      "wf-control-button h-11 w-10 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
+                      "wf-control-button h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
                       lyricsViewOpen ? "text-emerald-500" : "text-foreground/70",
                     )}
                   >
@@ -283,7 +282,7 @@ export default function NowPlayingSheet({
                     title={sleepTimerTitle}
                     onClick={() => setSleepMenuOpen((value) => !value)}
                     className={cn(
-                      "wf-control-button relative h-11 w-10 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
+                      "wf-control-button relative h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
                       sleepTimerActive ? "text-[#1ed760]" : "text-foreground/70",
                     )}
                   >
@@ -358,7 +357,7 @@ export default function NowPlayingSheet({
                   aria-label="Open queue"
                   title="Open queue"
                   onClick={onOpenQueue}
-                  className="wf-control-button h-11 w-10 rounded-full grid place-items-center text-foreground/70 active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
+                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center text-foreground/70 active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
                 >
                   <ListMusic size={22} />
                 </button>
@@ -366,6 +365,7 @@ export default function NowPlayingSheet({
             </div>
 
             <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">
+              <div className="-mb-2 text-center text-xs uppercase tracking-wide opacity-70">Now Playing</div>
               {lyricsViewOpen ? (
                 // Same square footprint as the art so toggling never reflows
                 // the title/progress/controls below.
