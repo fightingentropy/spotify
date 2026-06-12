@@ -227,7 +227,7 @@ export default function NowPlayingSheet({
       >
         <div
           ref={scrollContainerRef}
-          className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0"
+          className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] lg:pt-0 lg:pb-0"
         >
           <div className="p-4 sm:p-6 min-h-full flex flex-col">
             <div className="flex items-center justify-between mb-4 lg:mb-4">
@@ -243,14 +243,14 @@ export default function NowPlayingSheet({
               <div className="-mr-1 flex items-center gap-1">
                 {showLibraryActions ? (
                   <>
-                    <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
+                    <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-10 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
                     <button
                       type="button"
                       aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
                       onClick={handleToggleLike}
                       disabled={!likesHydrated || likePending}
                       className={cn(
-                        "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
+                        "h-11 w-10 rounded-full grid place-items-center touch-manipulation",
                         "wf-control-button",
                         likePending ? "opacity-60" : "active:bg-black/10 dark:active:bg-white/10",
                         songIsLiked ? "text-emerald-500" : "text-foreground/70",
@@ -268,19 +268,97 @@ export default function NowPlayingSheet({
                     aria-pressed={lyricsViewOpen}
                     onClick={() => setShowLyrics((value) => !value)}
                     className={cn(
-                      "wf-control-button h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
+                      "wf-control-button h-11 w-10 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
                       lyricsViewOpen ? "text-emerald-500" : "text-foreground/70",
                     )}
                   >
                     <MicVocal size={22} />
                   </button>
                 ) : null}
+                <div className="relative">
+                  <button
+                    type="button"
+                    aria-label={sleepTimerTitle}
+                    aria-expanded={sleepMenuOpen}
+                    title={sleepTimerTitle}
+                    onClick={() => setSleepMenuOpen((value) => !value)}
+                    className={cn(
+                      "wf-control-button relative h-11 w-10 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
+                      sleepTimerActive ? "text-[#1ed760]" : "text-foreground/70",
+                    )}
+                  >
+                    <Moon size={20} />
+                    <span
+                      className={cn(
+                        "absolute bottom-1.5 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
+                        sleepTimerActive ? "opacity-100" : "opacity-0",
+                      )}
+                    />
+                  </button>
+                  {sleepMenuOpen ? (
+                    <>
+                      {/* The sheet section is transformed, so fixed positioning
+                          resolves against it — this covers exactly the sheet. */}
+                      <button
+                        type="button"
+                        aria-label="Close sleep timer menu"
+                        className="fixed inset-0 z-10 cursor-default"
+                        onClick={() => setSleepMenuOpen(false)}
+                      />
+                      <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border border-black/10 bg-background/95 p-1.5 shadow-xl backdrop-blur dark:border-white/10">
+                        {sleepTimerActive ? (
+                          <div className="px-3 pb-1 pt-1.5 text-xs text-[#1ed760]">
+                            {sleepTimerRemaining != null ? `${sleepTimerRemaining} min left` : "End of track"}
+                          </div>
+                        ) : null}
+                        {SLEEP_TIMER_MINUTE_OPTIONS.map((minutes) => (
+                          <button
+                            key={minutes}
+                            type="button"
+                            onClick={() => {
+                              startSleepTimer(minutes);
+                              setSleepMenuOpen(false);
+                            }}
+                            className="wf-control-button h-9 w-full rounded-lg px-3 text-left text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+                          >
+                            {minutes} min
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSleepAtEndOfTrack();
+                            setSleepMenuOpen(false);
+                          }}
+                          className={cn(
+                            "wf-control-button h-9 w-full rounded-lg px-3 text-left text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
+                            sleepAtEndOfTrack && "text-[#1ed760]",
+                          )}
+                        >
+                          End of track
+                        </button>
+                        {sleepTimerActive ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              cancelSleepTimer();
+                              setSleepMenuOpen(false);
+                            }}
+                            className="wf-control-button h-9 w-full rounded-lg px-3 text-left text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+                          >
+                            Turn off
+                          </button>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
                 <button
                   type="button"
                   aria-label="Open queue"
                   title="Open queue"
                   onClick={onOpenQueue}
-                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center text-foreground/70 active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
+                  className="wf-control-button h-11 w-10 rounded-full grid place-items-center text-foreground/70 active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
                 >
                   <ListMusic size={22} />
                 </button>
@@ -405,76 +483,12 @@ export default function NowPlayingSheet({
                 </button>
               </div>
 
-              <div className="flex flex-col items-center gap-3">
-                <button
-                  type="button"
-                  aria-label={sleepTimerTitle}
-                  aria-expanded={sleepMenuOpen}
-                  title={sleepTimerTitle}
-                  onClick={() => setSleepMenuOpen((value) => !value)}
-                  className={cn(
-                    "wf-control-button inline-flex h-9 items-center gap-2 rounded-full border px-3 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
-                    sleepTimerActive
-                      ? "border-[#1ed760]/40 text-[#1ed760]"
-                      : "border-black/15 text-foreground/70 dark:border-white/20",
-                  )}
-                >
-                  <Moon size={16} />
-                  {sleepTimerRemaining != null
-                    ? `${sleepTimerRemaining} min left`
-                    : sleepAtEndOfTrack
-                      ? "End of track"
-                      : "Sleep timer"}
-                </button>
-                {sleepMenuOpen ? (
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {SLEEP_TIMER_MINUTE_OPTIONS.map((minutes) => (
-                      <button
-                        key={minutes}
-                        type="button"
-                        onClick={() => {
-                          startSleepTimer(minutes);
-                          setSleepMenuOpen(false);
-                        }}
-                        className="wf-control-button h-9 rounded-full border border-black/15 px-3 text-sm active:bg-black/5 dark:border-white/20 dark:active:bg-white/5 touch-manipulation"
-                      >
-                        {minutes} min
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSleepAtEndOfTrack();
-                        setSleepMenuOpen(false);
-                      }}
-                      className={cn(
-                        "wf-control-button h-9 rounded-full border px-3 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
-                        sleepAtEndOfTrack
-                          ? "border-[#1ed760]/40 text-[#1ed760]"
-                          : "border-black/15 dark:border-white/20",
-                      )}
-                    >
-                      End of track
-                    </button>
-                    {sleepTimerActive ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          cancelSleepTimer();
-                          setSleepMenuOpen(false);
-                        }}
-                        className="wf-control-button h-9 rounded-full border border-black/15 px-3 text-sm active:bg-black/5 dark:border-white/20 dark:active:bg-white/5 touch-manipulation"
-                      >
-                        Turn off
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
             </div>
 
             {showLibraryActions ? (
-              <div className="mt-6 space-y-4 lg:mt-5">
+              // Credits card is desktop-only; hide the wrapper on mobile so
+              // its margin doesn't add dead space under the controls.
+              <div className="hidden lg:block lg:mt-5 space-y-4">
                 <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 hidden lg:block">
                   <div className="font-medium mb-3">Credits</div>
                   <div className="space-y-3">
