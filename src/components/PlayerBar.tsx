@@ -1389,10 +1389,18 @@ function PlayerBar(): React.ReactElement | null {
       onSeek(nextTime);
     }
 
-    function clearRangeShortcutFocus(target: EventTarget | null) {
-      if (target instanceof HTMLInputElement && target.type.toLowerCase() === "range") {
-        target.blur();
-      }
+    function clearShortcutFocus(target: EventTarget | null) {
+      // Pressing a key flips the browser into keyboard-focus mode, which draws
+      // a focus ring around whatever element was last clicked. These are global
+      // playback shortcuts, not interactions with the focused element, so drop
+      // focus to keep the ring from appearing.
+      const focused =
+        target instanceof HTMLElement
+          ? target
+          : document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+      if (focused && focused !== document.body) focused.blur();
     }
 
     function onKeyDown(e: KeyboardEvent) {
@@ -1404,6 +1412,7 @@ function PlayerBar(): React.ReactElement | null {
         if (shouldPreserveSpaceKeyTarget(e.target)) return;
         e.preventDefault();
         e.stopPropagation();
+        clearShortcutFocus(e.target);
         if (!e.repeat) handleTogglePlayback();
         return;
       }
@@ -1414,14 +1423,14 @@ function PlayerBar(): React.ReactElement | null {
       if (e.key === "ArrowRight") {
         e.preventDefault();
         e.stopPropagation();
-        clearRangeShortcutFocus(e.target);
+        clearShortcutFocus(e.target);
         seekBy(5);
         return;
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         e.stopPropagation();
-        clearRangeShortcutFocus(e.target);
+        clearShortcutFocus(e.target);
         seekBy(-5);
       }
     }
