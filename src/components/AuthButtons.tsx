@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, LogIn, LogOut, Settings, UserRound } from "lucide-react";
 import { useAuth } from "@/client/auth";
+import { resolveNativeApiUrl } from "@/lib/song-utils";
 
 export function AccountAvatar({
   src,
@@ -17,7 +18,10 @@ export function AccountAvatar({
   iconSize?: number;
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const displaySrc = src && src !== failedSrc ? src : null;
+  // Relative /api/ URLs (e.g. /api/profile/image/...) must be rewritten to the
+  // remote origin in the native app or they 404 against the local app shell.
+  const resolvedSrc = src ? resolveNativeApiUrl(src) : null;
+  const displaySrc = resolvedSrc && resolvedSrc !== failedSrc ? resolvedSrc : null;
 
   if (displaySrc) {
     return (
