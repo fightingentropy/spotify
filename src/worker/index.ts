@@ -3913,11 +3913,21 @@ app.post("/api/playlist/:id/reorder", async (c) => {
   return c.json({ ok: true, songIds: finalOrder });
 });
 
+// Profile avatars are served without auth: plain <img> loads from the native
+// app don't carry session cookies (only fetch/XHR go through the CapacitorHttp
+// bridge), so an authenticated avatar can never render there. The random UUID
+// filename keeps the URL unguessable.
+function isProfileImageKey(key: string): boolean {
+  return /^users\/[^/]+\/profile\/[^/]+$/.test(key);
+}
+
 app.get("/api/files/*", async (c) => {
   const key = normalizeStorageKey(parseStorageKeyFromApiPath(new URL(c.req.url).pathname));
-  const user = requireUser(c.get("user"));
-  if (!(await storageKeyBelongsToUser(c.get("db"), key, user.id))) {
-    return jsonError("Not found", 404);
+  if (!isProfileImageKey(key)) {
+    const user = requireUser(c.get("user"));
+    if (!(await storageKeyBelongsToUser(c.get("db"), key, user.id))) {
+      return jsonError("Not found", 404);
+    }
   }
   const object = await c.env.MEDIA.head(key);
   if (!object) return jsonError("Not found", 404);
