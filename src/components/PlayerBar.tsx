@@ -106,6 +106,10 @@ function canPlayHlsNatively(audio: HTMLAudioElement): boolean {
 type AudioSourceState = {
   src: string;
   hls: HlsInstance | null;
+  // True while the element plays the raw _capacitor_file_ scheme URL (the
+  // blob read failed). That source cannot seek, so its positions must never
+  // be persisted as listening progress.
+  nativeFallback?: boolean;
 };
 
 type HlsInstance = {
@@ -140,6 +144,10 @@ const NowPlayingSheet = lazy(() => import("@/components/NowPlayingSheet"));
 const QueueSheet = lazy(() => import("@/components/QueueSheet"));
 const SEEK_LANDING_TOLERANCE_SECONDS = 0.75;
 const STICKY_SEEK_RETRY_MS = 180;
+// Native offline blob reads fail transiently (memory pressure on 100MB+
+// episode files, reads interrupted right after launch); retry on this
+// schedule and upgrade the playing element in place when one succeeds.
+const NATIVE_OFFLINE_BLOB_RETRY_DELAYS_MS = [2_500, 8_000, 20_000];
 const MAX_STICKY_SEEK_ATTEMPTS = 30;
 const MAX_CONSECUTIVE_AUDIO_ERRORS = 3;
 const SLEEP_TIMER_MINUTE_OPTIONS = [5, 15, 30, 45, 60];
@@ -355,7 +363,18 @@ function PlayerBar(): React.ReactElement | null {
     const persistableIndex = persistableQueue.findIndex((song) => song.id === currentSong.id);
     if (persistableIndex < 0) return null;
     const active = activeIdx === 0 ? audioARef.current : audioBRef.current;
-    const time = Math.max(0, active?.currentTime ?? currentTimeRef.current);
+    // A resume target that hasn't landed yet (non-seekable native fallback,
+    // metadata not loaded) is the truthful position — the element still sits
+    // at the wrong spot and must not overwrite the saved resume point. And a
+    // metadata-less element has been reset by teardown or a source swap; its 0
+    // is meaningless, so fall back to the last timeupdate position.
+    const pendingResume = savedSeekRef.current;
+    const elementTime =
+      active && active.readyState >= HTMLMediaElement.HAVE_METADATA ? active.currentTime : null;
+    const time =
+      pendingResume?.songId === currentSong.id
+        ? Math.max(0, pendingResume.time)
+        : Math.max(0, elementTime ?? currentTimeRef.current);
     return {
       version: 1,
       accountScope,
@@ -370,7 +389,10 @@ function PlayerBar(): React.ReactElement | null {
   }, [accountScope, activeIdx, currentSong, getPlaybackStateDeviceId, isPlaying, queue]);
 
   const saveCurrentPlaybackStateToLocal = useCallback((): PlaybackStateSnapshot | null => {
-    const updatedAt = playbackStateUpdatedAtRef.current || Date.now();
+    // Stamp fresh: this is the device's live position at teardown, the newest
+    // state that exists. Reusing the last-applied timestamp made the restore
+    // tie-break (server >= local) resurrect an old server snapshot over it.
+    const updatedAt = Math.max(Date.now(), playbackStateUpdatedAtRef.current + 1);
     const state = buildPlaybackStateSnapshot(updatedAt);
     if (!state) {
       // Only delete the persisted resume state once restore has finished AND the
@@ -515,6 +537,73 @@ function PlayerBar(): React.ReactElement | null {
     audio.load();
   }, [releaseNativeAudioObjectUrl]);
 
+  // Native offline audio: the scheme handler serves header-less non-Range
+  // responses, so WKWebView treats the media as non-seekable. Swap in a typed
+  // blob: URL instead. If the blob read fails, fall back to the scheme-handler
+  // URL (plays, but cannot seek) rather than staying silent — and keep
+  // retrying the blob in the background, upgrading the element in place at the
+  // same position once a read succeeds, because resume and scrubbing only work
+  // on the blob source.
+  const attachNativeOfflineAudioSource = useCallback(async (
+    audio: HTMLAudioElement,
+    absolute: string,
+    initialResumeAt: number,
+  ) => {
+    const stillCurrent = () => audioSourceStateRef.current.get(audio)?.src === absolute;
+    const applySrc = (src: string, resumeAt: number) => {
+      audioSourceStateRef.current.set(audio, {
+        src: absolute,
+        hls: null,
+        nativeFallback: src === absolute,
+      });
+      audio.src = src;
+      if (resumeAt > 0.5) {
+        audio.addEventListener(
+          "loadedmetadata",
+          () => {
+            if (!stillCurrent()) return;
+            try { audio.currentTime = resumeAt; } catch {}
+          },
+          { once: true },
+        );
+      }
+      if (isPlayingRef.current) void audio.play().catch(() => {});
+    };
+    const acquire = async () => {
+      try {
+        return await acquireNativeOfflineAudioObjectUrl(absolute);
+      } catch {
+        return null;
+      }
+    };
+
+    let objectUrl = await acquire();
+    if (!stillCurrent()) {
+      if (objectUrl) releaseNativeAudioObjectUrl(audio, absolute);
+      return;
+    }
+    if (objectUrl) {
+      applySrc(objectUrl, initialResumeAt);
+      return;
+    }
+
+    applySrc(absolute, initialResumeAt);
+    for (const delayMs of NATIVE_OFFLINE_BLOB_RETRY_DELAYS_MS) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      if (!stillCurrent()) return;
+      objectUrl = await acquire();
+      if (!stillCurrent()) {
+        if (objectUrl) releaseNativeAudioObjectUrl(audio, absolute);
+        return;
+      }
+      if (!objectUrl) continue;
+      // Upgrade in place: carry the current position over; a podcast wedged at
+      // 0 is re-positioned by the stored-progress fallback in onLoadedMetadata.
+      applySrc(objectUrl, audio.currentTime || 0);
+      return;
+    }
+  }, [releaseNativeAudioObjectUrl]);
+
   const loadAudioSource = useCallback((audio: HTMLAudioElement, nextSrc: string) => {
     const absolute = resolvePlayableSrc(nextSrc);
     const current = audioSourceStateRef.current.get(audio);
@@ -557,49 +646,21 @@ function PlayerBar(): React.ReactElement | null {
       return;
     }
 
-    // Native offline audio: the scheme handler serves header-less non-Range
-    // responses, so WKWebView treats the media as non-seekable. Swap in a typed
-    // blob: URL instead. Only audio ever flows through loadAudioSource, so the
-    // path marker alone is a safe detector (cover art / lyrics never reach here).
+    // Only audio ever flows through loadAudioSource, so the path marker alone
+    // is a safe detector (cover art / lyrics never reach here).
     if (isCapacitorFileUrl(absolute)) {
       const resumeAt =
         audio.currentSrc === absolute || audio.src === absolute ? audio.currentTime || 0 : 0;
       audio.removeAttribute("src");
       audio.load();
       audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
-      void (async () => {
-        let objectUrl: string | null = null;
-        try {
-          objectUrl = await acquireNativeOfflineAudioObjectUrl(absolute);
-        } catch {
-          objectUrl = null;
-        }
-        const latest = audioSourceStateRef.current.get(audio);
-        if (latest?.src !== absolute) {
-          if (objectUrl) releaseNativeAudioObjectUrl(audio, absolute);
-          return;
-        }
-        // Blob read failed: fall back to the scheme-handler URL (plays, but
-        // cannot seek) rather than staying silent.
-        audio.src = objectUrl ?? absolute;
-        if (resumeAt > 0.5) {
-          audio.addEventListener(
-            "loadedmetadata",
-            () => {
-              if (audioSourceStateRef.current.get(audio)?.src !== absolute) return;
-              try { audio.currentTime = resumeAt; } catch {}
-            },
-            { once: true },
-          );
-        }
-        if (isPlayingRef.current) void audio.play().catch(() => {});
-      })();
+      void attachNativeOfflineAudioSource(audio, absolute, resumeAt);
       return;
     }
 
     if (audio.src !== absolute) audio.src = absolute;
     audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
-  }, [releaseNativeAudioObjectUrl]);
+  }, [attachNativeOfflineAudioSource, releaseNativeAudioObjectUrl]);
 
   const cancelActiveCrossfade = useCallback(() => {
     const cancel = crossfadeCancelRef.current;
@@ -803,12 +864,42 @@ function PlayerBar(): React.ReactElement | null {
     if (seekDuration == null) return;
     const clamped = Math.max(0, Math.min(seekDuration, pending.time));
     performSeek(audio, clamped, seekDuration);
-    savedSeekRef.current = null;
-  }, [duration, performSeek, playbackDuration, playbackSong?.id]);
+    // Only consume the target once the element actually moved. A non-seekable
+    // source (the native scheme-handler fallback) silently drops the write; a
+    // kept target re-applies on the next source load (e.g. the blob upgrade)
+    // and meanwhile blocks progress writes from clobbering the resume point.
+    // Radio is live — its position is meaningless, never hold a target for it.
+    if (currentSongIsRadio || seekIsCloseEnough(audio.currentTime, clamped)) {
+      savedSeekRef.current = null;
+    }
+  }, [currentSongIsRadio, duration, performSeek, playbackDuration, playbackSong?.id]);
+
+  // Podcast resume of last resort, run on every metadata load: if no snapshot
+  // seek is pending and the element sits at the start while localStorage says
+  // mid-episode, seek to the stored position. This is what restores the resume
+  // point after a source reload that lost it — most importantly the native
+  // fallback→blob upgrade, where the original resume seek was dropped by the
+  // non-seekable source.
+  const applyStoredPodcastResume = useCallback((audio: HTMLAudioElement) => {
+    if (!currentSongIsPodcast || !currentSongId) return;
+    if (savedSeekRef.current) return;
+    if (stickySeekRef.current?.audio === audio) return;
+    if ((audio.currentTime || 0) >= 1) return;
+    const stored = readEpisodeProgress(currentSongId);
+    if (!stored || stored.time < PODCAST_RESUME_MIN_SECONDS || isEpisodeFinished(stored)) return;
+    const seekDuration =
+      finiteMediaDuration(audio.duration) ?? playbackDuration ?? finiteMediaDuration(duration);
+    if (seekDuration == null) return;
+    performSeek(audio, Math.max(0, Math.min(seekDuration, stored.time)), seekDuration);
+  }, [currentSongId, currentSongIsPodcast, duration, performSeek, playbackDuration]);
 
   const onSeek = useCallback((value: number) => {
     const active = getActiveAudio();
     if (!active || !Number.isFinite(value)) return;
+    // An explicit user seek wins over any pending resume target; without this
+    // a restore seek that hasn't applied yet would later yank playback away
+    // from where the user just scrubbed to.
+    savedSeekRef.current = null;
     const seekDuration = finiteMediaDuration(duration) ?? finiteMediaDuration(active.duration) ?? playbackDuration;
     if (seekDuration == null) return;
     const nextTime = Math.max(0, Math.min(seekDuration, value));
@@ -1000,7 +1091,14 @@ function PlayerBar(): React.ReactElement | null {
           serverState = fetched;
         }
       } catch {}
-      if (cancelled) return;
+      if (cancelled) {
+        // The restore latch (restoredPlayerStateRef) means nobody will run
+        // this again — leaving sync not-ready would silently block every
+        // publish for the rest of the session (guaranteed under StrictMode's
+        // dev double-mount), so the stale server state never gets overwritten.
+        playbackSyncReadyRef.current = true;
+        return;
+      }
 
       const localUpdatedAt = scopedLocalState?.updatedAt ?? 0;
       if (serverState && serverState.updatedAt >= localUpdatedAt) {
@@ -1517,15 +1615,35 @@ function PlayerBar(): React.ReactElement | null {
     return () => window.clearInterval(intervalId);
   }, [currentSong?.id, enforceSleepTimerExpiry, isPlaying, schedulePlaybackStateSync]);
 
+  // Near-zero positions over substantial saved progress are almost always a
+  // torn-down or freshly-reset element (navigation/app teardown, native source
+  // swap), not a real listen position — keep the resume point instead.
+  const writeEpisodeProgressGuarded = useCallback((id: string, time: number, total: number) => {
+    if (time < PODCAST_RESUME_MIN_SECONDS) {
+      const existing = readEpisodeProgress(id);
+      if (existing && existing.time >= PODCAST_RESUME_MIN_SECONDS && !isEpisodeFinished(existing)) return;
+    }
+    writeEpisodeProgress(id, time, total);
+  }, []);
+
   const flushPodcastProgress = useCallback(() => {
     if (!currentSongIsPodcast || !currentSongId) return;
+    // A resume target that never landed means the element's position is wrong
+    // (non-seekable native fallback); flushing it would clobber the real
+    // resume point — keep the stored position instead.
+    if (savedSeekRef.current?.songId === currentSongId) return;
     const active = getActiveAudio();
-    const time = active?.currentTime ?? currentTimeRef.current;
+    if (active && audioSourceStateRef.current.get(active)?.nativeFallback) return;
+    // Teardown resets media elements before pagehide fires, so the element
+    // reads 0 here; currentTimeRef still holds the last timeupdate position.
+    const elementTime =
+      active && active.readyState >= HTMLMediaElement.HAVE_METADATA ? active.currentTime : null;
+    const time = elementTime ?? currentTimeRef.current;
     const total =
       finiteMediaDuration(active?.duration ?? 0) ?? playbackDuration ?? 0;
     lastPodcastProgressWriteRef.current = Date.now();
-    writeEpisodeProgress(currentSongId, time, total);
-  }, [currentSongId, currentSongIsPodcast, getActiveAudio, playbackDuration]);
+    writeEpisodeProgressGuarded(currentSongId, time, total);
+  }, [currentSongId, currentSongIsPodcast, getActiveAudio, playbackDuration, writeEpisodeProgressGuarded]);
 
   // Recording must never affect playback: fire-and-forget, all errors swallowed.
   // `keepEntry` keeps tracking the same listen after a flush (pagehide/hidden may
@@ -1784,6 +1902,7 @@ function PlayerBar(): React.ReactElement | null {
         const mediaDuration = finiteMediaDuration(audio.duration) ?? playbackDuration;
         setDuration(mediaDuration ?? 0);
         applyPendingResumeSeek(audio);
+        applyStoredPodcastResume(audio);
         retryStickySeekRef.current();
         audio.volume = isMuted ? 0 : volume;
         // Belt-and-braces: a fresh load resets playbackRate to defaultPlaybackRate.
@@ -1803,6 +1922,16 @@ function PlayerBar(): React.ReactElement | null {
           }
           const nextTime = currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0;
           currentTimeRef.current = nextTime;
+          // A pending resume target is consumed once playback reaches it; until
+          // then it blocks progress/snapshot writes (see below) so a dropped
+          // seek can't overwrite the saved position with the wrong one.
+          const pendingResume = savedSeekRef.current;
+          if (
+            pendingResume?.songId === currentSongId &&
+            (seekIsCloseEnough(nextTime, pendingResume.time) || nextTime > pendingResume.time)
+          ) {
+            savedSeekRef.current = null;
+          }
           const listen = playListenRef.current;
           if (listen && listen.song.id === currentSongId) {
             if (nextTime > listen.maxPositionSeconds) listen.maxPositionSeconds = nextTime;
@@ -1811,11 +1940,16 @@ function PlayerBar(): React.ReactElement | null {
             }
           }
           setCurrentTime(nextTime);
-          if (currentSongIsPodcast && currentSongId) {
+          if (
+            currentSongIsPodcast &&
+            currentSongId &&
+            !savedSeekRef.current &&
+            !audioSourceStateRef.current.get(e.currentTarget)?.nativeFallback
+          ) {
             const now = Date.now();
             if (now - lastPodcastProgressWriteRef.current >= PODCAST_PROGRESS_WRITE_INTERVAL_MS) {
               lastPodcastProgressWriteRef.current = now;
-              writeEpisodeProgress(
+              writeEpisodeProgressGuarded(
                 currentSongId,
                 nextTime,
                 finiteMediaDuration(e.currentTarget.duration) ?? playbackDuration ?? 0,

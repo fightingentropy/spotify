@@ -6,6 +6,12 @@
       "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "dev"],
       "port": 5174
+    },
+    {
+      "name": "local-music",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "local:music"],
+      "port": 5176
     }
   ]
 }
