@@ -569,6 +569,7 @@ export default function HomePage() {
         <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
           <CoverImage
             src={displaySong.imageUrl}
+            networkSrc={displaySong.networkImageUrl}
             alt={displaySong.title}
             fill
             sizes="160px"
@@ -654,6 +655,7 @@ export default function HomePage() {
             <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded-[5px] bg-white/10">
               <CoverImage
                 src={displaySong.imageUrl}
+                networkSrc={displaySong.networkImageUrl}
                 alt={displaySong.title}
                 fill
                 sizes="48px"
@@ -918,6 +920,7 @@ export default function HomePage() {
                       <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
                         <CoverImage
                           src={displaySong.imageUrl}
+                          networkSrc={displaySong.networkImageUrl}
                           alt={displaySong.title}
                           fill
                           sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 180px"

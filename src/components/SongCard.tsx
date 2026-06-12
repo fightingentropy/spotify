@@ -118,6 +118,7 @@ const SongCardComponent = function SongCard({
       />
       <CoverImage
         src={resolvedSong.imageUrl}
+        networkSrc={resolvedSong.networkImageUrl}
         alt={resolvedSong.title}
         fill
         sizes="(max-width: 640px) 100vw, (max-width: 1024px) 33vw, 200px"

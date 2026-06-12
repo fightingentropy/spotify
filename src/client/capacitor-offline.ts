@@ -56,6 +56,47 @@ function extensionForAsset(kind: NativeOfflineAssetKind, url: string, blob: Blob
   return ".bin";
 }
 
+// Magic-number sniff for the image formats the app serves. Catches the classic
+// poisoning case where an HTTP error body (JSON/HTML) gets persisted as a
+// cover image: those bytes start with '{' or '<', never a valid image header.
+export function looksLikeImageBytes(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 12) return false;
+  // JPEG
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return true;
+  // PNG
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return true;
+  // GIF87a / GIF89a
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return true;
+  // WebP: RIFF....WEBP
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return true;
+  }
+  // BMP
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return true;
+  return false;
+}
+
+async function blobHeadBytes(blob: Blob, length = 16): Promise<Uint8Array> {
+  const head = blob.slice(0, length);
+  return new Uint8Array(await head.arrayBuffer());
+}
+
+export async function assertValidImageBlob(blob: Blob): Promise<void> {
+  if (blob.size <= 0) throw new Error("Downloaded cover image is empty");
+  if (!looksLikeImageBytes(await blobHeadBytes(blob))) {
+    throw new Error("Downloaded cover image is not a valid image");
+  }
+}
+
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -210,17 +251,36 @@ export async function saveNativeOfflineAsset(options: {
     contentType: options.blob.type || undefined,
   };
 
-  const absoluteUrl = isAbsoluteHttpUrl(options.url) ? new URL(options.url, location.origin).toString() : null;
+  // The caller's blob came from a response.ok-checked fetch; trust it as the
+  // integrity reference. Filesystem.downloadFile below performs its own
+  // unauthenticated native request and saves whatever comes back — including
+  // 4xx/5xx error bodies — so it must never be the only validation layer.
+  if (options.kind === "image") {
+    await assertValidImageBlob(options.blob);
+  }
 
-  // 1) Preferred: stream straight from the URL to disk so the whole file never
-  //    lives in JS memory. Only base64 fallbacks below hold (chunked) data.
+  const absoluteUrl =
+    options.kind === "audio" && isAbsoluteHttpUrl(options.url)
+      ? new URL(options.url, location.origin).toString()
+      : null;
+
+  // 1) Audio only: stream straight from the URL to disk so the whole file never
+  //    lives in JS memory twice. Cross-check the written size against the
+  //    validated blob — a mismatch means downloadFile saved an error body.
   if (absoluteUrl) {
     try {
       await Filesystem.downloadFile({ url: absoluteUrl, directory: Directory.Data, path, recursive: true });
       const resolved = await resolveNativeFileUri(path);
+      if (
+        typeof resolved.size === "number" &&
+        options.blob.size > 0 &&
+        resolved.size !== options.blob.size
+      ) {
+        throw new Error("Native download size mismatch");
+      }
       return { ...baseAsset, uri: resolved.uri, size: resolved.size ?? options.blob.size };
     } catch {
-      // Fall through to writing from the in-hand blob.
+      // Fall through to writing from the validated in-hand blob.
     }
   }
 
@@ -253,7 +313,24 @@ export async function verifyNativeOfflineAsset(
       directory: Directory.Data,
       path: asset.path,
     });
-    return typeof stat.size === "number" ? stat.size > 0 : true;
+    if (typeof stat.size === "number" && stat.size <= 0) return false;
+
+    // Size alone can't catch a persisted HTTP error body (historic downloads
+    // used Filesystem.downloadFile, which saves 4xx/5xx responses verbatim).
+    // Images are small enough to read back and sniff, and a poisoned cover is
+    // exactly the corruption users see, so deep-check those.
+    if (asset.kind === "image") {
+      const webUrl = nativeOfflineAssetWebUrl(asset);
+      if (!webUrl) return false;
+      const response = await fetch(webUrl);
+      // The WKWebView scheme handler answers local file reads with status 0.
+      if (!response.ok && response.status !== 0) return false;
+      const blob = await response.blob();
+      if (blob.size <= 0) return false;
+      return looksLikeImageBytes(await blobHeadBytes(blob));
+    }
+
+    return true;
   } catch {
     return false;
   }

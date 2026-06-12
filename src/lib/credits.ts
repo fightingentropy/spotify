@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { parseLyrics, type ParsedLyrics } from "@/lib/lrc";
+import { resolveNativeApiUrl } from "@/lib/song-utils";
 
 export function parseCredits(artist: string): Array<{ name: string; role: string }> {
   const seen = new Set<string>();
@@ -30,6 +32,8 @@ export function parseCredits(artist: string): Array<{ name: string; role: string
 export type LyricsState = {
   status: "idle" | "loading" | "ready" | "error";
   text: string;
+  // Parsed form of `text`: synced lines when the file carries LRC timestamps.
+  parsed: ParsedLyrics | null;
 };
 
 /**
@@ -45,6 +49,7 @@ export function useLyrics(
   const [lyricsState, setLyricsState] = useState<LyricsState>({
     status: "idle",
     text: "",
+    parsed: null,
   });
   const loadedLyricsKeyRef = useRef<string | null>(null);
 
@@ -52,7 +57,7 @@ export function useLyrics(
     if (!enabled) return;
 
     if (!lyricsUrl) {
-      setLyricsState({ status: "idle", text: "" });
+      setLyricsState({ status: "idle", text: "", parsed: null });
       loadedLyricsKeyRef.current = null;
       return;
     }
@@ -60,26 +65,29 @@ export function useLyrics(
     if (loadedLyricsKeyRef.current === lyricsKey) {
       return;
     }
-    const safeLyricsUrl = lyricsUrl;
+    // Relative /api URLs must point at the remote origin on native; offline
+    // capacitor file URLs pass through untouched.
+    const safeLyricsUrl = resolveNativeApiUrl(lyricsUrl);
 
     let cancelled = false;
 
     async function loadLyrics() {
-      setLyricsState({ status: "loading", text: "" });
+      setLyricsState({ status: "loading", text: "", parsed: null });
       try {
         // Lyrics files are served from /api/files with an immutable cache
         // header, so the browser HTTP cache is the right layer to rely on.
         const response = await fetch(safeLyricsUrl);
-        if (!response.ok) {
+        // WKWebView's scheme handler reports local offline files as status 0.
+        if (!response.ok && response.status !== 0) {
           throw new Error("Lyrics unavailable");
         }
         const text = (await response.text()).trim();
         if (cancelled) return;
-        setLyricsState({ status: "ready", text });
+        setLyricsState({ status: "ready", text, parsed: parseLyrics(text) });
         loadedLyricsKeyRef.current = lyricsKey;
       } catch {
         if (cancelled) return;
-        setLyricsState({ status: "error", text: "" });
+        setLyricsState({ status: "error", text: "", parsed: null });
         loadedLyricsKeyRef.current = null;
       }
     }

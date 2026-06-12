@@ -24,10 +24,18 @@ function isOfflineResolvedSong(song: PlayerSong): boolean {
 // for every client. Swap in the canonical pre-resolution song kept on the
 // download record; with no record there's nothing safe to record.
 function canonicalPlayEventSong(song: PlayerSong): PlayerSong | null {
-  if (!isOfflineResolvedSong(song)) return song;
-  const canonical = useOfflineStore.getState().records[song.id]?.song;
-  if (!canonical || isOfflineResolvedSong(canonical)) return null;
-  return canonical;
+  const base = (() => {
+    if (!isOfflineResolvedSong(song)) return song;
+    const canonical = useOfflineStore.getState().records[song.id]?.song;
+    if (!canonical || isOfflineResolvedSong(canonical)) return null;
+    return canonical;
+  })();
+  if (!base) return null;
+  // networkImageUrl is a render-time fallback derived during offline
+  // resolution; snapshots should stay canonical.
+  if (base.networkImageUrl === undefined) return base;
+  const { networkImageUrl: _networkImageUrl, ...rest } = base;
+  return rest;
 }
 
 const PLAY_EVENT_MIN_POSITION_SECONDS = 30;

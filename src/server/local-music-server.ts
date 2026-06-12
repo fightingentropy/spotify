@@ -115,7 +115,10 @@ const AUDIO_EXTENSIONS = new Set([
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const LYRICS_EXTENSIONS = new Set([".lrc", ".txt"]);
-const SCAN_CACHE_VERSION = 2;
+// v3: forces a one-time full rescan so cover/lyrics sidecars created by the
+// backfill scripts get discovered (cached entries only re-check the audio
+// file and its .spotify.json mtimes, not newly-appearing sidecar files).
+const SCAN_CACHE_VERSION = 3;
 const LIKES_CACHE_VERSION = 1;
 const ARTWORK_CACHE_VERSION = 2;
 const LOCAL_USER = {
@@ -2070,6 +2073,20 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
   const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
   if (!entry) return fallbackArtworkRedirect();
+
+  // A cover sidecar wins over the extraction cache: clients holding old
+  // /api/artwork/local/<id> URLs (play-event snapshots, offline records) start
+  // getting real art the moment a sidecar lands next to the audio file.
+  const sidecarCoverUrl = entry.song.imageUrl || "";
+  if (sidecarCoverUrl.startsWith("/api/files/local/")) {
+    try {
+      const relativeCover = decodeURIComponent(sidecarCoverUrl.slice("/api/files/local/".length));
+      const absoluteCover = resolve(source.root, relativeCover);
+      if (isPathInside(source.root, absoluteCover) && existsSync(absoluteCover)) {
+        return serveFile(absoluteCover, request, "public, max-age=86400");
+      }
+    } catch {}
+  }
 
   const safeId = id.replace(/[^a-zA-Z0-9:_-]/g, "_");
   const cacheMetaPath = resolve(source.artworkDir, `${safeId}.json`);

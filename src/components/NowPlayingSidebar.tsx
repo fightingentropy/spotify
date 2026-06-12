@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4, Podcast, RadioTower } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
 import { parseCredits, useLyrics } from "@/lib/credits";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
+import { requestPlaybackSeek, subscribePlaybackPosition } from "@/lib/playback-position";
 import { CoverImage } from "@/components/CoverImage";
+import { LyricsPanel } from "@/components/LyricsPanel";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 export default function NowPlayingSidebar() {
@@ -22,6 +24,7 @@ export default function NowPlayingSidebar() {
 
   const [collapsed, setCollapsed] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
+  const [playbackPosition, setPlaybackPosition] = useState(0);
 
   const credits = useMemo(
     () => parseCredits(displaySong?.artist || ""),
@@ -29,6 +32,13 @@ export default function NowPlayingSidebar() {
   );
 
   const lyricsState = useLyrics(displaySong?.id, displaySong?.lyricsUrl, showLyrics);
+
+  // PlayerBar owns the audio clock; follow it only while lyrics are visible
+  // so the sidebar doesn't re-render 4x/second the rest of the time.
+  useEffect(() => {
+    if (!showLyrics || collapsed) return;
+    return subscribePlaybackPosition((detail) => setPlaybackPosition(detail.currentTime));
+  }, [collapsed, showLyrics]);
 
   return (
     <aside
@@ -70,6 +80,7 @@ export default function NowPlayingSidebar() {
           <div className="space-y-5 pb-4">
             <CoverImage
               src={displaySong.imageUrl}
+              networkSrc={displaySong.networkImageUrl}
               alt={displaySong.title}
               loading="eager"
               className="w-full aspect-square rounded-md object-cover bg-white/[0.08]"
@@ -124,13 +135,13 @@ export default function NowPlayingSidebar() {
                   </div>
 
                   {showLyrics && (
-                    <div className="rounded-md bg-white/[0.06] p-3 whitespace-pre-wrap text-[13px] leading-5 text-white/[0.72] max-h-48 overflow-auto">
-                      {lyricsState.status === "idle" && "No lyrics available for this song."}
-                      {lyricsState.status === "loading" && "Loading lyrics..."}
-                      {lyricsState.status === "error" && "Unable to load lyrics."}
-                      {lyricsState.status === "ready" &&
-                        (lyricsState.text || "No lyrics available for this song.")}
-                    </div>
+                    <LyricsPanel
+                      lyricsState={lyricsState}
+                      currentTime={playbackPosition}
+                      onSeek={requestPlaybackSeek}
+                      size="sm"
+                      className="h-72 rounded-md"
+                    />
                   )}
                 </div>
 

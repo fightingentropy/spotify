@@ -137,6 +137,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
           <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded">
             <CoverImage
               src={displaySong.imageUrl}
+              networkSrc={displaySong.networkImageUrl}
               alt={displaySong.title}
               fill
               sizes="48px"

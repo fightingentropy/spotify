@@ -7,6 +7,9 @@ import { OFFLINE_PLAYBACK_SEARCH_PARAM } from "@/lib/player-song";
 
 type CoverImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onError"> & {
   src: string | null | undefined;
+  // Remote cover URL to retry with when `src` (typically a device-local
+  // offline file) fails to load, before giving up to `fallbackSrc`.
+  networkSrc?: string | null;
   fallbackSrc?: string;
   fill?: boolean;
   priority?: boolean;
@@ -50,17 +53,26 @@ function artworkSrcSet(src: string): string | undefined {
 
 export function CoverImage({
   src,
+  networkSrc,
   fallbackSrc = "/apple-icon.png",
   alt,
   ...props
 }: CoverImageProps) {
-  const [failed, setFailed] = useState(false);
+  // Index into the candidate-source chain; each load error advances it.
+  const [sourceStage, setSourceStage] = useState(0);
   useEffect(() => {
-    setFailed(false);
-  }, [fallbackSrc, src]);
+    setSourceStage(0);
+  }, [fallbackSrc, networkSrc, src]);
+
+  const candidates: string[] = [];
+  if (src && src.trim().length > 0) candidates.push(src);
+  if (networkSrc && networkSrc.trim().length > 0 && !candidates.includes(networkSrc)) {
+    candidates.push(networkSrc);
+  }
+  if (!candidates.includes(fallbackSrc)) candidates.push(fallbackSrc);
 
   const resolvedSrc = normalizeCoverImageUrl(
-    failed || !src || src.trim().length === 0 ? fallbackSrc : src,
+    candidates[Math.min(sourceStage, candidates.length - 1)],
   );
   const generatedSrcSet = artworkSrcSet(resolvedSrc);
   const {
@@ -100,7 +112,7 @@ export function CoverImage({
           : null),
         ...style,
       }}
-      onError={() => setFailed(true)}
+      onError={() => setSourceStage((stage) => Math.min(stage + 1, candidates.length - 1))}
     />
   );
 }

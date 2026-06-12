@@ -1111,6 +1111,38 @@ async function verifyOrRepairRecord(record: OfflineDownloadRecord): Promise<{
   return { ok: true, record: verifiedRecord };
 }
 
+// Startup integrity sweep for native downloads. Re-queues records whose
+// on-disk assets fail verification (e.g. covers poisoned by a persisted HTTP
+// error body) without touching the user-facing verificationStatus state —
+// this runs unprompted, so it must never flash "checking" UI on launch.
+let quietVerificationStarted = false;
+
+async function quietVerifyDownloadedRecords(): Promise<void> {
+  if (quietVerificationStarted || !isNativeOfflineStorageAvailable()) return;
+  quietVerificationStarted = true;
+
+  try {
+    const records = currentAccountRecords(await idbGetAll<OfflineDownloadRecord>(DOWNLOAD_STORE).catch(() => []));
+    let repairsQueued = 0;
+    for (const record of records) {
+      if (record.status !== "downloaded") continue;
+      const result = await verifyOrRepairRecord(record);
+      if (result.ok) continue;
+      repairsQueued += 1;
+      await persistRecord({
+        ...record,
+        status: "queued",
+        progress: 0,
+        error: "Offline file damaged; queued for repair",
+        updatedAt: now(),
+      }).catch(() => undefined);
+    }
+    if (repairsQueued > 0) void processDownloadQueue();
+  } catch {
+    // Best-effort sweep; the manual verify button remains the explicit path.
+  }
+}
+
 function setRecordState(record: OfflineDownloadRecord): void {
   const scoped = scopedDownloadRecord(record);
   useOfflineStore.setState((state) => ({
@@ -1786,6 +1818,7 @@ export function resolveOfflineDownloadRecordSong(
 ): PlayerSong {
   const nativeAudioUrl = nativeOfflineAssetWebUrl(record.nativeFiles?.audio);
   if (nativeAudioUrl) {
+    const nativeImageUrl = nativeOfflineAssetWebUrl(record.nativeFiles?.image);
     return {
       ...record.song,
       ...song,
@@ -1795,7 +1828,13 @@ export function resolveOfflineDownloadRecordSong(
       audioBitDepth: song.audioBitDepth ?? record.song.audioBitDepth,
       audioSampleRate: song.audioSampleRate ?? record.song.audioSampleRate,
       audioUrl: nativeAudioUrl,
-      imageUrl: nativeOfflineAssetWebUrl(record.nativeFiles?.image) ?? record.imageUrl ?? song.imageUrl,
+      imageUrl: nativeImageUrl ?? record.imageUrl ?? song.imageUrl,
+      // Keep the remote cover reachable for renderers: a device-local image
+      // file can be corrupt (historic downloads saved HTTP error bodies), and
+      // CoverImage falls back to this when the local copy fails to decode.
+      networkImageUrl: nativeImageUrl
+        ? song.imageUrl || record.imageUrl || record.song.imageUrl || undefined
+        : song.networkImageUrl,
       lyricsUrl: nativeOfflineAssetWebUrl(record.nativeFiles?.lyrics) ?? record.lyricsUrl ?? song.lyricsUrl ?? record.song.lyricsUrl,
     };
   }
@@ -1954,6 +1993,11 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
     scheduleBackgroundOfflineWork(() => {
       void processDownloadQueue();
       void syncOfflineMutations();
+      // Delay the integrity sweep so it never competes with queued downloads
+      // or first paint; it re-queues anything damaged once it gets its turn.
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => void quietVerifyDownloadedRecords(), 12_000);
+      }
     });
   },
   queueDownloads: async (songs, scope) => {

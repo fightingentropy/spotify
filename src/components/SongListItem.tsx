@@ -114,6 +114,7 @@ const SongListItemComponent = function SongListItem({
         <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded">
           <CoverImage
             src={resolvedSong.imageUrl}
+            networkSrc={resolvedSong.networkImageUrl}
             alt={resolvedSong.title}
             fill
             sizes="48px"

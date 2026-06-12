@@ -15,6 +15,7 @@ import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
 import type { PlaybackStateSnapshot } from "@/lib/playback-state";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
+import { PLAYBACK_SEEK_REQUEST_EVENT, publishPlaybackPosition } from "@/lib/playback-position";
 import { useMediaSession } from "@/lib/use-media-session";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
 import {
@@ -829,6 +830,22 @@ function PlayerBar(): React.ReactElement | null {
       }
     }, 90);
   }, [duration, getActiveAudio, performSeek, playbackDuration]);
+
+  // Mirror playback position to satellite UIs (desktop sidebar lyrics) and
+  // accept their seek requests. currentTime state already updates from every
+  // path (timeupdate, seeks, resume points), so an effect catches them all.
+  useEffect(() => {
+    publishPlaybackPosition({ currentTime, duration });
+  }, [currentTime, duration]);
+
+  useEffect(() => {
+    const onSeekRequest = (event: Event) => {
+      const value = (event as CustomEvent<number>).detail;
+      if (typeof value === "number") onSeek(value);
+    };
+    window.addEventListener(PLAYBACK_SEEK_REQUEST_EVENT, onSeekRequest);
+    return () => window.removeEventListener(PLAYBACK_SEEK_REQUEST_EVENT, onSeekRequest);
+  }, [onSeek]);
 
   useMediaSession({
     song: playbackSong,
@@ -1918,6 +1935,7 @@ function PlayerBar(): React.ReactElement | null {
           >
             <CoverImage
               src={playbackSong.imageUrl || "/apple-icon.png"}
+              networkSrc={playbackSong.networkImageUrl}
               alt="cover"
               width={48}
               height={48}
@@ -1961,6 +1979,7 @@ function PlayerBar(): React.ReactElement | null {
         <div className="flex min-w-0 items-center justify-start gap-3 sm:gap-4">
           <CoverImage
             src={playbackSong.imageUrl || "/apple-icon.png"}
+            networkSrc={playbackSong.networkImageUrl}
             alt="cover"
             width={48}
             height={48}

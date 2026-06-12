@@ -71,6 +71,18 @@ describe("recordPlayEvent", () => {
     expect(body.durationMs).toBe(215_000);
   });
 
+  test("strips the render-only networkImageUrl from snapshots", () => {
+    const requests = installFetchSpy();
+    recordPlayEvent(
+      makeSong({ networkImageUrl: "https://spotify.fightingentropy.org/api/files/local/cover.jpg" }),
+      120_000,
+    );
+    expect(requests.length).toBe(1);
+    const body = JSON.parse(String(requests[0]!.init?.body));
+    expect(body.song.networkImageUrl).toBeUndefined();
+    expect(body.song.imageUrl).toBe("/apple-icon.png");
+  });
+
   test("skips recording while offline", () => {
     const requests = installFetchSpy({ online: false });
     recordPlayEvent(makeSong());

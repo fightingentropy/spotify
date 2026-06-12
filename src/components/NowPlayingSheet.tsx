@@ -5,9 +5,9 @@ import { parseCredits, useLyrics } from "@/lib/credits";
 import {
   CheckCircle2,
   ChevronDown,
-  FileText,
   Heart,
   ListMusic,
+  MicVocal,
   Moon,
   Pause,
   Play,
@@ -26,6 +26,7 @@ import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { impactLight } from "@/lib/haptics";
 import { CoverImage } from "@/components/CoverImage";
+import { LyricsPanel } from "@/components/LyricsPanel";
 import { MarqueeText } from "@/components/MarqueeText";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
@@ -112,7 +113,11 @@ export default function NowPlayingSheet({
   const credits = useMemo(() => parseCredits(song.artist), [song.artist]);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
-  const lyricsState = useLyrics(lyricsSong.id, lyricsSong.lyricsUrl, open && showLyrics);
+  // Prefetch whenever the sheet is open so toggling the lyrics view is
+  // instant; the files are tiny and HTTP/offline-cached.
+  const lyricsAvailable = !!lyricsSong.lyricsUrl;
+  const lyricsState = useLyrics(lyricsSong.id, lyricsSong.lyricsUrl, open && lyricsAvailable);
+  const lyricsViewOpen = showLyrics && lyricsAvailable;
 
   useEffect(() => {
     if (!open || escapeDisabled) return;
@@ -255,6 +260,21 @@ export default function NowPlayingSheet({
                     </button>
                   </>
                 ) : null}
+                {lyricsAvailable ? (
+                  <button
+                    type="button"
+                    aria-label={lyricsViewOpen ? "Hide lyrics" : "Show lyrics"}
+                    title={lyricsViewOpen ? "Hide lyrics" : "Show lyrics"}
+                    aria-pressed={lyricsViewOpen}
+                    onClick={() => setShowLyrics((value) => !value)}
+                    className={cn(
+                      "wf-control-button h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
+                      lyricsViewOpen ? "text-emerald-500" : "text-foreground/70",
+                    )}
+                  >
+                    <MicVocal size={22} />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   aria-label="Open queue"
@@ -268,17 +288,29 @@ export default function NowPlayingSheet({
             </div>
 
             <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-5 max-w-md mx-auto w-full">
-              <div className="wf-now-playing-art mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
-                <CoverImage
-                  src={song.imageUrl || "/apple-icon.png"}
-                  alt={song.title}
-                  width={1200}
-                  height={1200}
-                  loading="eager"
-                  className="w-full aspect-square object-cover"
-                  sizes="(max-width: 768px) 100vw, 448px"
+              {lyricsViewOpen ? (
+                // Same square footprint as the art so toggling never reflows
+                // the title/progress/controls below.
+                <LyricsPanel
+                  lyricsState={lyricsState}
+                  currentTime={currentTime}
+                  onSeek={liveStream ? undefined : onSeek}
+                  className="mx-auto aspect-square w-full shadow-2xl shadow-black/30"
                 />
-              </div>
+              ) : (
+                <div className="wf-now-playing-art mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
+                  <CoverImage
+                    src={song.imageUrl || "/apple-icon.png"}
+                    networkSrc={song.networkImageUrl}
+                    alt={song.title}
+                    width={1200}
+                    height={1200}
+                    loading="eager"
+                    className="w-full aspect-square object-cover"
+                    sizes="(max-width: 768px) 100vw, 448px"
+                  />
+                </div>
+              )}
 
               <div className="text-center lg:text-left">
                 <MarqueeText text={song.title} className="text-2xl sm:text-3xl font-bold leading-tight" />
@@ -443,30 +475,6 @@ export default function NowPlayingSheet({
 
             {showLibraryActions ? (
               <div className="mt-6 space-y-4 lg:mt-5">
-                <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium">Lyrics</div>
-                    <button
-                      type="button"
-                      onClick={() => setShowLyrics((value) => !value)}
-                      className="wf-control-button inline-flex items-center gap-2 h-9 px-3 rounded-full border border-black/15 dark:border-white/20 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
-                    >
-                      <FileText size={14} />
-                      {showLyrics ? "Hide lyrics" : "Show lyrics"}
-                    </button>
-                  </div>
-
-                  {showLyrics && (
-                    <div className="rounded-lg bg-black/5 dark:bg-white/5 p-3 whitespace-pre-wrap text-sm max-h-48 overflow-auto">
-                      {lyricsState.status === "idle" && "No lyrics available for this song."}
-                      {lyricsState.status === "loading" && "Loading lyrics..."}
-                      {lyricsState.status === "error" && "Unable to load lyrics."}
-                      {lyricsState.status === "ready" &&
-                        (lyricsState.text || "No lyrics available for this song.")}
-                    </div>
-                  )}
-                </div>
-
                 <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 hidden lg:block">
                   <div className="font-medium mb-3">Credits</div>
                   <div className="space-y-3">
