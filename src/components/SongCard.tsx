@@ -1,13 +1,13 @@
 "use client";
 
-import { memo, useCallback, useMemo, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
-import { Heart, Pause, Play } from "lucide-react";
+import { Check, Heart, ListPlus, Pause, Play } from "lucide-react";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
@@ -40,6 +40,9 @@ const SongCardComponent = function SongCard({
   const setSong = usePlayerStore((state) => state.setSong);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
+  const addToQueue = usePlayerStore((state) => state.addToQueue);
+  const [queued, setQueued] = useState(false);
+  const queuedTimeoutRef = useRef<number | null>(null);
   const offlineRecord = useOfflineStore(useCallback((state) => state.records[song.id], [song.id]));
   const isActive = usePlayerStore(useCallback((state) => state.currentSong?.id === song.id, [song.id]));
   const isActiveAndPlaying = usePlayerStore(
@@ -75,6 +78,26 @@ const SongCardComponent = function SongCard({
     [likePending, liked, onToggleLike, song.id]
   );
 
+  useEffect(() => {
+    return () => {
+      if (queuedTimeoutRef.current != null) window.clearTimeout(queuedTimeoutRef.current);
+    };
+  }, []);
+
+  const handleAddToQueue = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      addToQueue(song);
+      setQueued(true);
+      if (queuedTimeoutRef.current != null) window.clearTimeout(queuedTimeoutRef.current);
+      queuedTimeoutRef.current = window.setTimeout(() => {
+        queuedTimeoutRef.current = null;
+        setQueued(false);
+      }, 1500);
+    },
+    [addToQueue, song],
+  );
+
   if (hideIfUnliked && !liked) return null;
 
   return (
@@ -108,6 +131,21 @@ const SongCardComponent = function SongCard({
         song={song}
         className="wf-control-button absolute left-2 top-2 z-30 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
       />
+
+      <button
+        type="button"
+        aria-label="Add to queue"
+        title="Add to queue"
+        onClick={handleAddToQueue}
+        className={cn(
+          "absolute top-12 right-2 z-30 h-9 w-9 rounded-full grid place-items-center transition bg-black/40 backdrop-blur",
+          "wf-control-button",
+          "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+          queued ? "text-emerald-500" : "text-white/90",
+        )}
+      >
+        {queued ? <Check size={18} /> : <ListPlus size={18} />}
+      </button>
 
       {showLike ? (
         <button

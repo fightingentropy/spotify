@@ -115,10 +115,13 @@ type OfflineState = {
   verifiedDownloads: number;
   missingDownloads: number;
   verificationError: string | null;
+  autoDownloadLiked: boolean;
+  setAutoDownloadLiked: (enabled: boolean) => void;
   hydrate: () => Promise<void>;
   queueDownloads: (songs: PlayerSong[], scope: DownloadScope) => Promise<void>;
   removeDownload: (songId: string) => Promise<void>;
   removeScope: (scope: DownloadScope) => Promise<void>;
+  unpinScope: (songId: string, scope: DownloadScope) => Promise<void>;
   retryFailedDownloads: () => Promise<void>;
   clearDownloads: () => Promise<void>;
   clearPlaybackCache: () => Promise<void>;
@@ -142,6 +145,7 @@ export const OFFLINE_MEDIA_CACHE = "spotify-media-v1";
 export const OFFLINE_PLAYBACK_CACHE = "spotify-playback-v1";
 const OFFLINE_ACCOUNT_SCOPE_STORAGE_KEY = "spotify_offline_account_scope";
 const OFFLINE_DEVICE_ID_STORAGE_KEY = "spotify_offline_device_id";
+const AUTO_DOWNLOAD_LIKED_STORAGE_KEY = "spotify_auto_download_liked";
 const OFFLINE_SYNC_EVENT = "spotify-offline-sync";
 const PLAYBACK_WARM_BYTES = 512 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
@@ -230,6 +234,22 @@ function readStoredOfflineDeviceId(): string {
 function getOfflineDeviceId(): string {
   if (!currentOfflineDeviceId) currentOfflineDeviceId = readStoredOfflineDeviceId();
   return currentOfflineDeviceId;
+}
+
+function readStoredAutoDownloadLiked(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(AUTO_DOWNLOAD_LIKED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredAutoDownloadLiked(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(AUTO_DOWNLOAD_LIKED_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {}
 }
 
 export function getOfflineAccountScope(): string {
@@ -1905,6 +1925,11 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   verifiedDownloads: 0,
   missingDownloads: 0,
   verificationError: null,
+  autoDownloadLiked: readStoredAutoDownloadLiked(),
+  setAutoDownloadLiked: (enabled) => {
+    writeStoredAutoDownloadLiked(enabled);
+    set({ autoDownloadLiked: enabled });
+  },
   hydrate: async () => {
     if (hydrateStarted) return;
     hydrateStarted = true;
@@ -1993,6 +2018,18 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
       } else {
         await persistRecord({ ...record, pinnedBy, updatedAt: now() });
       }
+    }
+    await get().refreshStorage();
+  },
+  unpinScope: async (songId, scope) => {
+    const record = await idbGet<OfflineDownloadRecord>(DOWNLOAD_STORE, downloadRecordKey(songId)).catch(() => undefined);
+    if (!isOfflineRecordForAccount(record)) return;
+    if (!record.pinnedBy.includes(scope)) return;
+    const pinnedBy = record.pinnedBy.filter((item) => item !== scope);
+    if (pinnedBy.length === 0) {
+      await get().removeDownload(songId);
+    } else {
+      await persistRecord({ ...record, pinnedBy, updatedAt: now() });
     }
     await get().refreshStorage();
   },

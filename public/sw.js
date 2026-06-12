@@ -1,4 +1,4 @@
-const CACHE_VERSION = "spotify-v50";
+const CACHE_VERSION = "spotify-v51";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
@@ -37,6 +37,7 @@ const API_CACHE_PATHS = [
   "/api/likes",
   "/api/music/source",
   "/api/songs",
+  "/api/stats/home",
 ];
 
 function isCacheableResponse(response) {

@@ -10,6 +10,7 @@ import {
   type DownloadScope,
   useOfflineStore,
 } from "@/client/offline";
+import { impactLight } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
 
@@ -137,6 +138,7 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
   async function handleClick(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     if (actionPending) return;
+    void impactLight();
     if (status === "downloaded") {
       setConfirmOpen(true);
       return;
@@ -377,6 +379,7 @@ export function OfflineBulkDownloadButton({
 
   async function handleClick() {
     if (actionPending || cacheableSongs.length === 0) return;
+    void impactLight();
     setActionError(null);
     if (downloaded) {
       setConfirmOpen(true);

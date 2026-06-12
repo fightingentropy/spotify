@@ -1,9 +1,9 @@
 "use client";
 
-import { memo, useCallback, useMemo, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { CoverImage } from "@/components/CoverImage";
 import { warmPlaybackSong } from "@/client/playback-warm";
-import { Heart, Pause, Play } from "lucide-react";
+import { Check, Heart, ListPlus, Pause, Play } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,9 @@ const SongListItemComponent = function SongListItem({
   const setSong = usePlayerStore((state) => state.setSong);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
+  const addToQueue = usePlayerStore((state) => state.addToQueue);
+  const [queued, setQueued] = useState(false);
+  const queuedTimeoutRef = useRef<number | null>(null);
   const offlineRecord = useOfflineStore(useCallback((state) => state.records[song.id], [song.id]));
   const isActive = usePlayerStore(useCallback((state) => state.currentSong?.id === song.id, [song.id]));
   const isActiveAndPlaying = usePlayerStore(
@@ -72,6 +75,26 @@ const SongListItemComponent = function SongListItem({
     [likePending, liked, onToggleLike, song.id],
   );
 
+  useEffect(() => {
+    return () => {
+      if (queuedTimeoutRef.current != null) window.clearTimeout(queuedTimeoutRef.current);
+    };
+  }, []);
+
+  const handleAddToQueue = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      addToQueue(song);
+      setQueued(true);
+      if (queuedTimeoutRef.current != null) window.clearTimeout(queuedTimeoutRef.current);
+      queuedTimeoutRef.current = window.setTimeout(() => {
+        queuedTimeoutRef.current = null;
+        setQueued(false);
+      }, 1500);
+    },
+    [addToQueue, song],
+  );
+
   return (
     <div
       onPointerEnter={() => warmPlaybackSong(resolvedSong, true)}
@@ -104,6 +127,21 @@ const SongListItemComponent = function SongListItem({
           <span className="block truncate text-sm font-medium">{resolvedSong.title}</span>
           <span className="block truncate text-xs opacity-70">{resolvedSong.artist}</span>
         </span>
+      </button>
+
+      <button
+        type="button"
+        aria-label="Add to queue"
+        title="Add to queue"
+        onClick={handleAddToQueue}
+        className={cn(
+          "h-9 w-9 rounded-full grid place-items-center transition",
+          "wf-control-button",
+          "hover:bg-black/10 hover:dark:bg-white/10",
+          queued ? "text-emerald-500" : "text-foreground/70",
+        )}
+      >
+        {queued ? <Check size={18} /> : <ListPlus size={18} />}
       </button>
 
       <OfflineSongDownloadButton song={song} className="wf-control-button text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />

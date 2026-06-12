@@ -7,6 +7,8 @@ import {
   ChevronDown,
   FileText,
   Heart,
+  ListMusic,
+  Moon,
   Pause,
   Play,
   Podcast,
@@ -16,19 +18,26 @@ import {
   SkipForward,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { usePlayerStore } from "@/store/player";
+import { formatPlaybackRate, nextPlaybackRate, sleepTimerRemainingMinutes, usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
+import { impactLight } from "@/lib/haptics";
 import { CoverImage } from "@/components/CoverImage";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
+const SLEEP_TIMER_MINUTE_OPTIONS = [5, 15, 30, 45, 60];
+
 type NowPlayingSheetProps = {
   open: boolean;
+  // Suspends the Escape-to-close handler while a sheet stacked on top (the
+  // queue sheet) is open, so one press closes only the topmost sheet.
+  escapeDisabled?: boolean;
   onClose: () => void;
+  onOpenQueue: () => void;
   song: PlayerSong;
   isPlaying: boolean;
   currentTime: number;
@@ -38,7 +47,9 @@ type NowPlayingSheetProps = {
 
 export default function NowPlayingSheet({
   open,
+  escapeDisabled = false,
   onClose,
+  onOpenQueue,
   song,
   isPlaying,
   currentTime,
@@ -54,6 +65,13 @@ export default function NowPlayingSheet({
   const repeatMode = usePlayerStore((s) => s.repeatMode);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
   const cycleRepeatMode = usePlayerStore((s) => s.cycleRepeatMode);
+  const sleepTimerEndsAt = usePlayerStore((s) => s.sleepTimerEndsAt);
+  const sleepAtEndOfTrack = usePlayerStore((s) => s.sleepAtEndOfTrack);
+  const playbackRate = usePlayerStore((s) => s.playbackRate);
+  const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate);
+  const startSleepTimer = usePlayerStore((s) => s.startSleepTimer);
+  const setSleepAtEndOfTrack = usePlayerStore((s) => s.setSleepAtEndOfTrack);
+  const cancelSleepTimer = usePlayerStore((s) => s.cancelSleepTimer);
 
   const toggleLike = useLikesStore((state) => state.toggleLike);
   const likedLookup = useLikesStore((state) => state.likedSongIds);
@@ -68,6 +86,18 @@ export default function NowPlayingSheet({
   const podcastDescription = song.description?.trim() ?? "";
 
   const [showLyrics, setShowLyrics] = useState(false);
+  const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
+  // UI nicety only (refreshes the remaining-minutes label); expiry enforcement
+  // lives in PlayerBar's timeupdate handler and 8s sync interval.
+  const [, setSleepTimerTick] = useState(0);
+  const sleepTimerActive = sleepTimerEndsAt != null || sleepAtEndOfTrack;
+  const sleepTimerRemaining = sleepTimerEndsAt != null ? sleepTimerRemainingMinutes(sleepTimerEndsAt) : null;
+  const sleepTimerTitle =
+    sleepTimerRemaining != null
+      ? `Sleep timer: ${sleepTimerRemaining} min left`
+      : sleepAtEndOfTrack
+        ? "Sleep timer: end of track"
+        : "Sleep timer";
   const touchStartYRef = useRef<number | null>(null);
   const swipeDismissAllowedRef = useRef(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -84,7 +114,7 @@ export default function NowPlayingSheet({
   const lyricsState = useLyrics(lyricsSong.id, lyricsSong.lyricsUrl, open && showLyrics);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || escapeDisabled) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -96,12 +126,21 @@ export default function NowPlayingSheet({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [onClose, open]);
+  }, [escapeDisabled, onClose, open]);
+
+  useEffect(() => {
+    if (!open || sleepTimerEndsAt == null) return;
+    const intervalId = window.setInterval(() => setSleepTimerTick((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(intervalId);
+  }, [open, sleepTimerEndsAt]);
 
   useEffect(() => {
     if (!open) return;
     document.body.classList.add("wf-now-playing-open");
     return () => {
+      // The queue sheet may still be open on top; keep the body scroll lock
+      // until every sheet has closed.
+      if (document.querySelector('.wf-now-playing-panel[data-open="true"]')) return;
       document.body.classList.remove("wf-now-playing-open");
     };
   }, [open]);
@@ -115,6 +154,7 @@ export default function NowPlayingSheet({
   }
 
   function handleTogglePlayback() {
+    void impactLight();
     if (isPlaying) {
       pause();
       return;
@@ -214,6 +254,15 @@ export default function NowPlayingSheet({
                     </button>
                   </>
                 ) : null}
+                <button
+                  type="button"
+                  aria-label="Open queue"
+                  title="Open queue"
+                  onClick={onOpenQueue}
+                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center text-foreground/70 active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
+                >
+                  <ListMusic size={22} />
+                </button>
               </div>
             </div>
 
@@ -322,6 +371,73 @@ export default function NowPlayingSheet({
                   <Repeat size={20} />
                 </button>
               </div>
+
+              <div className="flex flex-col items-center gap-3">
+                <button
+                  type="button"
+                  aria-label={sleepTimerTitle}
+                  aria-expanded={sleepMenuOpen}
+                  title={sleepTimerTitle}
+                  onClick={() => setSleepMenuOpen((value) => !value)}
+                  className={cn(
+                    "wf-control-button inline-flex h-9 items-center gap-2 rounded-full border px-3 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
+                    sleepTimerActive
+                      ? "border-[#1ed760]/40 text-[#1ed760]"
+                      : "border-black/15 text-foreground/70 dark:border-white/20",
+                  )}
+                >
+                  <Moon size={16} />
+                  {sleepTimerRemaining != null
+                    ? `${sleepTimerRemaining} min left`
+                    : sleepAtEndOfTrack
+                      ? "End of track"
+                      : "Sleep timer"}
+                </button>
+                {sleepMenuOpen ? (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {SLEEP_TIMER_MINUTE_OPTIONS.map((minutes) => (
+                      <button
+                        key={minutes}
+                        type="button"
+                        onClick={() => {
+                          startSleepTimer(minutes);
+                          setSleepMenuOpen(false);
+                        }}
+                        className="wf-control-button h-9 rounded-full border border-black/15 px-3 text-sm active:bg-black/5 dark:border-white/20 dark:active:bg-white/5 touch-manipulation"
+                      >
+                        {minutes} min
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSleepAtEndOfTrack();
+                        setSleepMenuOpen(false);
+                      }}
+                      className={cn(
+                        "wf-control-button h-9 rounded-full border px-3 text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
+                        sleepAtEndOfTrack
+                          ? "border-[#1ed760]/40 text-[#1ed760]"
+                          : "border-black/15 dark:border-white/20",
+                      )}
+                    >
+                      End of track
+                    </button>
+                    {sleepTimerActive ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          cancelSleepTimer();
+                          setSleepMenuOpen(false);
+                        }}
+                        className="wf-control-button h-9 rounded-full border border-black/15 px-3 text-sm active:bg-black/5 dark:border-white/20 dark:active:bg-white/5 touch-manipulation"
+                      >
+                        Turn off
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             {showLibraryActions ? (
@@ -371,10 +487,19 @@ export default function NowPlayingSheet({
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-fuchsia-200">
                     <Podcast size={18} />
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="font-medium">Podcast Episode</div>
                     <div className="text-sm opacity-70">{song.artist}</div>
                   </div>
+                  <button
+                    type="button"
+                    aria-label={`Playback speed: ${formatPlaybackRate(playbackRate)}`}
+                    title="Playback speed"
+                    onClick={() => setPlaybackRate(nextPlaybackRate(playbackRate))}
+                    className="wf-control-button h-9 shrink-0 rounded-full border border-black/15 px-3 text-sm font-semibold tabular-nums active:bg-black/5 dark:border-white/20 dark:active:bg-white/5 touch-manipulation"
+                  >
+                    {formatPlaybackRate(playbackRate)}
+                  </button>
                 </div>
                 {podcastDescription ? (
                   <p className="mt-3 line-clamp-4 text-sm leading-6 opacity-75">{podcastDescription}</p>

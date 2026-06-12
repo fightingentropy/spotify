@@ -117,6 +117,16 @@ CREATE TABLE IF NOT EXISTS "RateLimit" (
   "resetAt" INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS "PlayEvent" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "userId" TEXT NOT NULL,
+  "songId" TEXT NOT NULL,
+  "songJson" TEXT NOT NULL,
+  "durationMs" INTEGER,
+  "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS "idx_song_title" ON "Song" ("title");
 CREATE INDEX IF NOT EXISTS "idx_song_createdAt" ON "Song" ("createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_song_userId_createdAt" ON "Song" ("userId", "createdAt" DESC);
@@ -127,6 +137,8 @@ CREATE INDEX IF NOT EXISTS "idx_offlinedownload_userId_updatedAt" ON "OfflineDow
 CREATE INDEX IF NOT EXISTS "idx_playbackstate_userId_updatedAt" ON "PlaybackState" ("userId", "updatedAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");
 CREATE INDEX IF NOT EXISTS "idx_ratelimit_resetAt" ON "RateLimit" ("resetAt");
+CREATE INDEX IF NOT EXISTS "idx_playevent_userId_createdAt" ON "PlayEvent" ("userId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "idx_playevent_userId_songId" ON "PlayEvent" ("userId", "songId");
 `;
 
 export const D1_SCHEMA_STATEMENTS = D1_SCHEMA_SQL

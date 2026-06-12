@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Activity, CheckCircle2, Database, HardDrive, RefreshCw, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
 import { readOfflineDiagnostics, type OfflineDiagnostics } from "@/client/offline-diagnostics";
 import { formatBytes, readDownloadedBytesTotal, useOfflineStore } from "@/client/offline";
+import type { LikedPayload } from "@/client/api";
 
 export default function OfflineSettings() {
   const hydrate = useOfflineStore((state) => state.hydrate);
@@ -26,6 +27,9 @@ export default function OfflineSettings() {
   const verifyDownloads = useOfflineStore((state) => state.verifyDownloads);
   const syncMutations = useOfflineStore((state) => state.syncMutations);
   const refreshStorage = useOfflineStore((state) => state.refreshStorage);
+  const autoDownloadLiked = useOfflineStore((state) => state.autoDownloadLiked);
+  const setAutoDownloadLiked = useOfflineStore((state) => state.setAutoDownloadLiked);
+  const queueDownloads = useOfflineStore((state) => state.queueDownloads);
   const [diagnostics, setDiagnostics] = useState<OfflineDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [downloadedBytes, setDownloadedBytes] = useState<number | null>(null);
@@ -99,6 +103,26 @@ export default function OfflineSettings() {
   const handleClearDownloads = () => {
     if (!window.confirm("Clear all offline downloads from this device?")) return;
     void clearDownloads();
+  };
+  const handleAutoDownloadLikedChange = async (enabled: boolean) => {
+    setAutoDownloadLiked(enabled);
+    if (!enabled) return;
+    // Backfill existing likes; if this fetch fails (offline), the like hook
+    // still pins future likes and the next enable retries the backfill.
+    try {
+      const response = await fetch("/api/liked", {
+        credentials: "include",
+        cache: "no-store",
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as LikedPayload;
+      // The user may have toggled the setting back off while the fetch was
+      // in flight; don't queue a stale backfill in that case.
+      if (!useOfflineStore.getState().autoDownloadLiked) return;
+      const likedSongs = Array.isArray(payload.songs) ? payload.songs : [];
+      if (likedSongs.length > 0) await queueDownloads(likedSongs, "liked");
+    } catch {}
   };
   const shellCaches = diagnostics?.caches.filter((cache) => /-(shell|static)$|app-assets/.test(cache.name)) ?? [];
   const runtimeCaches = diagnostics?.caches.filter((cache) => cache.name.endsWith("-runtime")) ?? [];
@@ -233,6 +257,16 @@ export default function OfflineSettings() {
           Clear downloads
         </button>
       </div>
+
+      <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-md bg-black/20 p-3 text-sm">
+        <input
+          type="checkbox"
+          checked={autoDownloadLiked}
+          onChange={(event) => void handleAutoDownloadLikedChange(event.target.checked)}
+          className="h-4 w-4 accent-emerald-500"
+        />
+        <span className="font-medium text-white/[0.86]">Automatically download liked songs</span>
+      </label>
 
       <div className="mt-5 border-t border-white/[0.1] pt-4">
         <div className="mb-3 flex items-center justify-between gap-3">

@@ -2,7 +2,8 @@
 
 import { create } from "zustand";
 import { patchLikeApiCache } from "@/client/api";
-import { getOfflineAccountScope, queueOfflineMutation } from "@/client/offline";
+import { getOfflineAccountScope, queueOfflineMutation, useOfflineStore } from "@/client/offline";
+import { impactLight } from "@/lib/haptics";
 import type { PlayerSong } from "@/types/player";
 
 type LikeToggleResult = {
@@ -31,6 +32,17 @@ function removeKey(source: Record<string, true>, key: string): Record<string, tr
 
 function isLocalSongId(songId: string): boolean {
   return songId.startsWith("browser-local:") || songId.startsWith("picked-file:");
+}
+
+// Fire-and-forget: pin/unpin must never block or fail the like toggle itself.
+function syncAutoDownloadLiked(songId: string, nextLiked: boolean, song?: PlayerSong): void {
+  const offline = useOfflineStore.getState();
+  if (!offline.autoDownloadLiked) return;
+  if (nextLiked) {
+    if (song) void offline.queueDownloads([song], "liked");
+  } else {
+    void offline.unpinScope(songId, "liked");
+  }
 }
 
 function readLocalLikedSongIds(): Record<string, true> {
@@ -121,6 +133,8 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: true, status: 200 };
     }
 
+    void impactLight();
+
     if (isLocalSongId(songId)) {
       const current = get().likedSongIds;
       const likedSongIds: Record<string, true> = nextLiked
@@ -171,6 +185,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         hydrated: true,
       }));
       patchLikeApiCache(songId, nextLiked, song, getOfflineAccountScope());
+      syncAutoDownloadLiked(songId, nextLiked, song);
 
       return { ok: true, status: response.status };
     } catch (error) {
@@ -184,6 +199,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           hydrated: true,
         }));
         patchLikeApiCache(songId, nextLiked, song, getOfflineAccountScope());
+        syncAutoDownloadLiked(songId, nextLiked, song);
         return { ok: true, status: 202 };
       } catch {}
 

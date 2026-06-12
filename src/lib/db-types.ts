@@ -69,6 +69,15 @@ export type OfflineDownloadRow = {
   updatedAt: Date;
 };
 
+export type PlayEventRow = {
+  id: string;
+  userId: string;
+  songId: string;
+  songJson: string;
+  durationMs: number | null;
+  createdAt: Date;
+};
+
 export type PlaybackStateRow = {
   id: string;
   userId: string;

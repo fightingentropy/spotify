@@ -5,6 +5,7 @@ import { basename, extname, join } from "node:path";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
 import type { OfflineDownloadRow, PlaybackStateRow, PlaylistRow, SongRow, UserRow } from "@/lib/db-types";
 import { PLAYBACK_STATE_VERSION, type PlaybackStateSnapshot } from "@/lib/playback-state";
+import { OFFLINE_PLAYBACK_SEARCH_PARAM } from "@/lib/player-song";
 import {
   PODCAST_SHOWS,
   extractPodcastFeedMediaUrls,
@@ -464,6 +465,14 @@ function parsePlaybackStateJson(value: string): PlaybackStateSnapshot | null {
 
 function playbackStateFromRow(row: PlaybackStateRow | undefined): PlaybackStateSnapshot | null {
   return row ? parsePlaybackStateJson(row.stateJson) : null;
+}
+
+function parsePlayEventSongJson(songJson: string): PlayerSong | null {
+  try {
+    return coercePlayerSongPayload(JSON.parse(songJson));
+  } catch {
+    return null;
+  }
 }
 
 function coerceOfflineDownloadScopes(value: unknown, songId: string): string[] {
@@ -2475,10 +2484,8 @@ function macMiniProxyPathname(c: Context<AppEnv>): string {
   return new URL(c.req.url).pathname;
 }
 
-function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
-  if (!canUseMacMiniProxy(c.env)) return false;
-  const pathname = macMiniProxyPathname(c);
-  const method = c.req.method.toUpperCase();
+export function shouldProxyMusicPathnameToMacMini(pathname: string, method: string, contentType = ""): boolean {
+  const normalizedMethod = method.toUpperCase();
 
   if (pathname.startsWith("/api/songs/spotify")) return false;
   if (pathname.startsWith("/api/files/local/")) return true;
@@ -2488,12 +2495,16 @@ function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
     return true;
   }
   if (pathname === "/api/songs") {
-    if (method === "GET") return true;
-    if (method !== "POST") return false;
-    const contentType = c.req.header("content-type") || "";
+    if (normalizedMethod === "GET") return true;
+    if (normalizedMethod !== "POST") return false;
     return !contentType.toLowerCase().startsWith("application/json");
   }
   return false;
+}
+
+function shouldProxyMusicRequest(c: Context<AppEnv>): boolean {
+  if (!canUseMacMiniProxy(c.env)) return false;
+  return shouldProxyMusicPathnameToMacMini(macMiniProxyPathname(c), c.req.method, c.req.header("content-type") || "");
 }
 
 const MAC_MINI_USER_CONTEXT_PATHS = new Set([
@@ -3148,6 +3159,85 @@ app.put("/api/playback-state", async (c) => {
     { state },
     { headers: { "cache-control": "no-store" } },
   );
+});
+
+function isDeviceLocalMediaUrl(value: string): boolean {
+  if (/^(blob:|capacitor:|file:)/i.test(value)) return true;
+  if (value.includes("/_capacitor_file_/")) return true;
+  try {
+    return new URL(value, "http://localhost").searchParams.has(OFFLINE_PLAYBACK_SEARCH_PARAM);
+  } catch {
+    return true;
+  }
+}
+
+export function playEventSongHasDeviceLocalUrl(song: Pick<PlayerSong, "audioUrl" | "imageUrl" | "lyricsUrl">): boolean {
+  return [song.audioUrl, song.imageUrl, song.lyricsUrl].some((value) => !!value && isDeviceLocalMediaUrl(value));
+}
+
+app.post("/api/play-events", async (c) => {
+  const user = requireUser(c.get("user"));
+  // The local-dev pseudo-user has no User row, so the FK insert would fail.
+  if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) return c.json({ ok: true }, 201);
+  const payload = await readJson<{ song?: unknown; durationMs?: unknown }>(c.req.raw);
+  const song = coercePlayerSongPayload(payload?.song);
+  if (!song) return jsonError("Invalid song", 400);
+  if (playEventSongHasDeviceLocalUrl(song)) return jsonError("Song references a device-local URL", 400);
+  // Songs are stored as JSON snapshots (no FK to Song) because production song
+  // ids live on the mac mini and do not exist in D1.
+  const songJson = JSON.stringify(song);
+  if (songJson.length > 512_000) return jsonError("Song payload is too large", 413);
+  const durationMs = toNumberValue(payload?.durationMs);
+
+  const db = c.get("db");
+  // Opportunistically prune old events so the table cannot grow unbounded.
+  await db`
+    DELETE FROM "PlayEvent"
+    WHERE "userId" = ${user.id} AND "createdAt" < datetime('now', '-180 days')
+  `;
+  await db`
+    INSERT INTO "PlayEvent" ("id", "userId", "songId", "songJson", "durationMs")
+    VALUES (${crypto.randomUUID()}, ${user.id}, ${song.id}, ${songJson}, ${durationMs})
+  `;
+  return c.json({ ok: true }, 201);
+});
+
+app.get("/api/stats/home", async (c) => {
+  const user = requireUser(c.get("user"));
+  if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+    return jsonCached(c, { recentlyPlayed: [], mostPlayed: [] });
+  }
+
+  const db = c.get("db");
+  // MAX("createdAt") in the SELECT makes SQLite pick songJson from the newest
+  // row of each group (bare-column-with-MAX); do not simplify it away.
+  const recentRows = await db<{ songId: string; songJson: string; lastPlayedAt: string }>`
+    SELECT "songId", "songJson", MAX("createdAt") AS "lastPlayedAt"
+    FROM "PlayEvent"
+    WHERE "userId" = ${user.id}
+    GROUP BY "songId"
+    ORDER BY "lastPlayedAt" DESC
+    LIMIT 20
+  `;
+  const topRows = await db<{ songId: string; songJson: string; playCount: number; lastPlayedAt: string }>`
+    SELECT "songId", "songJson", COUNT(*) AS "playCount", MAX("createdAt") AS "lastPlayedAt"
+    FROM "PlayEvent"
+    WHERE "userId" = ${user.id}
+    GROUP BY "songId"
+    ORDER BY "playCount" DESC, "lastPlayedAt" DESC
+    LIMIT 20
+  `;
+
+  const recentlyPlayed = recentRows
+    .map((row) => parsePlayEventSongJson(row.songJson))
+    .filter((song): song is PlayerSong => song !== null);
+  const mostPlayed = topRows
+    .map((row) => {
+      const song = parsePlayEventSongJson(row.songJson);
+      return song ? { song, playCount: Number(row.playCount) || 0 } : null;
+    })
+    .filter((item): item is { song: PlayerSong; playCount: number } => item !== null);
+  return jsonCached(c, { recentlyPlayed, mostPlayed });
 });
 
 app.get("/api/liked", async (c) => {

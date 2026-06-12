@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import { Library, Search } from "lucide-react";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import { cn } from "@/lib/utils";
+import { selectionTap } from "@/lib/haptics";
 
 const tabs = [
   { href: "/", label: "Home", match: (path: string) => path === "/", home: true as const },
@@ -43,6 +44,9 @@ export default function MobileNav() {
             <Link
               key={tab.href}
               to={tab.href}
+              onClick={() => {
+                void selectionTap();
+              }}
               className={cn(
                 "wf-control-button flex flex-col items-center justify-center gap-0.5 min-h-[44px] touch-manipulation transition-colors",
                 active ? "text-[#1ed760]" : "text-white/[0.62]",

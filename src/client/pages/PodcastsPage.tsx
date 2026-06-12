@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
+  CheckCircle2,
   Clock3,
   ExternalLink,
   Pause,
@@ -21,6 +22,11 @@ import {
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player";
+import {
+  isEpisodeFinished,
+  readAllEpisodeProgress,
+  type PodcastEpisodeProgress,
+} from "@/client/podcast-progress";
 
 type FeedStatus = "idle" | "loading" | "ready" | "error";
 
@@ -38,6 +44,11 @@ function formatEpisodeDate(value: string | undefined): string {
 function episodeDescription(value: string): string {
   if (!value) return "Episode details unavailable.";
   return value.length > 260 ? `${value.slice(0, 257).trim()}...` : value;
+}
+
+function remainingLabel(progress: PodcastEpisodeProgress): string {
+  const remainingMinutes = Math.max(1, Math.ceil((progress.duration - progress.time) / 60));
+  return `${remainingMinutes}m left`;
 }
 
 function EpisodeSkeletonRows() {
@@ -74,6 +85,13 @@ export default function PodcastsPage() {
   const currentSong = usePlayerStore((state) => state.currentSong);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const currentPodcastEpisodeId = currentSong?.source === "podcast" ? currentSong.id : null;
+
+  // Re-read on play/pause/episode change so resume positions written by the
+  // player stay roughly current without subscribing to every timeupdate.
+  const progressByEpisodeId = useMemo(
+    () => readAllEpisodeProgress(),
+    [episodes, currentPodcastEpisodeId, isPlaying],
+  );
 
   const loadFeed = useCallback(
     async (signal?: AbortSignal) => {
@@ -266,6 +284,9 @@ export default function PodcastsPage() {
                 {episodes.map((episode, index) => {
                   const active = currentPodcastEpisodeId === episode.id;
                   const playing = active && isPlaying;
+                  const progress = progressByEpisodeId[episode.id];
+                  const finished = progress ? isEpisodeFinished(progress) : false;
+                  const inProgress = !finished && progress != null && progress.duration > 0 && progress.time > 0;
                   return (
                     <article
                       key={episode.id}
@@ -317,6 +338,24 @@ export default function PodcastsPage() {
                             <span className="inline-flex items-center gap-1">
                               <Clock3 size={13} />
                               {formatTime(episode.duration)}
+                            </span>
+                          ) : null}
+                          {finished ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-400">
+                              <CheckCircle2 size={13} />
+                              Played
+                            </span>
+                          ) : inProgress && progress ? (
+                            <span className="inline-flex items-center gap-2">
+                              <span className="h-1 w-16 overflow-hidden rounded-full bg-white/[0.12]">
+                                <span
+                                  className="block h-full rounded-full bg-emerald-500"
+                                  style={{
+                                    width: `${Math.min(100, Math.max(0, (progress.time / progress.duration) * 100))}%`,
+                                  }}
+                                />
+                              </span>
+                              {remainingLabel(progress)}
                             </span>
                           ) : null}
                         </div>

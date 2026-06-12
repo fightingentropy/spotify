@@ -15,6 +15,7 @@ type UseMediaSessionOptions = {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
+  playbackRate: number;
   onPlay: () => void;
   onPause: () => void;
   onPrevious: () => void;
@@ -93,7 +94,7 @@ function applyPlaybackState(isPlaying: boolean): void {
   navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
 }
 
-function applyPositionState(currentTime: number, duration: number): void {
+function applyPositionState(currentTime: number, duration: number, playbackRate: number): void {
   if (!("mediaSession" in navigator)) return;
   if (duration <= 0) {
     clearPositionState();
@@ -102,7 +103,8 @@ function applyPositionState(currentTime: number, duration: number): void {
   try {
     navigator.mediaSession.setPositionState({
       duration,
-      playbackRate: 1,
+      // The real effective rate, or the lock-screen scrubber drifts at 1.5x.
+      playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
       position: Math.min(Math.max(0, currentTime), duration),
     });
   } catch {}
@@ -121,6 +123,7 @@ export function useMediaSession({
   isPlaying,
   currentTime,
   duration,
+  playbackRate,
   onPlay,
   onPause,
   onPrevious,
@@ -134,8 +137,10 @@ export function useMediaSession({
   const isPlayingRef = useRef(isPlaying);
   const currentTimeRef = useRef(currentTime);
   const durationRef = useRef(duration);
+  const playbackRateRef = useRef(playbackRate);
   const lastPositionPublishRef = useRef(0);
   const lastPublishedDurationRef = useRef(0);
+  const lastPublishedPlaybackRateRef = useRef(1);
 
   useEffect(() => {
     handlersRef.current = { onPlay, onPause, onPrevious, onNext, onSeek };
@@ -157,6 +162,10 @@ export function useMediaSession({
     durationRef.current = duration;
   }, [duration]);
 
+  useEffect(() => {
+    playbackRateRef.current = playbackRate;
+  }, [playbackRate]);
+
   const syncMediaSession = useCallback(() => {
     const currentSong = songRef.current;
     if (!currentSong) {
@@ -169,7 +178,7 @@ export function useMediaSession({
 
     applyMetadata(currentSong);
     applyPlaybackState(isPlayingRef.current);
-    applyPositionState(currentTimeRef.current, durationRef.current);
+    applyPositionState(currentTimeRef.current, durationRef.current, playbackRateRef.current);
     registerActionHandlers(handlersRef.current);
   }, []);
 
@@ -192,15 +201,18 @@ export function useMediaSession({
   useEffect(() => {
     if (!("mediaSession" in navigator) || !song) return;
     // The OS interpolates position on its own, so there's no need to push every
-    // 4Hz currentTime tick. Publish immediately when the duration changes (so the
-    // lock-screen scrubber rescales for VBR/HLS), otherwise throttle to ~1Hz.
+    // 4Hz currentTime tick. Publish immediately when the duration or rate
+    // changes (so the lock-screen scrubber rescales for VBR/HLS and doesn't
+    // drift at non-1x speed), otherwise throttle to ~1Hz.
     const durationChanged = duration !== lastPublishedDurationRef.current;
+    const rateChanged = playbackRate !== lastPublishedPlaybackRateRef.current;
     const elapsed = Date.now() - lastPositionPublishRef.current;
-    if (!durationChanged && elapsed < 1000) return;
+    if (!durationChanged && !rateChanged && elapsed < 1000) return;
     lastPositionPublishRef.current = Date.now();
     lastPublishedDurationRef.current = duration;
-    applyPositionState(currentTime, duration);
-  }, [currentTime, duration, song]);
+    lastPublishedPlaybackRateRef.current = playbackRate;
+    applyPositionState(currentTime, duration, playbackRate);
+  }, [currentTime, duration, playbackRate, song]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;

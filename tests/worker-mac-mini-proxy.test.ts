@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   shouldForwardMacMiniUserForPathname,
+  shouldProxyMusicPathnameToMacMini,
   spotiflacStatusKeyForEndpoint,
   withSecurityHeaders,
 } from "../src/worker/index";
@@ -17,6 +18,28 @@ describe("Mac mini proxy user forwarding", () => {
   test("does not steal Spotify import routes from the Worker", () => {
     expect(shouldForwardMacMiniUserForPathname("/api/songs/spotify")).toBe(false);
     expect(shouldForwardMacMiniUserForPathname("/api/songs/spotify/batch")).toBe(false);
+  });
+
+  test("does not forward listening-history routes", () => {
+    expect(shouldForwardMacMiniUserForPathname("/api/play-events")).toBe(false);
+    expect(shouldForwardMacMiniUserForPathname("/api/stats/home")).toBe(false);
+  });
+});
+
+describe("Mac mini proxy diversion", () => {
+  test("keeps proxying local library routes", () => {
+    expect(shouldProxyMusicPathnameToMacMini("/api/home", "GET")).toBe(true);
+    expect(shouldProxyMusicPathnameToMacMini("/api/music/source", "GET")).toBe(true);
+    expect(shouldProxyMusicPathnameToMacMini("/api/songs", "GET")).toBe(true);
+    expect(shouldProxyMusicPathnameToMacMini("/api/songs/local-server%3Aabc123", "GET")).toBe(true);
+    expect(shouldProxyMusicPathnameToMacMini("/api/songs", "POST", "multipart/form-data")).toBe(true);
+    expect(shouldProxyMusicPathnameToMacMini("/api/songs", "POST", "application/json")).toBe(false);
+    expect(shouldProxyMusicPathnameToMacMini("/api/songs/spotify/batch", "POST", "application/json")).toBe(false);
+  });
+
+  test("listening-history routes stay on the Worker (PlayEvent lives in D1)", () => {
+    expect(shouldProxyMusicPathnameToMacMini("/api/play-events", "POST", "application/json")).toBe(false);
+    expect(shouldProxyMusicPathnameToMacMini("/api/stats/home", "GET")).toBe(false);
   });
 });
 

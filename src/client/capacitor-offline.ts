@@ -122,6 +122,74 @@ export function nativeOfflineAssetWebUrl(asset: NativeOfflineAsset | null | unde
   }
 }
 
+export function isCapacitorFileUrl(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.includes("/_capacitor_file_/");
+}
+
+const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
+  flac: "audio/flac",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+};
+const DEFAULT_OFFLINE_AUDIO_MIME = "audio/flac";
+
+function offlineAudioMime(url: string, contentType?: string): string {
+  const stored = (contentType ?? "").trim().toLowerCase();
+  if (stored && stored !== "application/octet-stream") return stored;
+  const match = url.match(/\.([a-z0-9]{2,5})(?:[?#]|$)/i);
+  const extension = match ? match[1].toLowerCase() : "";
+  return AUDIO_MIME_BY_EXTENSION[extension] ?? DEFAULT_OFFLINE_AUDIO_MIME;
+}
+
+// WKWebView's scheme handler answers non-Range requests without headers, so it
+// marks _capacitor_file_ media non-byte-range-accessible and silently drops
+// seeks. Materializing the file as a typed Blob (blob: URLs are inherently
+// seekable in WebKit) is what makes native offline seeking work at all.
+export async function fetchNativeOfflineAudioBlob(url: string, contentType?: string): Promise<Blob> {
+  const response = await fetch(url);
+  // iOS answers non-Range media requests with a bare URLResponse, which WebKit
+  // surfaces as status 0 — that's a successful read, not a failure. (Don't force
+  // the Range path instead: it reads the whole tail synchronously on the iOS
+  // main thread, freezing the UI for large FLACs.)
+  if (!response.ok && response.status !== 0) {
+    throw new Error(`Native offline audio read failed (${response.status})`);
+  }
+  const blob = await response.blob();
+  if (blob.size === 0) throw new Error("Native offline audio read returned no data");
+  const type = blob.type.trim().toLowerCase();
+  if (type && type !== "application/octet-stream") return blob;
+  return new Blob([blob], { type: offlineAudioMime(url, contentType) });
+}
+
+// Object URLs pin their entire Blob in memory (hi-res FLACs run 100-300MB), so
+// aggressive revocation is load-bearing: with the dual-element crossfade at
+// most two entries may ever be alive at once.
+const nativeOfflineAudioObjectUrls = new Map<string, string>();
+
+export async function acquireNativeOfflineAudioObjectUrl(src: string, contentType?: string): Promise<string> {
+  const cached = nativeOfflineAudioObjectUrls.get(src);
+  if (cached) return cached;
+  const blob = await fetchNativeOfflineAudioBlob(src, contentType);
+  // A concurrent acquire may have landed while the blob was being read.
+  const raced = nativeOfflineAudioObjectUrls.get(src);
+  if (raced) return raced;
+  const objectUrl = URL.createObjectURL(blob);
+  nativeOfflineAudioObjectUrls.set(src, objectUrl);
+  return objectUrl;
+}
+
+export function releaseNativeOfflineAudioObjectUrl(src: string): void {
+  const objectUrl = nativeOfflineAudioObjectUrls.get(src);
+  if (!objectUrl) return;
+  nativeOfflineAudioObjectUrls.delete(src);
+  try {
+    URL.revokeObjectURL(objectUrl);
+  } catch {}
+}
+
 export async function saveNativeOfflineAsset(options: {
   songId: string;
   kind: NativeOfflineAssetKind;

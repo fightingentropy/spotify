@@ -8,12 +8,13 @@ import {
   Clock3,
   LayoutGrid,
   List,
+  ListPlus,
   Pause,
   Play,
   Shuffle,
 } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
-import { useApiData, withAccountScope, type HomePayload } from "@/client/api";
+import { useApiData, withAccountScope, type HomePayload, type StatsHomePayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
@@ -47,7 +48,7 @@ type HomeDateSortMode = "date_desc" | "date_asc";
 const HOME_VIEW_MODE_KEY = "spotify_home_view_mode";
 const HOME_DATE_SORT_KEY = "spotify_home_date_sort";
 const HOME_LIST_GRID =
-  "md:grid-cols-[3rem_minmax(0,2.1fr)_minmax(0,1.05fr)_minmax(7.75rem,0.78fr)_2.75rem_5rem_2.25rem] xl:grid-cols-[4.25rem_minmax(0,2.4fr)_minmax(0,1.15fr)_minmax(8rem,0.9fr)_3rem_5.25rem_2.5rem]";
+  "md:grid-cols-[3rem_minmax(0,2.1fr)_minmax(0,1.05fr)_minmax(7.75rem,0.78fr)_2.75rem_2.25rem_5rem_2.25rem] xl:grid-cols-[4.25rem_minmax(0,2.4fr)_minmax(0,1.15fr)_minmax(8rem,0.9fr)_3rem_2.5rem_5.25rem_2.5rem]";
 const HOME_VIRTUALIZATION_MIN_ITEMS = 100;
 const HOME_LIST_ROW_HEIGHT = 88;
 const HOME_VIRTUAL_OVERSCAN_ROWS = 8;
@@ -193,6 +194,8 @@ export default function HomePage() {
   });
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
+  const [queuedFeedbackId, setQueuedFeedbackId] = useState<string | null>(null);
+  const queuedFeedbackTimeoutRef = useRef<number | null>(null);
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
   const durationLookupRef = useRef<Record<string, number | null>>({});
   const mergedLikesRef = useRef(false);
@@ -210,8 +213,20 @@ export default function HomePage() {
       keepPreviousData: true,
     },
   );
+  const { data: statsData } = useApiData<StatsHomePayload>(
+    withAccountScope("/api/stats/home", user?.id ?? status),
+    {
+      recentlyPlayed: [],
+      mostPlayed: [],
+    },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
+    },
+  );
 
   const setQueue = usePlayerStore((state) => state.setQueue);
+  const addToQueue = usePlayerStore((state) => state.addToQueue);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
   const currentSong = usePlayerStore((state) => state.currentSong);
@@ -440,6 +455,27 @@ export default function HomePage() {
   }, [currentSongId, sortedSongs]);
   const listIsPlaying = currentSongIsInList && isPlaying;
 
+  const recentlyPlayedSongs = statsData.recentlyPlayed as HomeSong[];
+  const mostPlayedSongs = useMemo(
+    () => statsData.mostPlayed.map((entry) => entry.song as HomeSong),
+    [statsData.mostPlayed],
+  );
+
+  const handlePlayScrollerSong = (songs: HomeSong[], index: number) => {
+    const song = songs[index];
+    if (!song) return;
+    if (song.id === currentSongId) {
+      if (isPlaying) pause();
+      else {
+        requestImmediatePlayback(song);
+        play();
+      }
+      return;
+    }
+    requestImmediatePlayback(song);
+    setQueue(songs, index);
+  };
+
   const handlePlaySong = (index: number) => {
     const song = sortedSongs[index];
     if (!song) return;
@@ -485,6 +521,22 @@ export default function HomePage() {
     } catch {}
   };
 
+  useEffect(() => {
+    return () => {
+      if (queuedFeedbackTimeoutRef.current != null) window.clearTimeout(queuedFeedbackTimeoutRef.current);
+    };
+  }, []);
+
+  const handleAddToQueue = (song: HomeSong) => {
+    addToQueue(song);
+    setQueuedFeedbackId(song.id);
+    if (queuedFeedbackTimeoutRef.current != null) window.clearTimeout(queuedFeedbackTimeoutRef.current);
+    queuedFeedbackTimeoutRef.current = window.setTimeout(() => {
+      queuedFeedbackTimeoutRef.current = null;
+      setQueuedFeedbackId(null);
+    }, 1500);
+  };
+
   const handleToggleLike = async (songId: string) => {
     if (!user) {
       navigate("/signin");
@@ -496,6 +548,64 @@ export default function HomePage() {
     if (!result.ok && result.status === 401) {
       navigate("/signin");
     }
+  };
+
+  const renderScrollerTile = (songs: HomeSong[], index: number, subtitle?: string) => {
+    const song = songs[index];
+    if (!song) return null;
+    const displaySong = resolveHomeSong(song);
+    const active = currentSongId === song.id;
+
+    return (
+      <div
+        key={song.id}
+        onPointerEnter={() => warmSongSoon(displaySong)}
+        onFocus={() => warmSongSoon(displaySong)}
+        className={cn(
+          "wf-song-card group w-36 shrink-0 rounded-md p-3 transition sm:w-40",
+          active ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
+        )}
+      >
+        <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+          <CoverImage
+            src={displaySong.imageUrl}
+            alt={displaySong.title}
+            fill
+            sizes="160px"
+            className="wf-song-cover object-cover"
+            loading={index < 6 ? "eager" : "lazy"}
+          />
+          <button
+            type="button"
+            aria-label={active && isPlaying ? `Pause ${displaySong.title}` : `Play ${displaySong.title}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              handlePlayScrollerSong(songs, index);
+            }}
+            className={cn(
+              "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]",
+              "wf-control-button",
+              active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            {active && isPlaying ? (
+              <Pause size={21} fill="currentColor" />
+            ) : (
+              <Play size={21} fill="currentColor" className="translate-x-0.5" />
+            )}
+          </button>
+        </div>
+        <div className="mt-3 min-w-0">
+          <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
+            {displaySong.title}
+          </div>
+          <div className="truncate text-[14px] leading-5 text-white/[0.62]">{displaySong.artist || "Unknown Artist"}</div>
+          {subtitle ? (
+            <div className="mt-0.5 truncate text-[13px] text-white/[0.46]">{subtitle}</div>
+          ) : null}
+        </div>
+      </div>
+    );
   };
 
   const renderHomeListSong = (song: HomeSong, index: number) => {
@@ -581,6 +691,23 @@ export default function HomePage() {
             className="h-9 w-9 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             onToggle={() => void handleToggleLike(song.id)}
           />
+        </div>
+
+        <div className="hidden justify-center md:flex">
+          <button
+            type="button"
+            aria-label="Add to queue"
+            title="Add to queue"
+            onClick={() => handleAddToQueue(song)}
+            className={cn(
+              "wf-control-button grid h-9 w-9 shrink-0 place-items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50",
+              queuedFeedbackId === song.id
+                ? "text-[#1ed760] opacity-100"
+                : "text-white/[0.68] opacity-0 hover:bg-white/[0.09] hover:text-white group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            {queuedFeedbackId === song.id ? <Check size={18} /> : <ListPlus size={18} />}
+          </button>
         </div>
 
         <div className="flex justify-end text-[18px] tabular-nums text-white/[0.66] md:justify-center md:text-center">
@@ -684,6 +811,32 @@ export default function HomePage() {
           </div>
         </section>
 
+        {recentlyPlayedSongs.length > 0 ? (
+          <section aria-label="Recently played" className="mb-9 md:mb-10">
+            <h2 className="mb-4 text-2xl font-bold">Recently played</h2>
+            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+              {recentlyPlayedSongs.map((_, index) => renderScrollerTile(recentlyPlayedSongs, index))}
+            </div>
+          </section>
+        ) : null}
+
+        {statsData.mostPlayed.length > 0 ? (
+          <section aria-label="Most played" className="mb-9 md:mb-10">
+            <h2 className="mb-4 text-2xl font-bold">Most played</h2>
+            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+              {statsData.mostPlayed.map((entry, index) =>
+                renderScrollerTile(
+                  mostPlayedSongs,
+                  index,
+                  entry.playCount > 0
+                    ? `${entry.playCount} ${entry.playCount === 1 ? "play" : "plays"}`
+                    : undefined,
+                ),
+              )}
+            </div>
+          </section>
+        ) : null}
+
         <section aria-label="Library tracks" className="w-full">
           {viewMode === "list" ? (
             <div className={cn("hidden items-center gap-3 border-b border-white/[0.12] px-1 pb-4 text-[16px] font-medium text-white/[0.66] md:grid xl:gap-4", HOME_LIST_GRID)}>
@@ -713,6 +866,7 @@ export default function HomePage() {
                 )}
               </button>
               <div />
+              <div />
               <div className="flex justify-center">
                 <Clock3 size={23} />
               </div>
@@ -730,7 +884,7 @@ export default function HomePage() {
                 )}
               >
                 <div className="hidden md:block" />
-                <div className={cn("min-w-0 max-w-[18rem] whitespace-normal leading-7 text-wrap md:max-w-none", viewMode === "list" && "md:col-span-6")}>
+                <div className={cn("min-w-0 max-w-[18rem] whitespace-normal leading-7 text-wrap md:max-w-none", viewMode === "list" && "md:col-span-7")}>
                   <span>No songs in your library yet.</span>{" "}
                   <Link to="/upload" className="underline underline-offset-2 hover:text-white">
                     Add music

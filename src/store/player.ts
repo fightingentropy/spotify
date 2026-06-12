@@ -19,10 +19,17 @@ type PlayerState = {
   repeatMode: "off" | "one" | "all";
   crossfadeEnabled: boolean;
   crossfadeSeconds: number; // 0..12
+  playbackRate: number; // 0.5..3, applied to podcast playback only
+  // In-memory only: a sleep timer should not survive a relaunch.
+  sleepTimerEndsAt: number | null; // epoch ms
+  sleepAtEndOfTrack: boolean;
   setQueue: (songs: PlayerSong[], startIndex: number, options?: SetQueueOptions) => PlayerSong | null;
   setSong: (song: PlayerSong | null) => void;
   advanceToIndex: (index: number, options?: AdvanceToIndexOptions) => void;
   replaceSong: (song: PlayerSong) => void;
+  addToQueue: (song: PlayerSong) => void;
+  playNext: (song: PlayerSong) => void;
+  removeFromQueue: (index: number) => void;
   play: () => void;
   pause: () => void;
   toggle: () => void;
@@ -34,6 +41,10 @@ type PlayerState = {
   cycleRepeatMode: () => void;
   setCrossfadeEnabled: (enabled: boolean) => void;
   setCrossfadeSeconds: (seconds: number) => void;
+  setPlaybackRate: (rate: number) => void;
+  startSleepTimer: (minutes: number) => void;
+  setSleepAtEndOfTrack: () => void;
+  cancelSleepTimer: () => void;
 };
 
 type SetQueueOptions = {
@@ -53,6 +64,7 @@ const MUTED_STORAGE_KEY = "spotify_muted";
 const REPEAT_MODE_STORAGE_KEY = "spotify_repeat_mode";
 const CROSSFADE_ENABLED_STORAGE_KEY = "spotify_crossfade_enabled";
 const CROSSFADE_SECONDS_STORAGE_KEY = "spotify_crossfade_seconds";
+const PLAYBACK_RATE_STORAGE_KEY = "spotify_playback_rate";
 
 function readStoredShuffle(): boolean {
   try {
@@ -138,6 +150,30 @@ function readStoredCrossfadeSeconds(): number {
   }
 }
 
+function readStoredPlaybackRate(): number {
+  try {
+    if (typeof window === "undefined") return 1;
+    const raw = localStorage.getItem(PLAYBACK_RATE_STORAGE_KEY);
+    if (raw === null) return 1;
+    const value = Number(raw);
+    return Number.isFinite(value) ? Math.max(0.5, Math.min(3, value)) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+// Tap-to-cycle order for the podcast speed chip.
+export const PLAYBACK_RATE_CYCLE = [1, 1.25, 1.5, 1.75, 2, 0.75];
+
+export function nextPlaybackRate(rate: number): number {
+  const index = PLAYBACK_RATE_CYCLE.indexOf(rate);
+  return PLAYBACK_RATE_CYCLE[(index + 1) % PLAYBACK_RATE_CYCLE.length];
+}
+
+export function formatPlaybackRate(rate: number): string {
+  return `${rate}×`;
+}
+
 function pushHistory(history: number[], index: number): number[] {
   if (!Number.isInteger(index) || index < 0) return history;
   return [...history, index].slice(-MAX_PLAY_HISTORY);
@@ -189,6 +225,23 @@ function removeQueueIndex(indices: number[], indexToRemove: number): number[] {
   return indices.filter((index) => index !== indexToRemove);
 }
 
+// Remap stored queue indices (playHistory / playFuture / shuffleRemaining) when
+// the queue array shifts: an insertion at `pivot` pushes indices >= pivot up by
+// one; a removal at `pivot` drops that entry and pulls indices > pivot down by
+// one. Skipping this silently corrupts shuffle and back/forward navigation.
+function remapQueueIndices(indices: number[], pivot: number, delta: 1 | -1): number[] {
+  const remapped: number[] = [];
+  for (const index of indices) {
+    if (delta === -1) {
+      if (index === pivot) continue;
+      remapped.push(index > pivot ? index - 1 : index);
+    } else {
+      remapped.push(index >= pivot ? index + 1 : index);
+    }
+  }
+  return remapped;
+}
+
 export function getNextShufflePool(queueLength: number, currentIndex: number, remaining: number[]): number[] {
   const validRemaining = validShuffleRemaining(queueLength, currentIndex, remaining);
   return validRemaining.length > 0 ? validRemaining : createShuffleRemaining(queueLength, currentIndex);
@@ -198,6 +251,10 @@ export function chooseNextShuffleIndex(queueLength: number, currentIndex: number
   const pool = getNextShufflePool(queueLength, currentIndex, remaining);
   if (pool.length === 0) return clampQueueIndex(queueLength, currentIndex);
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+export function sleepTimerRemainingMinutes(endsAt: number, now = Date.now()): number {
+  return Math.max(1, Math.ceil((endsAt - now) / 60_000));
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -217,6 +274,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   // This is the single source of truth for crossfade hydration.
   crossfadeEnabled: readStoredCrossfadeEnabled(),
   crossfadeSeconds: readStoredCrossfadeSeconds(),
+  playbackRate: readStoredPlaybackRate(),
+  sleepTimerEndsAt: null,
+  sleepAtEndOfTrack: false,
   setQueue: (songs, startIndex, options) => {
     const start = resolveQueueStartIndex(
       songs.length,
@@ -285,6 +345,64 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return {
         queue,
         currentSong: s.currentSong?.id === song.id ? song : s.currentSong,
+      };
+    }),
+  addToQueue: (song) =>
+    set((s) => {
+      const queue = [...s.queue, song];
+      const appendedIndex = queue.length - 1;
+      if (s.currentIndex < 0) {
+        // Empty queue: make the song current but leave playback paused.
+        return {
+          queue,
+          currentIndex: 0,
+          currentSong: queue[0],
+        };
+      }
+      return {
+        queue,
+        shuffleRemaining: s.shuffle ? [...s.shuffleRemaining, appendedIndex] : s.shuffleRemaining,
+      };
+    }),
+  playNext: (song) =>
+    set((s) => {
+      if (s.currentIndex < 0) {
+        const queue = [...s.queue, song];
+        return {
+          queue,
+          currentIndex: 0,
+          currentSong: queue[0],
+        };
+      }
+      const insertAt = s.currentIndex + 1;
+      const queue = s.queue.slice();
+      queue.splice(insertAt, 0, song);
+      return {
+        queue,
+        playHistory: remapQueueIndices(s.playHistory, insertAt, 1),
+        // Shuffle consults playFuture before drawing from the shuffle pool
+        // (next() pops it and the crossfade target peeks it), so pushing the
+        // inserted index there makes "play next" hold under shuffle too.
+        // Linear mode reads currentIndex + 1 directly and ignores playFuture.
+        playFuture: s.shuffle
+          ? [...remapQueueIndices(s.playFuture, insertAt, 1), insertAt]
+          : remapQueueIndices(s.playFuture, insertAt, 1),
+        shuffleRemaining: remapQueueIndices(s.shuffleRemaining, insertAt, 1),
+      };
+    }),
+  removeFromQueue: (index) =>
+    set((s) => {
+      if (!Number.isInteger(index) || index < 0 || index >= s.queue.length || index === s.currentIndex) {
+        return s;
+      }
+      const queue = s.queue.slice();
+      queue.splice(index, 1);
+      return {
+        queue,
+        currentIndex: index < s.currentIndex ? s.currentIndex - 1 : s.currentIndex,
+        playHistory: remapQueueIndices(s.playHistory, index, -1),
+        playFuture: remapQueueIndices(s.playFuture, index, -1),
+        shuffleRemaining: remapQueueIndices(s.shuffleRemaining, index, -1),
       };
     }),
   play: () => set({ isPlaying: true }),
@@ -405,4 +523,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     try { if (typeof window !== "undefined") localStorage.setItem(CROSSFADE_SECONDS_STORAGE_KEY, String(clamped)); } catch {}
     set({ crossfadeSeconds: clamped });
   },
+  setPlaybackRate: (rate) => {
+    const clamped = Number.isFinite(rate) ? Math.max(0.5, Math.min(3, rate)) : 1;
+    try { if (typeof window !== "undefined") localStorage.setItem(PLAYBACK_RATE_STORAGE_KEY, String(clamped)); } catch {}
+    set({ playbackRate: clamped });
+  },
+  startSleepTimer: (minutes) =>
+    set({ sleepTimerEndsAt: Date.now() + minutes * 60_000, sleepAtEndOfTrack: false }),
+  setSleepAtEndOfTrack: () => set({ sleepTimerEndsAt: null, sleepAtEndOfTrack: true }),
+  cancelSleepTimer: () => set({ sleepTimerEndsAt: null, sleepAtEndOfTrack: false }),
 }));

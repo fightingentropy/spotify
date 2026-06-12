@@ -70,6 +70,7 @@ function isPersistableApiUrl(url: string): boolean {
     path === "/api/likes" ||
     path === "/api/music/source" ||
     path === "/api/songs" ||
+    path === "/api/stats/home" ||
     path.startsWith("/api/playlist/")
   );
 }
@@ -383,6 +384,7 @@ export function invalidateLibraryApiCache(accountScope?: string): void {
       path === "/api/songs" ||
       path === "/api/liked" ||
       path === "/api/likes" ||
+      path === "/api/stats/home" ||
       path.startsWith("/api/music/source") ||
       path.startsWith("/api/library") ||
       path.startsWith("/api/playlist/")
@@ -494,6 +496,11 @@ export function useApiData<T>(
 export type HomePayload = {
   songs: PlayerSong[];
   likedSongIds: string[];
+};
+
+export type StatsHomePayload = {
+  recentlyPlayed: PlayerSong[];
+  mostPlayed: { song: PlayerSong; playCount: number }[];
 };
 
 export type SearchIndexPayload = {
