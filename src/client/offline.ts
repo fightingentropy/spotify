@@ -887,6 +887,111 @@ async function cacheDurableUrl(
   throw lastError instanceof Error ? lastError : new Error("Download failed");
 }
 
+// Native (iOS/Android) downloads bypass the Cache API staging step entirely:
+// the webview origin is capacitor://localhost and the Cache API rejects
+// non-http(s) request URLs, so cache.put can never persist anything there.
+// Instead, fetch the blob (the patched window.fetch rewrites the URL to the
+// remote origin) and hand it straight to the native filesystem.
+async function fetchDownloadBlob(
+  absoluteUrl: string,
+  onProgress?: (loaded: number, total: number | null) => void,
+): Promise<Blob> {
+  const controller = new AbortController();
+  let stalled = false;
+  let stallTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const resetStallTimer = () => {
+    if (stallTimeoutId) clearTimeout(stallTimeoutId);
+    stallTimeoutId = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, DOWNLOAD_STALL_TIMEOUT_MS);
+  };
+  resetStallTimer();
+
+  try {
+    let response: Response;
+    try {
+      response = await fetch(absoluteUrl, {
+        credentials: "include",
+        cache: "reload",
+        headers: {
+          "x-spotify-offline-download": "1",
+        },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (stalled) throw new Error("Download stalled while connecting");
+      throw error;
+    }
+    if (!response.ok) throw new Error(`Download failed with ${response.status}`);
+
+    const totalRaw = Number(response.headers.get("content-length") || 0);
+    const total = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : null;
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!response.body) {
+      const blob = await withTimeout(
+        response.blob(),
+        DOWNLOAD_CACHE_WRITE_TIMEOUT_MS,
+        "Download response timed out",
+      );
+      onProgress?.(blob.size, total);
+      return blob;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: BlobPart[] = [];
+    let loaded = 0;
+    for (;;) {
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await reader.read();
+      } catch (error) {
+        if (stalled) throw new Error("Download stalled before receiving more data");
+        throw error;
+      }
+      const { done, value } = result;
+      if (done) break;
+      if (!value) continue;
+      resetStallTimer();
+      chunks.push(value);
+      loaded += value.byteLength;
+      onProgress?.(loaded, total);
+    }
+    return new Blob(chunks, contentType ? { type: contentType } : undefined);
+  } finally {
+    if (stallTimeoutId) clearTimeout(stallTimeoutId);
+  }
+}
+
+async function downloadAssetToNative(options: {
+  songId: string;
+  kind: NativeOfflineAssetKind;
+  url: string;
+  onProgress?: (loaded: number, total: number | null) => void;
+}): Promise<{ asset: NativeOfflineAsset; bytes: number }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= DOWNLOAD_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      const blob = await fetchDownloadBlob(options.url, options.onProgress);
+      if (blob.size <= 0) throw new Error("Downloaded media file is empty");
+      const asset = await saveNativeOfflineAsset({
+        songId: options.songId,
+        kind: options.kind,
+        url: options.url,
+        blob,
+      });
+      if (!asset) throw new Error("Native offline storage is not available");
+      return { asset, bytes: blob.size };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= DOWNLOAD_RETRY_ATTEMPTS) break;
+      await sleep(DOWNLOAD_RETRY_DELAY_MS * attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Download failed");
+}
+
 async function readCachedAssetBlob(url: string): Promise<Blob | null> {
   if (!hasCacheStorage()) return null;
   const absoluteUrl = resolveUrl(url);
@@ -1187,7 +1292,7 @@ async function processDownloadQueue(): Promise<void> {
         let nativeFiles: NativeOfflineFiles | undefined = working.nativeFiles;
         for (const asset of assetEntries) {
           const { kind, url } = asset;
-          const bytes = await cacheDurableUrl(url, (loaded, total) => {
+          const onProgress = (loaded: number, total: number | null) => {
             const assetProgress = total ? Math.min(1, loaded / total) : loaded > 0 ? 0.5 : 0;
             working = {
               ...working,
@@ -1195,14 +1300,27 @@ async function processDownloadQueue(): Promise<void> {
               updatedAt: now(),
             };
             setRecordState(working);
-          });
-          const nativeAsset = await saveCachedAssetToNative({
-            songId: working.songId,
-            kind,
-            url,
-          });
-          if (nativeAsset) {
-            nativeFiles = { ...(nativeFiles ?? {}), [kind]: nativeAsset };
+          };
+          let bytes: number;
+          if (isNativeOfflineStorageAvailable()) {
+            const result = await downloadAssetToNative({
+              songId: working.songId,
+              kind,
+              url,
+              onProgress,
+            });
+            nativeFiles = { ...(nativeFiles ?? {}), [kind]: result.asset };
+            bytes = result.bytes;
+          } else {
+            bytes = await cacheDurableUrl(url, onProgress);
+            const nativeAsset = await saveCachedAssetToNative({
+              songId: working.songId,
+              kind,
+              url,
+            });
+            if (nativeAsset) {
+              nativeFiles = { ...(nativeFiles ?? {}), [kind]: nativeAsset };
+            }
           }
           completedAssets += 1;
           totalBytes += bytes;
