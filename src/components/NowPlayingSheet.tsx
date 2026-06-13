@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { parseCredits, useLyrics } from "@/lib/credits";
 import {
+  Check,
   CheckCircle2,
   ChevronDown,
   Heart,
@@ -124,6 +125,10 @@ export default function NowPlayingSheet({
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (sleepMenuOpen) {
+          setSleepMenuOpen(false);
+          return;
+        }
         onClose();
       }
     }
@@ -132,7 +137,7 @@ export default function NowPlayingSheet({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [escapeDisabled, onClose, open]);
+  }, [escapeDisabled, onClose, open, sleepMenuOpen]);
 
   useEffect(() => {
     if (!open || sleepTimerEndsAt == null) return;
@@ -274,84 +279,25 @@ export default function NowPlayingSheet({
                     <MicVocal size={22} />
                   </button>
                 ) : null}
-                <div className="relative">
-                  <button
-                    type="button"
-                    aria-label={sleepTimerTitle}
-                    aria-expanded={sleepMenuOpen}
-                    title={sleepTimerTitle}
-                    onClick={() => setSleepMenuOpen((value) => !value)}
+                <button
+                  type="button"
+                  aria-label={sleepTimerTitle}
+                  aria-expanded={sleepMenuOpen}
+                  title={sleepTimerTitle}
+                  onClick={() => setSleepMenuOpen((value) => !value)}
+                  className={cn(
+                    "wf-control-button relative h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
+                    sleepTimerActive ? "text-[#1ed760]" : "text-foreground/70",
+                  )}
+                >
+                  <Moon size={20} />
+                  <span
                     className={cn(
-                      "wf-control-button relative h-11 w-11 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation",
-                      sleepTimerActive ? "text-[#1ed760]" : "text-foreground/70",
+                      "absolute bottom-1.5 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
+                      sleepTimerActive ? "opacity-100" : "opacity-0",
                     )}
-                  >
-                    <Moon size={20} />
-                    <span
-                      className={cn(
-                        "absolute bottom-1.5 h-1 w-1 rounded-full bg-[#1ed760] transition-opacity",
-                        sleepTimerActive ? "opacity-100" : "opacity-0",
-                      )}
-                    />
-                  </button>
-                  {sleepMenuOpen ? (
-                    <>
-                      {/* The sheet section is transformed, so fixed positioning
-                          resolves against it — this covers exactly the sheet. */}
-                      <button
-                        type="button"
-                        aria-label="Close sleep timer menu"
-                        className="fixed inset-0 z-10 cursor-default"
-                        onClick={() => setSleepMenuOpen(false)}
-                      />
-                      <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border border-black/10 bg-background/95 p-1.5 shadow-xl backdrop-blur dark:border-white/10">
-                        {sleepTimerActive ? (
-                          <div className="px-3 pb-1 pt-1.5 text-xs text-[#1ed760]">
-                            {sleepTimerRemaining != null ? `${sleepTimerRemaining} min left` : "End of track"}
-                          </div>
-                        ) : null}
-                        {SLEEP_TIMER_MINUTE_OPTIONS.map((minutes) => (
-                          <button
-                            key={minutes}
-                            type="button"
-                            onClick={() => {
-                              startSleepTimer(minutes);
-                              setSleepMenuOpen(false);
-                            }}
-                            className="wf-control-button h-9 w-full rounded-lg px-3 text-left text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
-                          >
-                            {minutes} min
-                          </button>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSleepAtEndOfTrack();
-                            setSleepMenuOpen(false);
-                          }}
-                          className={cn(
-                            "wf-control-button h-9 w-full rounded-lg px-3 text-left text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
-                            sleepAtEndOfTrack && "text-[#1ed760]",
-                          )}
-                        >
-                          End of track
-                        </button>
-                        {sleepTimerActive ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              cancelSleepTimer();
-                              setSleepMenuOpen(false);
-                            }}
-                            className="wf-control-button h-9 w-full rounded-lg px-3 text-left text-sm active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
-                          >
-                            Turn off
-                          </button>
-                        ) : null}
-                      </div>
-                    </>
-                  ) : null}
-                </div>
+                  />
+                </button>
                 <button
                   type="button"
                   aria-label="Open queue"
@@ -530,6 +476,86 @@ export default function NowPlayingSheet({
               </div>
             ) : null}
           </div>
+        </div>
+
+        {/* Sleep timer bottom sheet (stacks inside this section; the section
+            is the containing block, so it hugs the sheet's bottom edge). */}
+        <button
+          type="button"
+          aria-label="Close sleep timer menu"
+          onClick={() => setSleepMenuOpen(false)}
+          className={cn(
+            "absolute inset-0 z-30 cursor-default bg-black/60 transition-opacity",
+            sleepMenuOpen ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+          tabIndex={sleepMenuOpen ? 0 : -1}
+        />
+        <div
+          role="dialog"
+          aria-label="Sleep timer"
+          aria-hidden={!sleepMenuOpen}
+          className={cn(
+            "absolute inset-x-0 bottom-0 z-40 rounded-t-2xl border-t border-black/10 bg-background pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-2xl transition-transform duration-300 dark:border-white/10",
+            sleepMenuOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
+          )}
+        >
+          <div className="mx-auto mt-2 h-1 w-9 rounded-full bg-black/20 dark:bg-white/20" />
+          <div className="px-6 pb-1 pt-3 text-center">
+            <div className="text-sm font-semibold">Sleep timer</div>
+            <div className={cn("mt-0.5 text-xs", sleepTimerActive ? "text-[#1ed760]" : "opacity-60")}>
+              {sleepTimerRemaining != null
+                ? `Music stops in ${sleepTimerRemaining} min`
+                : sleepAtEndOfTrack
+                  ? "Music stops at the end of this track"
+                  : "Stop the music after a while"}
+            </div>
+          </div>
+          <div className="px-3 pt-1">
+            {SLEEP_TIMER_MINUTE_OPTIONS.map((minutes) => (
+              <button
+                key={minutes}
+                type="button"
+                onClick={() => {
+                  startSleepTimer(minutes);
+                  setSleepMenuOpen(false);
+                }}
+                tabIndex={sleepMenuOpen ? 0 : -1}
+                className="wf-control-button flex h-12 w-full items-center rounded-lg px-3 text-[15px] active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+              >
+                {minutes} minutes
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setSleepAtEndOfTrack();
+                setSleepMenuOpen(false);
+              }}
+              tabIndex={sleepMenuOpen ? 0 : -1}
+              className={cn(
+                "wf-control-button flex h-12 w-full items-center justify-between rounded-lg px-3 text-[15px] active:bg-black/5 dark:active:bg-white/5 touch-manipulation",
+                sleepAtEndOfTrack && "text-[#1ed760]",
+              )}
+            >
+              End of track
+              {sleepAtEndOfTrack ? <Check size={18} /> : null}
+            </button>
+          </div>
+          {sleepTimerActive ? (
+            <div className="mt-1 border-t border-black/10 px-3 pt-1 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => {
+                  cancelSleepTimer();
+                  setSleepMenuOpen(false);
+                }}
+                tabIndex={sleepMenuOpen ? 0 : -1}
+                className="wf-control-button flex h-12 w-full items-center justify-center rounded-lg px-3 text-[15px] font-semibold text-[#1ed760] active:bg-black/5 dark:active:bg-white/5 touch-manipulation"
+              >
+                Turn off timer
+              </button>
+            </div>
+          ) : null}
         </div>
       </section>
     </div>
