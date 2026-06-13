@@ -1634,7 +1634,14 @@ async function handleRemoteSongUpload(payload: {
 }
 
 function ffmpegPath(): string {
-  return process.env.FFMPEG_PATH?.trim() || "ffmpeg";
+  const fromEnv = process.env.FFMPEG_PATH?.trim();
+  if (fromEnv) return fromEnv;
+  // launchd starts the service with a minimal PATH that omits Homebrew, so a
+  // bare "ffmpeg" can ENOENT even though it is installed — probe known prefixes.
+  for (const candidate of ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "ffmpeg";
 }
 
 async function runFfmpeg(args: string[]): Promise<void> {
@@ -1747,6 +1754,50 @@ async function materializeEncryptedLicensedSourceStream(
   }
 }
 
+// Tidal (and any DASH source) materializes to lossless FLAC-in-fMP4 (audio/mp4).
+// Remux it to a native .flac container so downloads match the other lossless
+// sources (Qobuz/Amazon) instead of an .m4a — the mini has ffmpeg, the Worker
+// does not, which is why this lives here.
+async function materializeDashStreamToFlac(
+  stream: LicensedSourceStream,
+  userAgent?: string,
+): Promise<Response> {
+  const materialized = await materializeLicensedSourceStream(stream, {
+    maxBytes: MAX_AUDIO_BYTES,
+    userAgent,
+  });
+  if (!materialized.ok) return materialized;
+  const inputBytes = Buffer.from(await materialized.arrayBuffer());
+  if (inputBytes.byteLength > MAX_AUDIO_BYTES) {
+    throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+  }
+  const tempDir = await mkdtemp(resolve(tmpdir(), "spotify-licensed-"));
+  const inputPath = resolve(tempDir, "source.mp4");
+  const outputPath = resolve(tempDir, "output.flac");
+  try {
+    await writeFile(inputPath, inputBytes);
+    try {
+      // Stream-copy the FLAC frames out of the fMP4 — bit-exact, no re-encode.
+      await runFfmpeg(["-i", inputPath, "-vn", "-map_metadata", "-1", "-c:a", "copy", "-f", "flac", outputPath]);
+    } catch {
+      // Fallback for a non-FLAC lossless DASH source: decode + losslessly re-encode.
+      await runFfmpeg(["-i", inputPath, "-vn", "-map_metadata", "-1", "-c:a", "flac", "-compression_level", "8", outputPath]);
+    }
+    const outputBytes = await readFile(outputPath);
+    if (outputBytes.byteLength > MAX_AUDIO_BYTES) {
+      throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
+    }
+    return new Response(outputBytes, {
+      headers: {
+        "content-type": "audio/flac",
+        "content-length": String(outputBytes.byteLength),
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 async function handleLicensedSourceMaterialize(request: Request): Promise<Response> {
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
   const payload = await readJsonBody<{
@@ -1762,10 +1813,12 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
     const userAgent = typeof payload?.userAgent === "string" ? payload.userAgent : undefined;
     const response = licensedStream.decryptionKey
       ? await materializeEncryptedLicensedSourceStream(licensedStream, userAgent)
-      : await materializeLicensedSourceStream(licensedStream, {
-          maxBytes: MAX_AUDIO_BYTES,
-          userAgent,
-        });
+      : licensedStream.kind === "dash"
+        ? await materializeDashStreamToFlac(licensedStream, userAgent)
+        : await materializeLicensedSourceStream(licensedStream, {
+            maxBytes: MAX_AUDIO_BYTES,
+            userAgent,
+          });
     if (!response.ok || !response.body) return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
     const headers = new Headers();
     headers.set("content-type", response.headers.get("content-type") || "audio/flac");
