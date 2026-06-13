@@ -90,6 +90,8 @@ export default function LikedPage() {
             likedSongIds={likedSongIds}
             hideIfUnliked
             canLike
+            showQueueButton={false}
+            bulkDownloadScope="liked"
             emptyLabel="You haven't liked any songs yet."
             viewToggleClassName="mb-8 sm:-mt-14"
           />

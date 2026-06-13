@@ -20,6 +20,8 @@ type SongListItemProps = {
   canLike?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
   showLike?: boolean;
+  showQueue?: boolean;
+  showDownload?: boolean;
   priority?: boolean;
 };
 
@@ -32,6 +34,8 @@ const SongListItemComponent = function SongListItem({
   canLike = false,
   onToggleLike,
   showLike = true,
+  showQueue = true,
+  showDownload = true,
   priority = false,
 }: SongListItemProps) {
   const setSong = usePlayerStore((state) => state.setSong);
@@ -130,22 +134,26 @@ const SongListItemComponent = function SongListItem({
         </span>
       </button>
 
-      <button
-        type="button"
-        aria-label="Add to queue"
-        title="Add to queue"
-        onClick={handleAddToQueue}
-        className={cn(
-          "h-9 w-9 rounded-full grid place-items-center transition",
-          "wf-control-button",
-          "hover:bg-black/10 hover:dark:bg-white/10",
-          queued ? "text-emerald-500" : "text-foreground/70",
-        )}
-      >
-        {queued ? <Check size={18} /> : <ListPlus size={18} />}
-      </button>
+      {showQueue ? (
+        <button
+          type="button"
+          aria-label="Add to queue"
+          title="Add to queue"
+          onClick={handleAddToQueue}
+          className={cn(
+            "h-9 w-9 rounded-full grid place-items-center transition",
+            "wf-control-button",
+            "hover:bg-black/10 hover:dark:bg-white/10",
+            queued ? "text-emerald-500" : "text-foreground/70",
+          )}
+        >
+          {queued ? <Check size={18} /> : <ListPlus size={18} />}
+        </button>
+      ) : null}
 
-      <OfflineSongDownloadButton song={song} className="wf-control-button text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />
+      {showDownload ? (
+        <OfflineSongDownloadButton song={song} className="wf-control-button text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10" />
+      ) : null}
 
       {showLike ? (
         <button
@@ -186,6 +194,8 @@ export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) =
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
     prevProps.showLike === nextProps.showLike &&
+    prevProps.showQueue === nextProps.showQueue &&
+    prevProps.showDownload === nextProps.showDownload &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&
     prevProps.onToggleLike === nextProps.onToggleLike

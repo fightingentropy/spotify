@@ -21,6 +21,8 @@ type SongCardProps = {
   hideIfUnliked?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
   showLike?: boolean;
+  showQueue?: boolean;
+  showDownload?: boolean;
   priority?: boolean;
 };
 
@@ -34,6 +36,8 @@ const SongCardComponent = function SongCard({
   hideIfUnliked = false,
   onToggleLike,
   showLike = true,
+  showQueue = true,
+  showDownload = true,
   priority = false,
 }: SongCardProps) {
   // Optimized selector - only subscribes to necessary state changes
@@ -128,25 +132,29 @@ const SongCardComponent = function SongCard({
       />
       <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
 
-      <OfflineSongDownloadButton
-        song={song}
-        className="wf-control-button absolute left-2 top-2 z-30 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
-      />
+      {showDownload ? (
+        <OfflineSongDownloadButton
+          song={song}
+          className="wf-control-button absolute left-2 top-2 z-30 bg-black/40 text-white/90 backdrop-blur hover:bg-black/60"
+        />
+      ) : null}
 
-      <button
-        type="button"
-        aria-label="Add to queue"
-        title="Add to queue"
-        onClick={handleAddToQueue}
-        className={cn(
-          "absolute top-12 right-2 z-30 h-9 w-9 rounded-full grid place-items-center transition bg-black/40 backdrop-blur",
-          "wf-control-button",
-          "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-          queued ? "text-emerald-500" : "text-white/90",
-        )}
-      >
-        {queued ? <Check size={18} /> : <ListPlus size={18} />}
-      </button>
+      {showQueue ? (
+        <button
+          type="button"
+          aria-label="Add to queue"
+          title="Add to queue"
+          onClick={handleAddToQueue}
+          className={cn(
+            "absolute top-12 right-2 z-30 h-9 w-9 rounded-full grid place-items-center transition bg-black/40 backdrop-blur",
+            "wf-control-button",
+            "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
+            queued ? "text-emerald-500" : "text-white/90",
+          )}
+        >
+          {queued ? <Check size={18} /> : <ListPlus size={18} />}
+        </button>
+      ) : null}
 
       {showLike ? (
         <button
@@ -206,6 +214,8 @@ export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
     prevProps.canLike === nextProps.canLike &&
     prevProps.hideIfUnliked === nextProps.hideIfUnliked &&
     prevProps.showLike === nextProps.showLike &&
+    prevProps.showQueue === nextProps.showQueue &&
+    prevProps.showDownload === nextProps.showDownload &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&
     prevProps.onToggleLike === nextProps.onToggleLike
