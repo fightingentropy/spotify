@@ -253,9 +253,8 @@ function Shell() {
       </Suspense>
       <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-          <Link to="/" className="font-semibold inline-flex shrink-0 items-center gap-2 touch-manipulation">
+          <Link to="/" className="font-semibold inline-flex shrink-0 items-center touch-manipulation">
             <SpotifyIcon size={40} className="h-10 w-10 rounded-full lg:h-6 lg:w-6" />
-            <span className="hidden sm:inline">Spotify</span>
           </Link>
           <HomeSearchCommandPalette
             className="hidden w-[22rem] justify-self-center lg:block xl:w-[30rem]"
