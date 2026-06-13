@@ -45,6 +45,7 @@ import {
   fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
   fetchSpotifyLikedTracks,
   fetchSpotifyPlaylistTracks as fetchPathfinderPlaylistTracks,
+  fetchSpotifyTrackMetadata,
   scrapeSpotifyTrackIdsFromHtml,
   type SpotifyBatchTrack,
 } from "@/lib/spotify-pathfinder";
@@ -1149,7 +1150,38 @@ function buildFallbackSongLinkPayload(
 // Resolve a Spotify track to a song.link-shaped payload. Primary source is
 // Odesli (which retries on 429); when that is rate-limited or down, fall back
 // to an auth-free Spotify-embed -> Deezer lookup so uploads keep working.
-async function resolveTrackPayload(trackId: string, region: string): Promise<Record<string, unknown>> {
+// Look up a track on Deezer by its exact ISRC (auth-free), returning the numeric id.
+async function deezerIdByIsrc(isrc: string): Promise<string> {
+  if (!isrc) return "";
+  const payload = await fetchJsonObject(`https://api.deezer.com/track/isrc:${encodeURIComponent(isrc)}`).catch(() => null);
+  const rawId = payload?.id;
+  const id = typeof rawId === "number" ? String(rawId) : toStringValue(rawId);
+  return /^\d+$/.test(id) ? id : "";
+}
+
+// Resolve via Spotify's authenticated API (sp_dc): canonical metadata + exact
+// ISRC, then pin the matching Deezer track by that ISRC so downstream ISRC /
+// Qobuz logic works unchanged. Returns null when Spotify is unavailable.
+async function resolveViaSpotify(trackId: string, spotifyCookie: string): Promise<Record<string, unknown> | null> {
+  const meta = await fetchSpotifyTrackMetadata(trackId, spotifyCookie || undefined).catch(() => null);
+  if (!meta || !meta.title) return null;
+  let deezerId = meta.isrc ? await deezerIdByIsrc(meta.isrc).catch(() => "") : "";
+  if (!deezerId) deezerId = await searchDeezerTrackId(meta.title, meta.artist).catch(() => "");
+  if (!deezerId) return null;
+  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist);
+}
+
+// Resolve a Spotify track to a song.link-shaped payload. Primary source is
+// Spotify itself (authenticated via sp_dc) for canonical metadata + exact ISRC;
+// then Odesli (retries 429); then an auth-free Spotify-embed -> Deezer lookup.
+async function resolveTrackPayload(
+  trackId: string,
+  region: string,
+  spotifyCookie = "",
+): Promise<Record<string, unknown>> {
+  const viaSpotify = await resolveViaSpotify(trackId, spotifyCookie).catch(() => null);
+  if (viaSpotify) return viaSpotify;
+
   const odesli = await fetchSongLinkPayload(trackId, region).catch(() => null);
   if (odesli && toObject(odesli.entitiesByUniqueId)) return odesli;
 
@@ -2327,7 +2359,11 @@ async function resolveSpotiFlacDownloadStack(
 async function resolveStreamUrl(env: CloudflareEnv, payload: SongPayload): Promise<ResolvedAudioDownload> {
   const trackId = parseSpotifyTrackId(toStringValue(payload.spotifyUrl));
   if (!trackId) throw new ApiError("Invalid Spotify track URL or ID", 400);
-  const songLinkPayload = await resolveTrackPayload(trackId, toStringValue(payload.region).toUpperCase()).catch(() => ({}));
+  const songLinkPayload = await resolveTrackPayload(
+    trackId,
+    toStringValue(payload.region).toUpperCase(),
+    envString(env, "SPOTIFY_SP_DC"),
+  ).catch(() => ({}));
   const service = toStringValue(payload.service).toLowerCase();
   const qualities = qualityLists(payload);
 
@@ -3424,7 +3460,7 @@ app.post("/api/songs/spotify/batch", async (c) => {
     if (urlType === "track") {
       const trackId = parseSpotifyTrackId(spotifyUrl);
       if (!trackId) return jsonError("Invalid track ID", 400);
-      const songLinkPayload = await resolveTrackPayload(trackId, region);
+      const songLinkPayload = await resolveTrackPayload(trackId, region, envString(c.env, "SPOTIFY_SP_DC") || spotifyCookie);
       const metadata = await fetchEnhancedMetadata(trackId, songLinkPayload);
       batchTracks = [{
         id: trackId,
@@ -3538,7 +3574,11 @@ app.post("/api/songs/spotify", async (c) => {
     let title = toStringValue(payload.title);
     let artist = toStringValue(payload.artist);
     if (!title || !artist) {
-      const songLinkPayload = await resolveTrackPayload(trackId, toStringValue(payload.region).toUpperCase());
+      const songLinkPayload = await resolveTrackPayload(
+        trackId,
+        toStringValue(payload.region).toUpperCase(),
+        envString(c.env, "SPOTIFY_SP_DC"),
+      );
       const metadata = parseSongLinkMetadata(songLinkPayload, trackId);
       title ||= metadata.title;
       artist ||= metadata.artist;
@@ -3549,7 +3589,11 @@ app.post("/api/songs/spotify", async (c) => {
     return c.json({ lyrics, fileName: `${title} - ${artist}.lrc`.replace(/[\\/:*?"<>|]/g, "_") });
   }
 
-  const songLinkPayload = await resolveTrackPayload(trackId, toStringValue(payload.region).toUpperCase());
+  const songLinkPayload = await resolveTrackPayload(
+    trackId,
+    toStringValue(payload.region).toUpperCase(),
+    envString(c.env, "SPOTIFY_SP_DC"),
+  );
   const metadata = parseSongLinkMetadata(songLinkPayload, trackId);
   const deezerInfo = await fetchDeezerTrackInfo(parseDeezerTrackId(songLinkPayload));
 

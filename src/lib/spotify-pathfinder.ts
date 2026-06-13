@@ -317,6 +317,81 @@ async function fetchSpotifyAccessToken(spotifyCookie?: string): Promise<string> 
   return accessToken;
 }
 
+export type SpotifyTrackMetadata = {
+  title: string;
+  artist: string;
+  album: string;
+  isrc: string;
+  imageUrl: string;
+};
+
+const SPOTIFY_BASE62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+// Convert a base62 Spotify track id (22 chars) to the 128-bit hex gid that the
+// internal spclient metadata API keys on.
+function spotifyTrackGid(trackId: string): string | null {
+  if (!/^[0-9A-Za-z]{22}$/.test(trackId)) return null;
+  const bytes = new Array<number>(16).fill(0); // big-endian 128-bit accumulator
+  for (const char of trackId) {
+    const digit = SPOTIFY_BASE62.indexOf(char);
+    if (digit < 0) return null;
+    let carry = digit;
+    for (let i = 15; i >= 0; i -= 1) {
+      const value = bytes[i] * 62 + carry;
+      bytes[i] = value & 0xff;
+      carry = value >>> 8;
+    }
+  }
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// Fetch a single track's canonical metadata (incl. ISRC) straight from Spotify
+// via the internal spclient metadata API (the high-volume endpoint Spotiflac
+// uses, not the rate-limited public Web API), authenticated with the web-player
+// token (sp_dc). Returns null on any failure so callers can fall back.
+export async function fetchSpotifyTrackMetadata(
+  trackId: string,
+  spotifyCookie?: string,
+): Promise<SpotifyTrackMetadata | null> {
+  const gid = spotifyTrackGid(trackId);
+  if (!gid) return null;
+  let accessToken: string;
+  try {
+    accessToken = await fetchSpotifyAccessToken(spotifyCookie);
+  } catch {
+    return null;
+  }
+  const response = await fetchWithTimeout(`https://spclient.wg.spotify.com/metadata/4/track/${gid}?market=US`, {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/json",
+      "user-agent": DEFAULT_USER_AGENT,
+    },
+  });
+  if (!response?.ok) return null;
+  const payload = toObject(await response.json().catch(() => null));
+  if (!payload) return null;
+  const title = toStringValue(payload.name);
+  if (!title) return null;
+  const artists = Array.isArray(payload.artist) ? payload.artist : [];
+  const album = toObject(payload.album);
+  const externalIds = Array.isArray(payload.external_id) ? payload.external_id : [];
+  const isrc = externalIds
+    .map((entry) => toObject(entry))
+    .map((entry) => (toStringValue(entry?.type).toLowerCase() === "isrc" ? toStringValue(entry?.id) : ""))
+    .find((id) => id.length > 0);
+  const coverGroup = toObject(album?.cover_group);
+  const coverImages = Array.isArray(coverGroup?.image) ? coverGroup.image : [];
+  const fileId = toStringValue(toObject(coverImages[0])?.file_id);
+  return {
+    title,
+    artist: toStringValue(toObject(artists[0])?.name),
+    album: toStringValue(album?.name),
+    isrc: (isrc ?? "").toUpperCase(),
+    imageUrl: fileId ? `https://i.scdn.co/image/${fileId}` : "",
+  };
+}
+
 async function pathfinderQuery(
   operationName: string,
   variables: Record<string, unknown>,
