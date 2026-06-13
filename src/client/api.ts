@@ -507,8 +507,10 @@ export type StatsHomePayload = {
   mostPlayed: { song: PlayerSong; playCount: number }[];
 };
 
-// A globally-trending track from the Discover row. Not in the library yet — it
-// carries its Spotify reference so a tap can import it via /api/songs.
+// A globally-trending track from the Discover row. Not in the library. When
+// `staged` is true it's already pre-downloaded into the Mac-mini's hidden
+// .discover cache and plays instantly from `audioUrl` (with stable library id
+// `audioId`); otherwise a tap materializes it on demand via /api/discover/stage.
 export type DiscoverTrack = {
   id: string;
   title: string;
@@ -517,6 +519,9 @@ export type DiscoverTrack = {
   imageUrl: string;
   durationMs: number | null;
   spotifyUrl: string;
+  staged?: boolean;
+  audioId?: string;
+  audioUrl?: string;
 };
 
 export type DiscoverPayload = {

@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { patchLikeApiCache } from "@/client/api";
+import { promoteStagedSong } from "@/client/discover-keep";
 import { getOfflineAccountScope, queueOfflineMutation, useOfflineStore } from "@/client/offline";
 import { impactLight } from "@/lib/haptics";
 import type { PlayerSong } from "@/types/player";
@@ -131,6 +132,16 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     const prevLiked = !!get().likedSongIds[songId];
     if (prevLiked === nextLiked) {
       return { ok: true, status: 200 };
+    }
+
+    // Keep a staged Discover track: promote it into the library first (you can't
+    // like a song that isn't in the library yet). The promoted song keeps the
+    // same id, so the optimistic state below is unaffected.
+    if (nextLiked && song?.staged && song.discoverTrackId) {
+      const promoted = await promoteStagedSong(song);
+      if (!promoted) return { ok: false, status: 502, error: "Couldn't save this track" };
+      song = promoted;
+      songId = promoted.id;
     }
 
     void impactLight();

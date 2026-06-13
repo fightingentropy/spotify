@@ -28,6 +28,10 @@ type PlayerState = {
   setSong: (song: PlayerSong | null) => void;
   advanceToIndex: (index: number, options?: AdvanceToIndexOptions) => void;
   replaceSong: (song: PlayerSong) => void;
+  // Swap a staged Discover track (matched by its old id) for the promoted,
+  // now-in-library song after a "keep" action, so future loads use the library
+  // copy instead of the .discover staging URL. Pure data swap — no reload.
+  replaceStagedSong: (oldId: string, song: PlayerSong) => void;
   addToQueue: (song: PlayerSong) => void;
   playNext: (song: PlayerSong) => void;
   removeFromQueue: (index: number) => void;
@@ -427,6 +431,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return {
         queue,
         currentSong: s.currentSong?.id === song.id ? song : s.currentSong,
+      };
+    }),
+  replaceStagedSong: (oldId, song) =>
+    set((s) => {
+      const matchIndex = s.queue.findIndex((item) => item.id === oldId);
+      if (matchIndex < 0) {
+        return s.currentSong?.id === oldId ? { currentSong: song } : s;
+      }
+      const queue = s.queue.slice();
+      queue[matchIndex] = song;
+      return {
+        queue,
+        currentSong: s.currentSong?.id === oldId ? song : s.currentSong,
       };
     }),
   addToQueue: (song) =>

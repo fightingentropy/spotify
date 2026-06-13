@@ -173,54 +173,58 @@ export default function HomePage() {
   const [importingId, setImportingId] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
 
-  // Tapping a Discover tile runs the normal upload pipeline (resolve -> download
-  // -> add to the Mac-mini collection), then plays the freshly-added song.
+  // Tapping a Discover tile plays it WITHOUT adding it to the library. If it's
+  // already staged in the .discover cache it plays instantly; otherwise it's
+  // materialized on demand (a short wait, like a download). Keeping it forever
+  // (like / add-to-playlist / download) promotes it — handled by those actions.
   const handleDiscoverClick = useCallback(
     async (track: DiscoverTrack) => {
+      // Instant path: already pre-downloaded — play straight from staging.
+      if (track.staged && track.audioUrl && track.audioId) {
+        const song = resolveHomeSong({
+          id: track.audioId,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || undefined,
+          imageUrl: track.imageUrl,
+          audioUrl: track.audioUrl,
+          duration: track.durationMs ? Math.round(track.durationMs / 1000) : undefined,
+          source: "server",
+          staged: true,
+          discoverTrackId: track.id,
+        } as HomeSong);
+        requestImmediatePlayback(song);
+        setQueue([song], 0);
+        return;
+      }
+
+      // Not staged yet: materialize this one track on demand, then play it.
       if (importingId) return;
       setImportingId(track.id);
       setImportError(null);
       try {
-        const res = await fetch("/api/songs", {
+        const res = await fetch("/api/discover/stage", {
           method: "POST",
           headers: { "content-type": "application/json" },
           credentials: "include",
           body: JSON.stringify({
-            mode: "spotify",
             spotifyUrl: track.spotifyUrl,
             region: "US",
             title: track.title,
             artist: track.artist,
             album: track.album,
-            durationMs: track.durationMs ? String(track.durationMs) : "",
+            durationMs: track.durationMs ?? undefined,
             imageUrl: track.imageUrl,
             qualityProfile: "max",
-            outputFormat: "flac",
           }),
         });
-
-        let song: HomeSong | null = null;
-        if (res.ok) {
-          song = (await res.json()) as HomeSong;
-        } else if (res.status === 409) {
-          // Already in the library — locate and play the existing copy.
-          const body = (await res.json().catch(() => null)) as { existingSong?: { id?: string } } | null;
-          const existingId = body?.existingSong?.id;
-          if (existingId) {
-            const listRes = await fetch("/api/songs", { credentials: "include" });
-            const list = listRes.ok ? ((await listRes.json().catch(() => [])) as HomeSong[]) : [];
-            song = Array.isArray(list) ? list.find((entry) => entry.id === existingId) ?? null : null;
-          }
-        } else {
+        if (!res.ok) {
           const body = (await res.json().catch(() => null)) as { error?: string } | null;
           throw new Error(body?.error || `Couldn't load this track (${res.status})`);
         }
-
-        if (song) {
-          const resolved = resolveHomeSong(song);
-          requestImmediatePlayback(resolved);
-          setQueue([resolved], 0);
-        }
+        const song = resolveHomeSong((await res.json()) as HomeSong);
+        requestImmediatePlayback(song);
+        setQueue([song], 0);
       } catch (error) {
         setImportError(error instanceof Error ? error.message : "Couldn't load this track");
       } finally {
@@ -257,7 +261,7 @@ export default function HomePage() {
           ) : null}
           <button
             type="button"
-            aria-label={`Add and play ${track.title}`}
+            aria-label={`Play ${track.title}`}
             onClick={(event) => {
               event.stopPropagation();
               handleDiscoverClick(track);

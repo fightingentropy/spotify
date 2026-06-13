@@ -3340,18 +3340,98 @@ app.get("/api/home", async (c) => {
 
 // Spotify's editorial "Top 50 - Global" playlist — globally trending tracks right
 // now. Fetched via the pathfinder (works anonymously for public playlists). Each
-// track carries its Spotify id so a tap can run the normal /api/songs import
-// (resolve -> download -> add to the Mac-mini collection).
+// track carries its Spotify id; tapping a track plays it instantly from the
+// Mac-mini's hidden ".discover" staging cache (pre-downloaded in the background)
+// without adding it to the library. See the staging endpoints below + the
+// matching handlers in local-music-server.ts.
 const TOP_50_GLOBAL_PLAYLIST_ID = "37i9dQZEVXbMDoHDwVN2tF";
+// How many not-yet-staged Top-50 tracks to resolve + enqueue per Discover load.
+// Bounds the waitUntil work so the background fill stays within the Worker's
+// post-response budget; the rest fill in over subsequent loads.
+const DISCOVER_STAGE_BATCH = 4;
+
+type DiscoverTrendingTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  imageUrl: string;
+  durationMs: number | null;
+  spotifyUrl: string;
+};
+type DiscoverStagingStatusEntry = { trackId: string; id: string; audioUrl: string; duration?: number };
+
+// Call a Mac-mini /api/discover/* endpoint as the library owner (staging is a
+// single shared cache owned by the library owner, regardless of who is viewing).
+async function macMiniDiscoverFetch(
+  env: CloudflareEnv,
+  path: string,
+  method: "GET" | "POST",
+  body?: unknown,
+  timeoutMs = 15_000,
+): Promise<Response> {
+  const headers = new Headers({ accept: "application/json" });
+  if (body !== undefined) headers.set("content-type", "application/json");
+  const token = getMacMiniProxyToken(env);
+  if (token) headers.set("x-spotify-proxy-token", token);
+  headers.set("x-spotify-user-id", LOCAL_MAC_MINI_AUTH_USER.id);
+  headers.set("x-spotify-user-email", LOCAL_MAC_MINI_AUTH_USER.email);
+  if (LOCAL_MAC_MINI_AUTH_USER.name) headers.set("x-spotify-user-name", LOCAL_MAC_MINI_AUTH_USER.name);
+  return fetch(new URL(path, getMacMiniOrigin(env)).toString(), {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
+// Background: resolve up to DISCOVER_STAGE_BATCH missing tracks and hand the
+// Mac-mini the current Top-50 (to refresh + prune) plus the resolved descriptors
+// to materialize into staging. The Mac-mini does the heavy download async, so
+// this returns as soon as the resolves + one sync POST complete.
+async function fillDiscoverStaging(
+  env: CloudflareEnv,
+  presentIds: string[],
+  missing: DiscoverTrendingTrack[],
+): Promise<void> {
+  const stage: unknown[] = [];
+  for (const track of missing) {
+    try {
+      const resolved = await resolveStreamUrl(env, {
+        mode: "spotify",
+        spotifyUrl: track.spotifyUrl,
+        region: "US",
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        durationMs: track.durationMs ?? undefined,
+        qualityProfile: "max",
+      });
+      stage.push({
+        trackId: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        imageUrl: track.imageUrl,
+        durationMs: track.durationMs ?? undefined,
+        resolved,
+      });
+    } catch {
+      // Skip this track; a later Discover load retries it.
+    }
+  }
+  await macMiniDiscoverFetch(env, "/api/discover/sync", "POST", { present: presentIds, stage }, 10_000).catch(() => {});
+}
 
 app.get("/api/discover/trending", async (c) => {
+  let discover: DiscoverTrendingTrack[] = [];
   try {
     const { tracks } = await fetchPathfinderPlaylistTracks(
       TOP_50_GLOBAL_PLAYLIST_ID,
       envString(c.env, "SPOTIFY_SP_DC"),
       50,
     );
-    const discover = tracks
+    discover = tracks
       .filter((track) => track.id && track.name && track.artists.length > 0)
       .map((track) => ({
         id: track.id,
@@ -3362,13 +3442,100 @@ app.get("/api/discover/trending", async (c) => {
         durationMs: typeof track.durationMs === "number" && track.durationMs > 0 ? track.durationMs : null,
         spotifyUrl: `https://open.spotify.com/track/${track.id}`,
       }));
-    return jsonCached(c, { tracks: discover }, {
-      cacheControl: "public, max-age=1800, stale-while-revalidate=7200",
-    });
   } catch {
     // Trending is a nice-to-have; degrade to empty so Home still renders.
     return jsonCached(c, { tracks: [] }, { cacheControl: "public, max-age=120" });
   }
+
+  if (!discover.length || !isMacMiniMusicConfigured(c.env)) {
+    return jsonCached(c, { tracks: discover }, {
+      cacheControl: "public, max-age=1800, stale-while-revalidate=7200",
+    });
+  }
+
+  // Mark which tracks are already staged (instantly playable from .discover).
+  const staged = new Map<string, DiscoverStagingStatusEntry>();
+  try {
+    const res = await macMiniDiscoverFetch(c.env, "/api/discover/staging", "GET", undefined, 4_000);
+    if (res.ok) {
+      const body = (await res.json()) as { entries?: DiscoverStagingStatusEntry[] };
+      for (const entry of body.entries ?? []) staged.set(entry.trackId, entry);
+    }
+  } catch {
+    // Staging status is best-effort; fall back to "not staged".
+  }
+
+  const tracks = discover.map((track) => {
+    const ready = staged.get(track.id);
+    return ready
+      ? { ...track, staged: true, audioId: ready.id, audioUrl: ready.audioUrl }
+      : { ...track, staged: false };
+  });
+
+  // Background-fill the not-yet-staged tracks and refresh/prune the cache.
+  const missing = discover.filter((track) => !staged.has(track.id)).slice(0, DISCOVER_STAGE_BATCH);
+  const presentIds = discover.map((track) => track.id);
+  const fill = fillDiscoverStaging(c.env, presentIds, missing).catch(() => {});
+  try {
+    c.executionCtx.waitUntil(fill);
+  } catch {
+    // No executionCtx (e.g. dev): let it run detached.
+    void fill;
+  }
+
+  // Short cache: a track's staged status changes as the background fill completes.
+  return jsonCached(c, { tracks }, { cacheControl: "private, max-age=30, stale-while-revalidate=300" });
+});
+
+// Tap a not-yet-staged Discover track: resolve + materialize ONE track into the
+// staging cache (blocking, like a normal import) and return a playable song. The
+// song is NOT in the library until a "keep" action promotes it.
+app.post("/api/discover/stage", async (c) => {
+  requireUser(c.get("user"));
+  if (!isMacMiniMusicConfigured(c.env)) return jsonError("Discover streaming is not available", 503);
+  const payload = await readJson<SongPayload & { trackId?: unknown }>(c.req.raw);
+  if (!payload) return jsonError("Invalid JSON body", 400);
+  const trackId = parseSpotifyTrackId(toStringValue(payload.spotifyUrl)) || toStringValue(payload.trackId);
+  if (!trackId) return jsonError("Invalid Spotify track URL or ID", 400);
+  const title = toStringValue(payload.title);
+  const artist = toStringValue(payload.artist);
+  if (!title || !artist) return jsonError("Title and artist are required", 400);
+  const resolved = await resolveStreamUrl(c.env, payload);
+  const res = await macMiniDiscoverFetch(
+    c.env,
+    "/api/discover/stage",
+    "POST",
+    {
+      trackId,
+      title,
+      artist,
+      album: toStringValue(payload.album),
+      imageUrl: toStringValue(payload.imageUrl),
+      durationMs: toNumberValue(payload.durationMs) ?? undefined,
+      resolved,
+    },
+    120_000,
+  );
+  return new Response(await res.text(), {
+    status: res.status,
+    headers: { "content-type": "application/json" },
+  });
+});
+
+// Promote a staged Discover track into the real library (move it out of
+// .discover so it scans + can be liked). Returns the now-real song; the client
+// then performs the actual keep action (like / add-to-playlist / download).
+app.post("/api/discover/promote", async (c) => {
+  requireUser(c.get("user"));
+  if (!isMacMiniMusicConfigured(c.env)) return jsonError("Discover streaming is not available", 503);
+  const payload = await readJson<{ trackId?: unknown }>(c.req.raw);
+  const trackId = toStringValue(payload?.trackId);
+  if (!trackId) return jsonError("trackId is required", 400);
+  const res = await macMiniDiscoverFetch(c.env, "/api/discover/promote", "POST", { trackId }, 30_000);
+  return new Response(await res.text(), {
+    status: res.status,
+    headers: { "content-type": "application/json" },
+  });
 });
 
 app.get("/api/search-index", async (c) => {

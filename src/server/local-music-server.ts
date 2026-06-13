@@ -1819,6 +1819,18 @@ async function materializeDashStreamToFlac(
   }
 }
 
+// Pick the right materialization strategy for a licensed stream (encrypted MP4,
+// DASH→FLAC remux, or a plain licensed URL). Shared by the on-demand
+// /api/licensed-source/materialize endpoint and the Discover staging downloader.
+async function materializeLicensedStreamToResponse(
+  stream: LicensedSourceStream,
+  userAgent?: string,
+): Promise<Response> {
+  if (stream.decryptionKey) return materializeEncryptedLicensedSourceStream(stream, userAgent);
+  if (stream.kind === "dash") return materializeDashStreamToFlac(stream, userAgent);
+  return materializeLicensedSourceStream(stream, { maxBytes: MAX_AUDIO_BYTES, userAgent });
+}
+
 async function handleLicensedSourceMaterialize(request: Request): Promise<Response> {
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
   const payload = await readJsonBody<{
@@ -1832,14 +1844,7 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
   try {
     const licensedStream = stream as LicensedSourceStream;
     const userAgent = typeof payload?.userAgent === "string" ? payload.userAgent : undefined;
-    const response = licensedStream.decryptionKey
-      ? await materializeEncryptedLicensedSourceStream(licensedStream, userAgent)
-      : licensedStream.kind === "dash"
-        ? await materializeDashStreamToFlac(licensedStream, userAgent)
-        : await materializeLicensedSourceStream(licensedStream, {
-            maxBytes: MAX_AUDIO_BYTES,
-            userAgent,
-          });
+    const response = await materializeLicensedStreamToResponse(licensedStream, userAgent);
     if (!response.ok || !response.body) return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
     const headers = new Headers();
     headers.set("content-type", response.headers.get("content-type") || "audio/flac");
@@ -1858,6 +1863,404 @@ async function handleLicensedSourceMaterialize(request: Request): Promise<Respon
     }
     throw error;
   }
+}
+
+// --- Discover staging (Top-50 pre-download cache) ----------------------------
+// A hidden ".discover" folder under the shared music root holds pre-downloaded
+// "Top 50" tracks so the client can play them INSTANTLY without adding them to
+// the library. collectAudioFiles() skips dot-entries, so staged files never
+// appear in the scan / search / liked surfaces — yet /api/files/local/ still
+// streams them by path. "Keep" (like / playlist / download) promotes a staged
+// file into the visible library tree (handleDiscoverPromote); rotation deletes
+// un-kept tracks that fell off the Top 50 more than DISCOVER_STAGING_TTL_MS ago.
+const DISCOVER_STAGING_DIRNAME = ".discover";
+const DISCOVER_STAGING_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks after leaving the Top 50
+const DISCOVER_MANIFEST_VERSION = 1;
+const DISCOVER_DEFAULT_USER_AGENT = "spotify/1.0 (+https://spotify.fightingentropy.org)";
+
+// Mirrors the Worker's ResolvedAudioDownload, shipped over the proxy as JSON.
+type DiscoverResolvedCandidate = {
+  service?: string;
+  streamUrl?: string;
+  headers?: Record<string, string>;
+  contentType?: string;
+  licensedStream?: LicensedSourceStream;
+  userAgent?: string;
+};
+type DiscoverResolved = DiscoverResolvedCandidate & {
+  fallbacks?: DiscoverResolvedCandidate[];
+};
+
+type DiscoverStageItem = {
+  trackId: string;
+  title: string;
+  artist: string;
+  album?: string;
+  imageUrl?: string;
+  durationMs?: number;
+  resolved: DiscoverResolved;
+};
+
+type DiscoverStagingEntry = {
+  trackId: string;
+  stagedRelPath: string; // ".discover/<trackId>/<stem><ext>" under the shared root
+  coverRelPath?: string;
+  finalRelPath: string; // "<stem><ext>" — promote target; the library id is derived from this
+  finalId: string; // stableSongId(finalRelPath) — stable across promotion
+  title: string;
+  artist: string;
+  album?: string;
+  imageUrl?: string;
+  durationMs?: number;
+  firstSeenAt: number;
+  lastSeenAt: number; // last time this track appeared in a Top-50 sync
+};
+
+type DiscoverManifest = {
+  version: number;
+  entries: Record<string, DiscoverStagingEntry>;
+};
+
+function discoverStagingRoot(source: LibrarySource): string {
+  return resolve(source.root, DISCOVER_STAGING_DIRNAME);
+}
+function discoverManifestPath(source: LibrarySource): string {
+  return resolve(dirname(source.cachePath), "discover-staging.json");
+}
+
+let discoverManifestCache: DiscoverManifest | null = null;
+let discoverManifestChain: Promise<unknown> = Promise.resolve();
+const discoverInFlight = new Set<string>();
+
+async function readDiscoverManifest(source: LibrarySource): Promise<DiscoverManifest> {
+  if (discoverManifestCache) return discoverManifestCache;
+  try {
+    const raw = await readFile(discoverManifestPath(source), "utf8");
+    const parsed = JSON.parse(raw) as DiscoverManifest;
+    if (parsed && parsed.version === DISCOVER_MANIFEST_VERSION && parsed.entries && typeof parsed.entries === "object") {
+      discoverManifestCache = { version: DISCOVER_MANIFEST_VERSION, entries: parsed.entries };
+      return discoverManifestCache;
+    }
+  } catch {
+    // no manifest yet
+  }
+  discoverManifestCache = { version: DISCOVER_MANIFEST_VERSION, entries: {} };
+  return discoverManifestCache;
+}
+
+async function writeDiscoverManifest(source: LibrarySource, manifest: DiscoverManifest): Promise<void> {
+  discoverManifestCache = manifest;
+  const target = discoverManifestPath(source);
+  await mkdir(dirname(target), { recursive: true });
+  const tempPath = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await rename(tempPath, target);
+}
+
+// Serialize read-modify-write so concurrent sync/promote calls can't clobber the manifest.
+function withDiscoverManifestLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = discoverManifestChain.then(task, task);
+  discoverManifestChain = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
+// Walk the resolved descriptor's candidates (best first) materializing/fetching
+// until one yields audio bytes. Licensed streams remux locally (ffmpeg); plain
+// http(s) candidates are fetched directly with an allowlisted header set.
+async function fetchDiscoverCandidateAudio(resolved: DiscoverResolved): Promise<{ bytes: Buffer; ext: string } | null> {
+  const candidates = [resolved, ...(Array.isArray(resolved.fallbacks) ? resolved.fallbacks : [])];
+  for (const candidate of candidates) {
+    try {
+      if (candidate.licensedStream) {
+        const response = await materializeLicensedStreamToResponse(candidate.licensedStream, candidate.userAgent);
+        if (!response.ok) continue;
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES) continue;
+        return { bytes, ext: audioExtensionFromContentType(response.headers.get("content-type") || "audio/flac") };
+      }
+      const parsed = candidate.streamUrl ? parseHttpUrl(candidate.streamUrl) : null;
+      if (!parsed) continue;
+      const response = await fetchPublicHttpUrl(
+        parsed,
+        { headers: licensedMediaRequestHeaders(candidate.headers, candidate.userAgent || DISCOVER_DEFAULT_USER_AGENT) },
+        120_000,
+      );
+      if (!response.ok) continue;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES) continue;
+      const contentType = response.headers.get("content-type") || candidate.contentType || "audio/flac";
+      return {
+        bytes,
+        ext: extensionFromRemoteUrl(candidate.streamUrl || "", AUDIO_EXTENSIONS, audioExtensionFromContentType(contentType)),
+      };
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
+async function writeDiscoverStagedFile(
+  source: LibrarySource,
+  item: DiscoverStageItem,
+  audio: { bytes: Buffer; ext: string },
+): Promise<DiscoverStagingEntry> {
+  const stem = sanitizeFileName(`${item.artist} - ${item.title}`);
+  const ext = AUDIO_EXTENSIONS.has(audio.ext) ? audio.ext : ".flac";
+  const stagedDir = resolve(discoverStagingRoot(source), sanitizeFileName(item.trackId));
+  const stagedAudioPath = resolve(stagedDir, `${stem}${ext}`);
+  await mkdir(stagedDir, { recursive: true });
+  const tempPath = `${stagedAudioPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(tempPath, audio.bytes);
+  await rename(tempPath, stagedAudioPath);
+
+  const sidecar: LocalSidecar = {
+    version: 1,
+    title: item.title,
+    artist: item.artist,
+    album: item.album || undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  let coverRelPath: string | undefined;
+  if (item.imageUrl) {
+    const coverName = await saveRemoteImage(
+      item.imageUrl,
+      basename(stagedAudioPath, extname(stagedAudioPath)),
+      stagedAudioPath,
+    ).catch(() => undefined);
+    if (coverName) {
+      sidecar.coverFile = coverName;
+      coverRelPath = relative(source.root, resolve(stagedDir, coverName)).split(sep).join("/");
+    }
+  }
+  await writeSidecar(stagedAudioPath, sidecar);
+
+  const finalRelPath = `${stem}${ext}`;
+  const now = Date.now();
+  return {
+    trackId: item.trackId,
+    stagedRelPath: relative(source.root, stagedAudioPath).split(sep).join("/"),
+    coverRelPath,
+    finalRelPath,
+    finalId: stableSongId(finalRelPath),
+    title: item.title,
+    artist: item.artist,
+    album: item.album,
+    imageUrl: item.imageUrl,
+    durationMs: item.durationMs,
+    firstSeenAt: now,
+    lastSeenAt: now,
+  };
+}
+
+async function stageDiscoverTrack(source: LibrarySource, item: DiscoverStageItem): Promise<DiscoverStagingEntry | null> {
+  const manifest = await readDiscoverManifest(source);
+  const existing = manifest.entries[item.trackId];
+  if (existing && existsSync(resolve(source.root, existing.stagedRelPath))) return existing;
+  if (discoverInFlight.has(item.trackId)) return null;
+  discoverInFlight.add(item.trackId);
+  try {
+    const audio = await fetchDiscoverCandidateAudio(item.resolved);
+    if (!audio) return null;
+    const entry = await writeDiscoverStagedFile(source, item, audio);
+    return withDiscoverManifestLock(async () => {
+      const current = await readDiscoverManifest(source);
+      const firstSeenAt = current.entries[item.trackId]?.firstSeenAt ?? entry.firstSeenAt;
+      current.entries[item.trackId] = { ...entry, firstSeenAt };
+      await writeDiscoverManifest(source, current);
+      return current.entries[item.trackId];
+    });
+  } finally {
+    discoverInFlight.delete(item.trackId);
+  }
+}
+
+async function pruneDiscoverStaging(source: LibrarySource, presentTrackIds: Set<string>): Promise<void> {
+  await withDiscoverManifestLock(async () => {
+    const manifest = await readDiscoverManifest(source);
+    const now = Date.now();
+    let changed = false;
+    for (const [trackId, entry] of Object.entries(manifest.entries)) {
+      if (presentTrackIds.has(trackId)) {
+        entry.lastSeenAt = now;
+        changed = true;
+        continue;
+      }
+      if (now - entry.lastSeenAt > DISCOVER_STAGING_TTL_MS) {
+        await rm(resolve(discoverStagingRoot(source), sanitizeFileName(trackId)), { recursive: true, force: true }).catch(
+          () => {},
+        );
+        delete manifest.entries[trackId];
+        changed = true;
+      }
+    }
+    if (changed) await writeDiscoverManifest(source, manifest);
+  });
+}
+
+async function removeDiscoverEntry(source: LibrarySource, trackId: string): Promise<void> {
+  await withDiscoverManifestLock(async () => {
+    const manifest = await readDiscoverManifest(source);
+    if (manifest.entries[trackId]) {
+      delete manifest.entries[trackId];
+      await writeDiscoverManifest(source, manifest);
+    }
+  });
+  await rm(resolve(discoverStagingRoot(source), sanitizeFileName(trackId)), { recursive: true, force: true }).catch(() => {});
+}
+
+function discoverEntryToSong(entry: DiscoverStagingEntry): PlayerSong {
+  return {
+    id: entry.finalId,
+    title: entry.title,
+    artist: entry.artist,
+    album: entry.album || undefined,
+    imageUrl: entry.coverRelPath
+      ? `/api/files/local/${encodeRelativePath(entry.coverRelPath)}`
+      : entry.imageUrl || `/api/artwork/local/${encodeURIComponent(entry.finalId)}`,
+    audioUrl: `/api/files/local/${encodeRelativePath(entry.stagedRelPath)}`,
+    duration: entry.durationMs ? Math.round(entry.durationMs / 1000) : undefined,
+    source: "server",
+    localPath: entry.stagedRelPath,
+    staged: true,
+    discoverTrackId: entry.trackId,
+  };
+}
+
+function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+  const trackId = typeof value.trackId === "string" ? value.trackId.trim() : "";
+  const title = typeof value.title === "string" ? value.title.trim() : "";
+  const artist = typeof value.artist === "string" ? value.artist.trim() : "";
+  const resolved = value.resolved;
+  if (!trackId || !title || !artist || !resolved || typeof resolved !== "object") return null;
+  return {
+    trackId,
+    title,
+    artist,
+    album: typeof value.album === "string" ? value.album.trim() : undefined,
+    imageUrl: typeof value.imageUrl === "string" ? value.imageUrl.trim() : undefined,
+    durationMs: typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : undefined,
+    resolved: resolved as DiscoverResolved,
+  };
+}
+
+async function discoverStagingStatusBody(
+  source: LibrarySource,
+): Promise<{ entries: Array<{ trackId: string; id: string; audioUrl: string; duration?: number }> }> {
+  const manifest = await readDiscoverManifest(source);
+  const entries = Object.values(manifest.entries)
+    .filter((entry) => existsSync(resolve(source.root, entry.stagedRelPath)))
+    .map((entry) => ({
+      trackId: entry.trackId,
+      id: entry.finalId,
+      audioUrl: `/api/files/local/${encodeRelativePath(entry.stagedRelPath)}`,
+      duration: entry.durationMs ? Math.round(entry.durationMs / 1000) : undefined,
+    }));
+  return { entries };
+}
+
+async function handleDiscoverStagingStatus(request: Request): Promise<Response> {
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return jsonCached(request, { entries: [] }, { cacheControl: "private, max-age=10" });
+  return jsonCached(request, await discoverStagingStatusBody(source), { cacheControl: "private, max-age=10" });
+}
+
+async function handleDiscoverSync(request: Request): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return forbiddenLibraryResponse();
+  const payload = await readJsonBody<{ present?: unknown; stage?: unknown }>(request);
+  const present = Array.isArray(payload?.present)
+    ? payload.present.filter((value): value is string => typeof value === "string")
+    : [];
+  await pruneDiscoverStaging(source, new Set(present));
+  const stageRaw = Array.isArray(payload?.stage) ? payload.stage : [];
+  for (const raw of stageRaw) {
+    const item = normalizeDiscoverStageItem(raw);
+    // Materialize in the background — the long-running server has no time budget,
+    // and clients pick the newly-ready tracks up on their next status poll.
+    if (item) void stageDiscoverTrack(source, item).catch(() => {});
+  }
+  return json(await discoverStagingStatusBody(source));
+}
+
+async function handleDiscoverStageNow(request: Request): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return forbiddenLibraryResponse();
+  const item = normalizeDiscoverStageItem(await readJsonBody<unknown>(request));
+  if (!item) return json({ error: "trackId, title, artist, and resolved are required" }, { status: 400 });
+  const entry = await stageDiscoverTrack(source, item);
+  if (!entry) return json({ error: "Could not stage this track" }, { status: 502 });
+  return json(discoverEntryToSong(entry));
+}
+
+async function handleDiscoverPromote(request: Request): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return forbiddenLibraryResponse();
+  const payload = await readJsonBody<{ trackId?: unknown }>(request);
+  const trackId = typeof payload?.trackId === "string" ? payload.trackId.trim() : "";
+  if (!trackId) return json({ error: "trackId is required" }, { status: 400 });
+
+  const manifest = await readDiscoverManifest(source);
+  const entry = manifest.entries[trackId];
+  if (!entry) return notFound("Staged track not found");
+
+  // Already owned (same title+artist already in the library)? Keep that, drop the staging copy.
+  const snapshot = await getLibrary(source);
+  const duplicate = snapshot.songs
+    .map((song) => snapshot.entriesById.get(song.id))
+    .find((candidate): candidate is LocalSongEntry =>
+      Boolean(candidate && trackKey(candidate.song.title, candidate.song.artist) === trackKey(entry.title, entry.artist)),
+    );
+  if (duplicate) {
+    await removeDiscoverEntry(source, trackId);
+    return json(duplicate.song);
+  }
+
+  const stagedAudioPath = resolve(source.root, entry.stagedRelPath);
+  if (!existsSync(stagedAudioPath)) {
+    await removeDiscoverEntry(source, trackId);
+    return notFound("Staged audio is no longer available");
+  }
+
+  // Move the audio (and its cover) out of ".discover" into the visible library
+  // tree so the next scan picks it up and it becomes a real, likeable song.
+  const audioExt = extname(stagedAudioPath);
+  const finalAudioPath = await uniquePath(resolve(source.root, entry.finalRelPath));
+  const finalStem = basename(finalAudioPath, audioExt);
+  await rename(stagedAudioPath, finalAudioPath);
+
+  const sidecar: LocalSidecar = {
+    version: 1,
+    title: entry.title,
+    artist: entry.artist,
+    album: entry.album || undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  if (entry.coverRelPath) {
+    const stagedCover = resolve(source.root, entry.coverRelPath);
+    if (existsSync(stagedCover)) {
+      const coverName = `${finalStem}.cover${extname(stagedCover)}`;
+      const finalCover = resolve(dirname(finalAudioPath), coverName);
+      await rename(stagedCover, finalCover).catch(() => {});
+      if (existsSync(finalCover)) sidecar.coverFile = coverName;
+    }
+  }
+  await writeSidecar(finalAudioPath, sidecar);
+
+  const next = await getLibrary(source, true);
+  const finalRel = relative(source.root, finalAudioPath).split(sep).join("/");
+  const scanned = next.entriesByPath.get(finalRel);
+  await removeDiscoverEntry(source, trackId);
+  if (!scanned) return json({ error: "Promoted song could not be scanned" }, { status: 500 });
+  return json(scanned.song);
 }
 
 async function handleSongUpload(source: LibrarySource, request: Request): Promise<Response> {
@@ -2382,6 +2785,19 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/licensed-source/materialize" && request.method === "POST") {
     return handleLicensedSourceMaterialize(request);
+  }
+
+  if (pathname === "/api/discover/staging" && request.method === "GET") {
+    return handleDiscoverStagingStatus(request);
+  }
+  if (pathname === "/api/discover/sync" && request.method === "POST") {
+    return handleDiscoverSync(request);
+  }
+  if (pathname === "/api/discover/stage" && request.method === "POST") {
+    return handleDiscoverStageNow(request);
+  }
+  if (pathname === "/api/discover/promote" && request.method === "POST") {
+    return handleDiscoverPromote(request);
   }
 
   if (pathname === "/api/songs" && request.method === "GET") {
