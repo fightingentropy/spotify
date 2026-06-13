@@ -3,6 +3,7 @@
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
 import { isOfflinePlaybackSong } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
+import { getUpcomingPlaybackIndices, type UpcomingPlaybackState } from "@/store/player";
 import { resolveOfflinePlaybackSong } from "@/client/offline";
 
 const PLAYBACK_CACHE = "spotify-playback-v1";
@@ -161,11 +162,24 @@ export function warmPlaybackSong(song: PlayerSong, priority = false): void {
   void pumpWarmPlaybackQueue();
 }
 
-export async function prefetchUpcomingPlayback(queue: PlayerSong[], currentIndex: number): Promise<void> {
+export async function prefetchUpcomingPlayback(
+  queue: PlayerSong[],
+  currentIndex: number,
+  // Playback-order state, so shuffle warms the songs that will actually play next
+  // (redo stack + shuffle pool) instead of the linear array neighbors. Defaults to
+  // linear order for callers that don't track shuffle.
+  state?: UpcomingPlaybackState,
+): Promise<void> {
   if (shouldSkipSpeculativeMediaFetch()) return;
   if (!Number.isInteger(currentIndex) || currentIndex < 0) return;
-  const upcoming = queue
-    .slice(currentIndex + 1, currentIndex + PLAYBACK_PREFETCH_FORWARD_TRACKS + 1)
+  const upcoming = getUpcomingPlaybackIndices(
+    queue.length,
+    currentIndex,
+    PLAYBACK_PREFETCH_FORWARD_TRACKS,
+    state ?? { shuffle: false, repeatMode: "off", playFuture: [], shuffleRemaining: [] },
+  )
+    .map((index) => queue[index])
+    .filter((song): song is PlayerSong => song != null)
     .map((song) => resolveOfflinePlaybackSong(song))
     .filter((song) => !isBrowserLocalSong(song));
   const audioUrls = uniqueStrings(

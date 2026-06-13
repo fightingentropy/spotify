@@ -273,6 +273,12 @@ function PlayerBar(): React.ReactElement | null {
   const crossfadeCancelRef = useRef<(() => void) | null>(null);
   const crossfadeCommitSongIdRef = useRef<string | null>(null);
   const crossfadeStartedRef = useRef<boolean>(false);
+  // The next-track target chosen when the fade armed. forceCommit (the
+  // ended-before-the-ramp-finished path, common on backgrounded mobile) must
+  // reuse THIS exact target, not recompute it: in shuffle mode computeNextTarget()
+  // draws a fresh random index, so recomputing would commit a different song than
+  // the one already loaded and audibly fading into the incoming element.
+  const crossfadeTargetRef = useRef<{ playbackSong: PlayerSong; index: number; fromFuture: boolean } | null>(null);
   // Latest crossfade trigger / force-commit, called from the active element's
   // timeupdate/ended handlers (which fire even when the tab is backgrounded).
   const maybeStartCrossfadeRef = useRef<() => void>(() => {});
@@ -668,6 +674,7 @@ function PlayerBar(): React.ReactElement | null {
     suppressAutoLoadRef.current = false;
     crossfadingRef.current = false;
     crossfadeStartedRef.current = false;
+    crossfadeTargetRef.current = null;
     cancel?.();
   }, []);
 
@@ -972,8 +979,8 @@ function PlayerBar(): React.ReactElement | null {
 
   useEffect(() => {
     if (!currentSong) return;
-    void prefetchUpcomingPlayback(queue, currentIndex);
-  }, [currentIndex, currentSong?.id, queue]);
+    void prefetchUpcomingPlayback(queue, currentIndex, { shuffle, repeatMode, playFuture, shuffleRemaining });
+  }, [currentIndex, currentSong?.id, queue, shuffle, repeatMode, playFuture, shuffleRemaining]);
 
   useEffect(() => {
     return () => {
@@ -1382,6 +1389,7 @@ function PlayerBar(): React.ReactElement | null {
       suppressAutoLoadRef.current = false;
       crossfadingRef.current = false;
       crossfadeStartedRef.current = false;
+      crossfadeTargetRef.current = null;
     };
 
     const startCrossfade = () => {
@@ -1407,6 +1415,7 @@ function PlayerBar(): React.ReactElement | null {
       crossfadeStartedRef.current = true;
       crossfadingRef.current = true;
       suppressAutoLoadRef.current = true;
+      crossfadeTargetRef.current = target;
 
       if (target.playbackSong.audioUrl) loadAudioSource(incoming, target.playbackSong.audioUrl);
       try { incoming.currentTime = 0; } catch {}
@@ -1452,6 +1461,7 @@ function PlayerBar(): React.ReactElement | null {
         suppressAutoLoadRef.current = false;
         crossfadingRef.current = false;
         crossfadeStartedRef.current = false;
+        crossfadeTargetRef.current = null;
       };
       crossfadeCancelRef.current = cancelFade;
 
@@ -1484,7 +1494,12 @@ function PlayerBar(): React.ReactElement | null {
       crossfadeCancelRef.current = null;
       const fromAudio = getActiveAudio();
       const incoming = getInactiveAudio();
-      const target = computeNextTarget();
+      // Reuse the target captured when the fade armed — the incoming element
+      // already has THIS song loaded and partially faded in. Recomputing would,
+      // in shuffle mode, draw a different random index and play one song while the
+      // queue advances to another. Fall back to a fresh pick only if (defensively)
+      // no target was captured, which keeps the queue from wedging.
+      const target = crossfadeTargetRef.current ?? computeNextTarget();
       if (!incoming || !target) {
         // Nothing to commit into; clear the fade so the onEnded fallback can run.
         suppressAutoLoadRef.current = false;

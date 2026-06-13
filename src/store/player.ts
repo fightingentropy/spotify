@@ -253,6 +253,72 @@ export function chooseNextShuffleIndex(queueLength: number, currentIndex: number
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+export type UpcomingPlaybackState = {
+  shuffle: boolean;
+  repeatMode: PlayerState["repeatMode"];
+  playFuture: number[];
+  shuffleRemaining: number[];
+};
+
+// The next `count` queue indices in *playback* order — the order next() would
+// actually visit them, not array order. Used to prefetch/warm upcoming tracks so
+// the warmer doesn't fetch the wrong songs under shuffle. Mirrors next() and the
+// QueueSheet "up next" list: in shuffle, the redo stack (playFuture, top first)
+// comes before the shuffle pool. Pool picks are random at play time, so warming
+// the pool's leading entries is a best-effort hedge for the next fresh draw.
+export function getUpcomingPlaybackIndices(
+  queueLength: number,
+  currentIndex: number,
+  count: number,
+  state: UpcomingPlaybackState,
+): number[] {
+  if (queueLength <= 0 || count <= 0) return [];
+  const safeCurrent = clampQueueIndex(queueLength, currentIndex);
+  const result: number[] = [];
+  const seen = new Set<number>([safeCurrent]);
+  const push = (index: number | undefined): void => {
+    if (index === undefined || !Number.isInteger(index) || index < 0 || index >= queueLength) return;
+    if (seen.has(index)) return;
+    seen.add(index);
+    result.push(index);
+  };
+
+  if (state.shuffle) {
+    if (queueLength <= 1) return [];
+    // Deterministic redo stack first (top of playFuture is the next track).
+    for (let i = state.playFuture.length - 1; i >= 0 && result.length < count; i -= 1) {
+      push(state.playFuture[i]);
+    }
+    if (result.length < count) {
+      const validRemaining = validShuffleRemaining(queueLength, safeCurrent, state.shuffleRemaining);
+      // Mirror next()'s repeat-off stop: once the pool is spent and we're not
+      // repeating, there's no further track to warm.
+      const pool =
+        validRemaining.length > 0
+          ? validRemaining
+          : state.repeatMode === "all"
+            ? createShuffleRemaining(queueLength, safeCurrent)
+            : [];
+      for (const index of pool) {
+        if (result.length >= count) break;
+        push(index);
+      }
+    }
+    return result;
+  }
+
+  // Linear: walk forward, wrapping to the start once if repeat "all".
+  for (let index = safeCurrent + 1; index < queueLength && result.length < count; index += 1) {
+    push(index);
+  }
+  if (state.repeatMode === "all") {
+    for (let index = 0; index <= safeCurrent && result.length < count; index += 1) {
+      push(index);
+    }
+  }
+  return result;
+}
+
 export function sleepTimerRemainingMinutes(endsAt: number, now = Date.now()): number {
   return Math.max(1, Math.ceil((endsAt - now) / 60_000));
 }

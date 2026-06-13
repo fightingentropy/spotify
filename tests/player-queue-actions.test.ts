@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { usePlayerStore } from "../src/store/player";
+import { getUpcomingPlaybackIndices, usePlayerStore } from "../src/store/player";
 import type { PlayerSong } from "../src/types/player";
 
 function song(id: string): PlayerSong {
@@ -226,6 +226,94 @@ describe("removeFromQueue", () => {
     expect(idsAt(state.playFuture)).toEqual(["d"]);
     expect(state.shuffleRemaining).toEqual([2]);
     expect(idsAt(state.shuffleRemaining)).toEqual(["d"]);
+  });
+});
+
+describe("getUpcomingPlaybackIndices", () => {
+  const linear = (repeatMode: "off" | "all" = "off") => ({
+    shuffle: false,
+    repeatMode,
+    playFuture: [] as number[],
+    shuffleRemaining: [] as number[],
+  });
+
+  test("linear mode walks forward in array order", () => {
+    expect(getUpcomingPlaybackIndices(5, 1, 3, linear())).toEqual([2, 3, 4]);
+  });
+
+  test("linear mode truncates at the end of the queue when repeat is off", () => {
+    expect(getUpcomingPlaybackIndices(5, 3, 3, linear())).toEqual([4]);
+    expect(getUpcomingPlaybackIndices(5, 4, 3, linear())).toEqual([]);
+  });
+
+  test("linear mode wraps once when repeat is all", () => {
+    expect(getUpcomingPlaybackIndices(5, 3, 3, linear("all"))).toEqual([4, 0, 1]);
+    // Never includes the current index, even while wrapping.
+    expect(getUpcomingPlaybackIndices(3, 1, 5, linear("all"))).toEqual([2, 0]);
+  });
+
+  test("shuffle drains the redo stack (top first) before the pool", () => {
+    const indices = getUpcomingPlaybackIndices(10, 0, 3, {
+      shuffle: true,
+      repeatMode: "off",
+      playFuture: [7, 2], // top of stack (2) plays next, then 7
+      shuffleRemaining: [2, 5, 7, 9],
+    });
+    // 2 and 7 come from the redo stack; the pool then fills with the next unseen
+    // entry (5), skipping 2 and 7 which are already queued.
+    expect(indices).toEqual([2, 7, 5]);
+  });
+
+  test("shuffle with an empty redo stack warms the pool's leading entries", () => {
+    expect(
+      getUpcomingPlaybackIndices(10, 0, 3, {
+        shuffle: true,
+        repeatMode: "off",
+        playFuture: [],
+        shuffleRemaining: [3, 5, 8],
+      }),
+    ).toEqual([3, 5, 8]);
+  });
+
+  test("shuffle stops at an exhausted pool when repeat is off, refills when repeat is all", () => {
+    expect(
+      getUpcomingPlaybackIndices(4, 2, 3, {
+        shuffle: true,
+        repeatMode: "off",
+        playFuture: [],
+        shuffleRemaining: [],
+      }),
+    ).toEqual([]);
+
+    // repeat "all" refills from the full queue minus the current index.
+    expect(
+      getUpcomingPlaybackIndices(4, 2, 3, {
+        shuffle: true,
+        repeatMode: "all",
+        playFuture: [],
+        shuffleRemaining: [],
+      }),
+    ).toEqual([0, 1, 3]);
+  });
+
+  test("never returns the current index and dedupes across stack + pool", () => {
+    const indices = getUpcomingPlaybackIndices(6, 3, 5, {
+      shuffle: true,
+      repeatMode: "all",
+      playFuture: [3, 1], // 3 == current, must be dropped; 1 is valid
+      shuffleRemaining: [1, 4],
+    });
+    expect(indices).not.toContain(3);
+    expect(new Set(indices).size).toBe(indices.length);
+    expect(indices).toEqual([1, 4]);
+  });
+
+  test("degenerate inputs yield no upcoming tracks", () => {
+    expect(getUpcomingPlaybackIndices(0, -1, 3, linear())).toEqual([]);
+    expect(getUpcomingPlaybackIndices(5, 1, 0, linear())).toEqual([]);
+    expect(
+      getUpcomingPlaybackIndices(1, 0, 3, { shuffle: true, repeatMode: "off", playFuture: [], shuffleRemaining: [] }),
+    ).toEqual([]);
   });
 });
 
