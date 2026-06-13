@@ -11,6 +11,7 @@ import { ChevronDown, ChevronUp, Heart, ListMusic, Moon, Pause, Play, SkipBack, 
 import { CoverImage } from "@/components/CoverImage";
 import { MarqueeText } from "@/components/MarqueeText";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
+import { equalPowerGain, scheduleEqualPowerRamp } from "@/lib/crossfade-curve";
 import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
 import type { PlaybackStateSnapshot } from "@/lib/playback-state";
@@ -1639,14 +1640,10 @@ function PlayerBar(): React.ReactElement | null {
         const toNode = webAudioNodesRef.current.get(incoming);
         if (ctx && fromNode && toNode) {
           const t0 = ctx.currentTime;
-          const fromParam = fromNode.gain.gain;
-          const toParam = toNode.gain.gain;
-          fromParam.cancelScheduledValues(t0);
-          fromParam.setValueAtTime(fromParam.value, t0);
-          fromParam.linearRampToValueAtTime(0, t0 + fadeWindow);
-          toParam.cancelScheduledValues(t0);
-          toParam.setValueAtTime(0, t0);
-          toParam.linearRampToValueAtTime(targetVol, t0 + fadeWindow);
+          // Equal-power curves (cos out / sin in) instead of straight linear ramps,
+          // so the overlap doesn't dip ~3 dB through the middle of the fade.
+          scheduleEqualPowerRamp(fromNode.gain.gain, t0, fadeWindow, targetVol, "out");
+          scheduleEqualPowerRamp(toNode.gain.gain, t0, fadeWindow, targetVol, "in");
         }
         // Commit when the fade window elapses. If the app is backgrounded the
         // timeout may be throttled — the outgoing track's `ended` event then
@@ -1662,8 +1659,10 @@ function PlayerBar(): React.ReactElement | null {
           }
           const elapsed = Math.min(fadeMs, performance.now() - startTs);
           const t = fadeMs > 0 ? elapsed / fadeMs : 1;
-          const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * (1 - t));
-          const toVol = Math.max(0, targetVol * t);
+          // Equal-power curve (cos out / sin in) — the same shape the iOS gain-node
+          // path uses — so neither path dips in loudness mid-crossfade.
+          const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * equalPowerGain(t, "out"));
+          const toVol = Math.max(0, targetVol * equalPowerGain(t, "in"));
           if ((fromAudio.currentTime || 0) >= fromStartTime) setOutputLevel(fromAudio, fromVol);
           setOutputLevel(incoming, toVol);
           if (elapsed >= fadeMs) finish();
