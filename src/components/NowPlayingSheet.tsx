@@ -33,6 +33,8 @@ import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 const SLEEP_TIMER_MINUTE_OPTIONS = [5, 15, 30, 45, 60];
+// Horizontal artwork-swipe distance (px) that commits to a track change.
+const COVER_SWIPE_COMMIT_PX = 64;
 
 type NowPlayingSheetProps = {
   open: boolean;
@@ -104,6 +106,11 @@ export default function NowPlayingSheet({
   const touchStartYRef = useRef<number | null>(null);
   const swipeDismissAllowedRef = useRef(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  // Horizontal swipe on the artwork to skip tracks (mobile). The axis is locked
+  // on the first move so it never fights the vertical swipe-to-dismiss or scroll.
+  const coverSwipeRef = useRef<{ startX: number; startY: number; axis: "x" | "y" | null; dx: number } | null>(null);
+  const [coverDragX, setCoverDragX] = useState(0);
+  const [coverSwiping, setCoverSwiping] = useState(false);
 
   const offlineRecords = useOfflineStore((state) => state.records);
   const lyricsSong = useMemo(
@@ -196,6 +203,47 @@ export default function NowPlayingSheet({
     if (!dismissAllowed || startY == null || endY == null) return;
     if (endY - startY > 80) {
       onClose();
+    }
+  }
+
+  function handleCoverTouchStart(event: TouchEvent<HTMLDivElement>) {
+    const touch = event.touches[0];
+    if (!touch) return;
+    coverSwipeRef.current = { startX: touch.clientX, startY: touch.clientY, axis: null, dx: 0 };
+    setCoverSwiping(true);
+  }
+
+  function handleCoverTouchMove(event: TouchEvent<HTMLDivElement>) {
+    const swipe = coverSwipeRef.current;
+    const touch = event.touches[0];
+    if (!swipe || !touch) return;
+    const dx = touch.clientX - swipe.startX;
+    const dy = touch.clientY - swipe.startY;
+    if (swipe.axis === null) {
+      // Wait until there's enough movement to tell intent apart, then lock.
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      swipe.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    }
+    if (swipe.axis !== "x") return;
+    // Horizontal: take over. Cancel the sheet's vertical swipe-to-dismiss and
+    // follow the finger so the artwork tracks the gesture.
+    swipeDismissAllowedRef.current = false;
+    swipe.dx = dx;
+    setCoverDragX(dx);
+  }
+
+  function handleCoverTouchEnd() {
+    const swipe = coverSwipeRef.current;
+    coverSwipeRef.current = null;
+    setCoverSwiping(false);
+    setCoverDragX(0);
+    if (!swipe || swipe.axis !== "x") return;
+    if (swipe.dx <= -COVER_SWIPE_COMMIT_PX) {
+      void impactLight();
+      next();
+    } else if (swipe.dx >= COVER_SWIPE_COMMIT_PX) {
+      void impactLight();
+      previous();
     }
   }
 
@@ -322,17 +370,30 @@ export default function NowPlayingSheet({
                   className="mx-auto aspect-square w-full shadow-2xl shadow-black/30"
                 />
               ) : (
-                <div className="wf-now-playing-art mx-auto w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
-                  <CoverImage
-                    src={song.imageUrl || "/apple-icon.png"}
-                    networkSrc={song.networkImageUrl}
-                    alt={song.title}
-                    width={1200}
-                    height={1200}
-                    loading="eager"
-                    className="w-full aspect-square object-cover"
-                    sizes="(max-width: 768px) 100vw, 448px"
-                  />
+                <div
+                  className="mx-auto w-full"
+                  onTouchStart={handleCoverTouchStart}
+                  onTouchMove={handleCoverTouchMove}
+                  onTouchEnd={handleCoverTouchEnd}
+                  onTouchCancel={handleCoverTouchEnd}
+                  style={{
+                    transform: coverDragX ? `translateX(${coverDragX}px)` : undefined,
+                    transition: coverSwiping ? "none" : "transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)",
+                    touchAction: "pan-y",
+                  }}
+                >
+                  <div className="wf-now-playing-art w-full shadow-2xl shadow-black/30 rounded-2xl overflow-hidden">
+                    <CoverImage
+                      src={song.imageUrl || "/apple-icon.png"}
+                      networkSrc={song.networkImageUrl}
+                      alt={song.title}
+                      width={1200}
+                      height={1200}
+                      loading="eager"
+                      className="w-full aspect-square object-cover"
+                      sizes="(max-width: 768px) 100vw, 448px"
+                    />
+                  </div>
                 </div>
               )}
 
