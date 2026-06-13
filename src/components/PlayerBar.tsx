@@ -188,6 +188,21 @@ function audioVolumeIsWritable(audio: HTMLAudioElement): boolean {
   return audioVolumeWritableCache;
 }
 
+// iOS (incl. iPadOS in desktop-UA mode, and the Capacitor WKWebView) never lets
+// JS change the actual output volume — but as of iOS 26 a write to .volume now
+// READS BACK the written value, so the probe above false-positives and the app
+// wrongly takes the audio.volume crossfade path (which is silent on iOS: both
+// tracks stay at full and the outgoing is hard-paused at the window's end). So
+// detect iOS directly and force the Web Audio gain-node path there regardless of
+// what the probe reports.
+function isIosLikePlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/iP(hone|od|ad)/.test(ua)) return true;
+  // iPadOS 13+ Safari reports as "Macintosh"; real Macs have no touch points.
+  return /Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1;
+}
+
 // Our own origins whose authed audio endpoints need the session cookie, so the
 // <audio> element must fetch them with credentials when routed through the Web
 // Audio API (otherwise the credentialed-CORS response isn't sent and the source
@@ -582,8 +597,14 @@ function PlayerBar(): React.ReactElement | null {
   // first load (before the gesture that builds the graph).
   const decideWebAudioMode = useCallback((): boolean => {
     if (webAudioModeRef.current === null) {
-      const probe = audioARef.current ?? audioBRef.current;
-      if (probe) webAudioModeRef.current = !audioVolumeIsWritable(probe);
+      // iOS must always use the gain-node path: audio.volume can't change output
+      // there, and the probe false-positives on iOS 26 (see isIosLikePlatform).
+      if (isIosLikePlatform()) {
+        webAudioModeRef.current = true;
+      } else {
+        const probe = audioARef.current ?? audioBRef.current;
+        if (probe) webAudioModeRef.current = !audioVolumeIsWritable(probe);
+      }
     }
     return webAudioModeRef.current === true;
   }, []);

@@ -2482,6 +2482,61 @@ async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
   return text(`Missing built frontend at ${distDir}. Run bun run build first.`, 500);
 }
 
+// Credentialed CORS. The native iOS app (capacitor://localhost) must read audio
+// responses through the Web Audio API to crossfade, which makes the <audio>
+// element fetch with crossOrigin set — a credentialed CORS request the browser
+// blocks unless the response echoes the exact Origin (never "*") with
+// Allow-Credentials. Mirrors the Worker's allowlist (worker/index.ts).
+const CORS_ALLOWED_ORIGINS = new Set<string>([
+  "capacitor://localhost",
+  "https://localhost",
+  "https://spotify.fightingentropy.org",
+  "https://spotify.erlinhoxha.workers.dev",
+]);
+
+function corsAllowOrigin(origin: string | null): string | null {
+  if (!origin) return null;
+  if (CORS_ALLOWED_ORIGINS.has(origin)) return origin;
+  // Local dev (vite / loopback) on any port.
+  try {
+    const url = new URL(origin);
+    if (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+    ) {
+      return origin;
+    }
+  } catch {}
+  return null;
+}
+
+function setCorsHeaders(headers: Headers, allowOrigin: string): void {
+  headers.set("Access-Control-Allow-Origin", allowOrigin);
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.append("Vary", "Origin");
+  // Range playback needs these visible to the client / Web Audio.
+  headers.set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
+}
+
+// Add CORS headers to a finished response. serveFile/Bun.file responses can carry
+// immutable headers, so fall back to rebuilding with a mutable copy.
+function applyCors(request: Request, response: Response): Response {
+  const allow = corsAllowOrigin(request.headers.get("origin"));
+  if (!allow) return response;
+  try {
+    setCorsHeaders(response.headers, allow);
+    return response;
+  } catch {
+    const headers = new Headers(response.headers);
+    setCorsHeaders(headers, allow);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+}
+
 Bun.serve({
   hostname: host,
   port,
@@ -2489,16 +2544,34 @@ Bun.serve({
   async fetch(request, server) {
     const url = new URL(request.url);
     rememberRequestPeer(request, server.requestIP(request)?.address ?? null);
-    try {
-      if (url.pathname.startsWith("/api/")) {
-        return await handleApi(request, url);
+    // Credentialed CORS preflight: echo the allowlisted Origin, never "*".
+    if (request.method === "OPTIONS") {
+      const allow = corsAllowOrigin(request.headers.get("origin"));
+      const headers = new Headers();
+      if (allow) {
+        setCorsHeaders(headers, allow);
+        headers.set("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS");
+        headers.set(
+          "Access-Control-Allow-Headers",
+          request.headers.get("access-control-request-headers") || "Content-Type, Range, Authorization",
+        );
+        headers.set("Access-Control-Max-Age", "86400");
       }
-      return await serveStaticAsset(request, url);
+      return new Response(null, { status: 204, headers });
+    }
+    try {
+      const response = url.pathname.startsWith("/api/")
+        ? await handleApi(request, url)
+        : await serveStaticAsset(request, url);
+      return applyCors(request, response);
     } catch (error) {
       console.error(error);
-      return json(
-        { error: error instanceof Error ? error.message : "Internal server error" },
-        { status: 500 },
+      return applyCors(
+        request,
+        json(
+          { error: error instanceof Error ? error.message : "Internal server error" },
+          { status: 500 },
+        ),
       );
     }
   },
