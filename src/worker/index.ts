@@ -2965,17 +2965,55 @@ function applySecurityHeaders(headers: Headers): void {
   }
 }
 
+// Origins allowed to read audio cross-origin WITH credentials. The native app
+// runs at capacitor://localhost and pulls audio from the public origin, so the
+// <audio> element (crossOrigin="use-credentials", needed to route through the
+// Web Audio API for real iOS crossfade) must see a credentialed-CORS-clean
+// response. Credentialed CORS forbids "*", so we echo the exact request Origin
+// only when it's one of our own surfaces — never an arbitrary site.
+const CORS_ALLOWED_ORIGINS = new Set<string>([
+  "capacitor://localhost",
+  "https://spotify.fightingentropy.org",
+  "https://spotify.erlinhoxha.workers.dev",
+]);
+
+function corsAllowOrigin(origin: string | undefined | null): string | null {
+  if (!origin) return null;
+  if (CORS_ALLOWED_ORIGINS.has(origin)) return origin;
+  // Local dev (vite / local music server) on any loopback port.
+  try {
+    const url = new URL(origin);
+    if ((url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) {
+      return origin;
+    }
+  } catch {}
+  return null;
+}
+
+function applyCorsHeaders(headers: Headers, allowOrigin: string): void {
+  headers.set("Access-Control-Allow-Origin", allowOrigin);
+  headers.set("Access-Control-Allow-Credentials", "true");
+  // Append, don't overwrite: a cache-keying Vary may already be present.
+  headers.append("Vary", "Origin");
+  // Range playback needs these visible to the client / Web Audio.
+  headers.set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
+}
+
 // Attach security headers in place when possible. Proxied/upstream responses
 // (e.g. streamed back from the Mac mini) carry immutable headers, so set()
 // throws — in that case rebuild with a mutable copy so the headers are never
-// dropped and a proxy response can't take down the whole API with a 500.
-export function withSecurityHeaders(res: Response): Response {
+// dropped and a proxy response can't take down the whole API with a 500. When
+// the request carries an allowlisted Origin, credentialed CORS headers are added
+// the same way so cross-origin audio (native app) is readable by Web Audio.
+export function withSecurityHeaders(res: Response, corsAllow: string | null = null): Response {
   try {
     applySecurityHeaders(res.headers);
+    if (corsAllow) applyCorsHeaders(res.headers, corsAllow);
     return res;
   } catch {
     const headers = new Headers(res.headers);
     applySecurityHeaders(headers);
+    if (corsAllow) applyCorsHeaders(headers, corsAllow);
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   }
 }
@@ -2984,7 +3022,8 @@ const app = new Hono<AppEnv>();
 
 app.use("*", async (c, next) => {
   await next();
-  const secured = withSecurityHeaders(c.res);
+  const corsAllow = corsAllowOrigin(c.req.header("Origin"));
+  const secured = withSecurityHeaders(c.res, corsAllow);
   if (secured !== c.res) c.res = secured;
 });
 

@@ -18,6 +18,7 @@ import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureD
 import { PLAYBACK_SEEK_REQUEST_EVENT, publishPlaybackPosition } from "@/lib/playback-position";
 import { useMediaSession } from "@/lib/use-media-session";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
+import { NATIVE_API_ORIGIN } from "@/lib/native-api";
 import {
   fetchServerPlaybackState,
   getPlaybackDeviceId,
@@ -186,6 +187,31 @@ function audioVolumeIsWritable(audio: HTMLAudioElement): boolean {
   return audioVolumeWritableCache;
 }
 
+// Our own origins whose authed audio endpoints need the session cookie, so the
+// <audio> element must fetch them with credentials when routed through the Web
+// Audio API (otherwise the credentialed-CORS response isn't sent and the source
+// node outputs silence). Third-party hosts (radio) use anonymous CORS instead;
+// same-origin / blob / capacitor sources need no crossOrigin at all.
+const CREDENTIALED_AUDIO_ORIGINS = new Set<string>([
+  NATIVE_API_ORIGIN,
+  "https://spotify.erlinhoxha.workers.dev",
+]);
+
+// The crossOrigin mode the <audio> element must use for a resolved src so that,
+// when routed through Web Audio, the MediaElementSourceNode is CORS-clean (audible
+// rather than silenced). null => remove the attribute (no-cors, same-origin).
+function crossOriginForAudioSrc(src: string): "anonymous" | "use-credentials" | null {
+  if (/^(blob:|data:|file:|capacitor:)/i.test(src)) return null;
+  try {
+    const url = new URL(src, typeof location !== "undefined" ? location.origin : undefined);
+    if (typeof location !== "undefined" && url.origin === location.origin) return null;
+    if (CREDENTIALED_AUDIO_ORIGINS.has(url.origin)) return "use-credentials";
+    return "anonymous";
+  } catch {
+    return null;
+  }
+}
+
 function PlayerBar(): React.ReactElement | null {
   // Individual selectors so we only re-render when each specific value changes
   // (instead of on every store mutation, as a full destructure would cause).
@@ -279,6 +305,15 @@ function PlayerBar(): React.ReactElement | null {
   // draws a fresh random index, so recomputing would commit a different song than
   // the one already loaded and audibly fading into the incoming element.
   const crossfadeTargetRef = useRef<{ playbackSong: PlayerSong; index: number; fromFuture: boolean } | null>(null);
+  // Web Audio crossfade (iOS only): HTMLMediaElement.volume is read-only on iOS,
+  // so both elements are routed through GainNodes to fade. The graph is built
+  // lazily on the first play gesture (an AudioContext must be started inside a
+  // user gesture). webAudioModeRef: null = undecided, true = use gain nodes
+  // (iOS), false = use audio.volume directly (desktop/Android — unchanged path).
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const webAudioNodesRef = useRef<WeakMap<HTMLAudioElement, { source: MediaElementAudioSourceNode; gain: GainNode }>>(new WeakMap());
+  const webAudioModeRef = useRef<boolean | null>(null);
+  const webAudioFailedRef = useRef<boolean>(false);
   // Latest crossfade trigger / force-commit, called from the active element's
   // timeupdate/ended handlers (which fire even when the tab is backgrounded).
   const maybeStartCrossfadeRef = useRef<() => void>(() => {});
@@ -533,6 +568,93 @@ function PlayerBar(): React.ReactElement | null {
     releaseNativeOfflineAudioObjectUrl(src);
   }, []);
 
+  // --- Web Audio crossfade plumbing (iOS) -----------------------------------
+  // Decide once whether to use the Web Audio gain path (iOS, where audio.volume
+  // is read-only) or leave audio.volume alone (desktop/Android). Cheap + cached
+  // and needs no user gesture, so the right crossOrigin can be set from the very
+  // first load (before the gesture that builds the graph).
+  const decideWebAudioMode = useCallback((): boolean => {
+    if (webAudioModeRef.current === null) {
+      const probe = audioARef.current ?? audioBRef.current;
+      if (probe) webAudioModeRef.current = !audioVolumeIsWritable(probe);
+    }
+    return webAudioModeRef.current === true;
+  }, []);
+
+  // Match the element's crossOrigin to what its src needs to be Web-Audio-readable
+  // (credentialed for our authed API, anonymous for third-party radio, none for
+  // same-origin/blob). MUST run before the src is assigned — crossOrigin only
+  // takes effect on the next load. No-op on desktop, preserving today's loads.
+  const applyAudioCrossOrigin = useCallback((audio: HTMLAudioElement, absoluteSrc: string) => {
+    if (!decideWebAudioMode()) {
+      if (audio.crossOrigin !== null) audio.crossOrigin = null;
+      return;
+    }
+    const next = crossOriginForAudioSrc(absoluteSrc);
+    if (audio.crossOrigin !== next) audio.crossOrigin = next;
+  }, [decideWebAudioMode]);
+
+  // Build the AudioContext + per-element source→gain→destination graph lazily.
+  // Returns true when the gain path is active. Call from a user gesture so the
+  // context can start; createMediaElementSource is permanent + once-per-element,
+  // so it's guarded and cached.
+  const ensureWebAudioGraph = useCallback((): boolean => {
+    if (!decideWebAudioMode() || webAudioFailedRef.current) return false;
+    const a = audioARef.current;
+    const b = audioBRef.current;
+    if (!a || !b) return false;
+    try {
+      let ctx = audioContextRef.current;
+      if (!ctx) {
+        const Ctor =
+          window.AudioContext ??
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) {
+          webAudioFailedRef.current = true;
+          webAudioModeRef.current = false;
+          return false;
+        }
+        ctx = new Ctor();
+        audioContextRef.current = ctx;
+      }
+      for (const el of [a, b]) {
+        if (!webAudioNodesRef.current.has(el)) {
+          const source = ctx.createMediaElementSource(el);
+          const gain = ctx.createGain();
+          gain.gain.value = mutedRef.current ? 0 : volumeRef.current;
+          source.connect(gain);
+          gain.connect(ctx.destination);
+          webAudioNodesRef.current.set(el, { source, gain });
+        }
+      }
+      if (ctx.state === "suspended") void ctx.resume().catch(() => {});
+      return true;
+    } catch {
+      // Fall back to the audio.volume path (clean cut on iOS) if the graph can't
+      // be built — never leave the player silent.
+      webAudioFailedRef.current = true;
+      webAudioModeRef.current = false;
+      return false;
+    }
+  }, [decideWebAudioMode]);
+
+  // Set an element's effective output level via its GainNode when routed through
+  // Web Audio (cancelling any in-flight ramp), else via audio.volume. One call
+  // site for both the crossfade ramp and ordinary volume control.
+  const setOutputLevel = useCallback((audio: HTMLAudioElement, level: number) => {
+    const clamped = Math.max(0, level);
+    const node = webAudioNodesRef.current.get(audio);
+    const ctx = audioContextRef.current;
+    if (node && ctx) {
+      try {
+        node.gain.gain.cancelScheduledValues(ctx.currentTime);
+        node.gain.gain.setValueAtTime(clamped, ctx.currentTime);
+        return;
+      } catch {}
+    }
+    try { audio.volume = clamped; } catch {}
+  }, []);
+
   const unloadAudioSource = useCallback((audio: HTMLAudioElement) => {
     const current = audioSourceStateRef.current.get(audio);
     current?.hls?.destroy();
@@ -562,6 +684,7 @@ function PlayerBar(): React.ReactElement | null {
         hls: null,
         nativeFallback: src === absolute,
       });
+      applyAudioCrossOrigin(audio, src);
       audio.src = src;
       if (resumeAt > 0.5) {
         audio.addEventListener(
@@ -608,7 +731,7 @@ function PlayerBar(): React.ReactElement | null {
       applySrc(objectUrl, audio.currentTime || 0);
       return;
     }
-  }, [releaseNativeAudioObjectUrl]);
+  }, [applyAudioCrossOrigin, releaseNativeAudioObjectUrl]);
 
   const loadAudioSource = useCallback((audio: HTMLAudioElement, nextSrc: string) => {
     const absolute = resolvePlayableSrc(nextSrc);
@@ -629,6 +752,7 @@ function PlayerBar(): React.ReactElement | null {
         if (latest?.src !== absolute || latest.hls) return;
 
         if (!HlsConstructor?.isSupported()) {
+          applyAudioCrossOrigin(audio, absolute);
           if (audio.src !== absolute) audio.src = absolute;
           if (isPlayingRef.current) void audio.play().catch(() => {});
           return;
@@ -664,9 +788,10 @@ function PlayerBar(): React.ReactElement | null {
       return;
     }
 
+    applyAudioCrossOrigin(audio, absolute);
     if (audio.src !== absolute) audio.src = absolute;
     audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
-  }, [attachNativeOfflineAudioSource, releaseNativeAudioObjectUrl]);
+  }, [applyAudioCrossOrigin, attachNativeOfflineAudioSource, releaseNativeAudioObjectUrl]);
 
   const cancelActiveCrossfade = useCallback(() => {
     const cancel = crossfadeCancelRef.current;
@@ -723,6 +848,10 @@ function PlayerBar(): React.ReactElement | null {
   }, [resetPendingSeek]);
 
   const playAudio = useCallback((audio: HTMLAudioElement): Promise<boolean> => {
+    // If the audio is routed through Web Audio, a suspended context = silence, so
+    // nudge it back to running on every play attempt (best-effort outside a gesture).
+    const ctx = audioContextRef.current;
+    if (ctx && ctx.state === "suspended") void ctx.resume().catch(() => {});
     const requestId = ++playRequestIdRef.current;
     return audio.play()
       .then(() => requestId === playRequestIdRef.current)
@@ -742,6 +871,10 @@ function PlayerBar(): React.ReactElement | null {
       const audio = getActiveAudio();
       if (!audio) return;
 
+      // This runs inside a user gesture — the only time an AudioContext may be
+      // started on iOS. Build/resume the Web Audio graph here so the gain-node
+      // crossfade is ready for the rest of the session.
+      ensureWebAudioGraph();
       cancelActiveCrossfade();
       if (audioSourceStateRef.current.get(audio)?.src !== resolvePlayableSrc(detail.audioUrl)) {
         resetPlaybackClock();
@@ -753,7 +886,7 @@ function PlayerBar(): React.ReactElement | null {
 
     window.addEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
     return () => window.removeEventListener(PLAYBACK_GESTURE_EVENT, onPlaybackGesture);
-  }, [cancelActiveCrossfade, getActiveAudio, loadAudioSource, playAudio, resetPlaybackClock]);
+  }, [cancelActiveCrossfade, ensureWebAudioGraph, getActiveAudio, loadAudioSource, playAudio, resetPlaybackClock]);
 
   const resumeActivePlayback = useCallback((audio: HTMLAudioElement) => {
     if (!isPlayingRef.current || audio !== getActiveAudio()) return;
@@ -1042,13 +1175,15 @@ function PlayerBar(): React.ReactElement | null {
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
 
-  // Keep volume on the active element (crossfade code manages both during fades)
+  // Keep volume on the active element (crossfade code manages both during fades).
+  // setOutputLevel routes through the GainNode on iOS so the slider works there
+  // too (audio.volume is a no-op on iOS), and falls back to audio.volume elsewhere.
   useEffect(() => {
     if (crossfadingRef.current) return;
     const audio = getActiveAudio();
     if (!audio) return;
-    audio.volume = isMuted ? 0 : volume;
-  }, [volume, isMuted, getActiveAudio]);
+    setOutputLevel(audio, isMuted ? 0 : volume);
+  }, [volume, isMuted, getActiveAudio, setOutputLevel]);
 
   // Ensure play/pause controls affect both elements during an active crossfade
   useEffect(() => {
@@ -1294,10 +1429,14 @@ function PlayerBar(): React.ReactElement | null {
       lockedPlaybackSourceRef.current = { songId: playbackSong.id, src };
     }
     loadAudioSource(audio, src);
+    // Restore the active element to full level: a prior cancelled/committed fade
+    // may have left its GainNode (or volume) at 0. Use refs so volume/mute changes
+    // don't re-trigger this load effect (which would reload the source).
+    setOutputLevel(audio, mutedRef.current ? 0 : volumeRef.current);
     if (other && other !== audio) {
       // Ensure the inactive element is quiet and not playing
       try { other.pause(); } catch {}
-      other.volume = 0;
+      setOutputLevel(other, 0);
       unloadAudioSource(other);
     }
     if (isPlaying) {
@@ -1306,14 +1445,17 @@ function PlayerBar(): React.ReactElement | null {
       playRequestIdRef.current += 1;
       audio.pause();
     }
-  }, [applyPendingResumeSeek, desiredSrc, isPlaying, playbackSong?.duration, playbackSong?.id, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio, resetPlaybackClock]);
+  }, [applyPendingResumeSeek, desiredSrc, isPlaying, playbackSong?.duration, playbackSong?.id, getActiveAudio, getInactiveAudio, loadAudioSource, unloadAudioSource, cancelActiveCrossfade, playAudio, resetPlaybackClock, setOutputLevel]);
 
   // Crossfade: triggered from the active element's `timeupdate` event (which keeps
-  // firing while the tab/app is backgrounded, unlike requestAnimationFrame). The
-  // fade ramp itself runs on a setInterval timer for the same reason. On platforms
-  // where HTMLMediaElement.volume is not writable (iOS/iPadOS) the overlapping
-  // ramp is skipped entirely in favor of a clean cut, so two tracks never play at
-  // full volume at once.
+  // firing while the tab/app is backgrounded, unlike requestAnimationFrame).
+  // Two ramp implementations share the same target/commit logic:
+  //  - iOS (audio.volume read-only): route both elements through GainNodes and
+  //    ramp on the Web Audio thread (linearRampToValueAtTime), which keeps running
+  //    smoothly even when the app is backgrounded.
+  //  - Desktop/Android: ramp audio.volume on a ~60ms setInterval.
+  // If the Web Audio graph can't be built on iOS, it falls back to a clean cut so
+  // two tracks never play at full volume at once.
   useEffect(() => {
     // Reset the per-effect "started" latch whenever the inputs change (e.g. a new
     // song loaded, settings changed) so a fresh fade can arm. Don't disturb an
@@ -1420,28 +1562,27 @@ function PlayerBar(): React.ReactElement | null {
       if (target.playbackSong.audioUrl) loadAudioSource(incoming, target.playbackSong.audioUrl);
       try { incoming.currentTime = 0; } catch {}
 
-      // iOS/iPadOS: volume writes are ignored, so an overlapping ramp would play
-      // both tracks at full volume. Do a clean cut instead — commit immediately
-      // and let the normal load effect start the incoming track.
-      if (!audioVolumeIsWritable(fromAudio)) {
+      const fadeMs = fadeWindow * 1000;
+      const targetVol = mutedRef.current ? 0 : volumeRef.current;
+      const webAudio = ensureWebAudioGraph();
+
+      // Last-resort fallback: if we can neither ramp the GainNode (Web Audio) nor
+      // audio.volume (iOS without a graph), clean-cut so two tracks never blast at
+      // full volume at once.
+      if (!webAudio && !audioVolumeIsWritable(fromAudio)) {
         try { fromAudio.pause(); } catch {}
         commit(incoming, target);
         return;
       }
 
-      incoming.volume = 0;
-      const fadeMs = fadeWindow * 1000;
-      const startTs = performance.now();
-      const fromStartTime = fromAudio.currentTime || 0;
-      const targetVol = mutedRef.current ? 0 : volumeRef.current;
+      setOutputLevel(incoming, 0);
       incoming.play().catch(() => {});
 
       let intervalId: number | null = null;
+      let timeoutId: number | null = null;
       const clearTimer = () => {
-        if (intervalId != null) {
-          window.clearInterval(intervalId);
-          intervalId = null;
-        }
+        if (intervalId != null) { window.clearInterval(intervalId); intervalId = null; }
+        if (timeoutId != null) { window.clearTimeout(timeoutId); timeoutId = null; }
       };
 
       const finish = () => {
@@ -1449,15 +1590,16 @@ function PlayerBar(): React.ReactElement | null {
         if (crossfadeCancelRef.current !== cancelFade) return;
         try { fromAudio.pause(); } catch {}
         if (!isPlayingRef.current) { try { incoming.pause(); } catch {} }
-        fromAudio.volume = 0;
+        setOutputLevel(fromAudio, 0);
+        setOutputLevel(incoming, targetVol);
         commit(incoming, target);
       };
 
       const cancelFade = () => {
         clearTimer();
         try { incoming.pause(); } catch {}
-        incoming.volume = 0;
-        fromAudio.volume = mutedRef.current ? 0 : volumeRef.current;
+        setOutputLevel(incoming, 0);
+        setOutputLevel(fromAudio, mutedRef.current ? 0 : volumeRef.current);
         suppressAutoLoadRef.current = false;
         crossfadingRef.current = false;
         crossfadeStartedRef.current = false;
@@ -1465,23 +1607,48 @@ function PlayerBar(): React.ReactElement | null {
       };
       crossfadeCancelRef.current = cancelFade;
 
-      const tick = () => {
-        if (crossfadeCancelRef.current !== cancelFade) {
-          clearTimer();
-          return;
+      if (webAudio) {
+        // Ramp the GainNodes on the audio thread (linearRampToValueAtTime) so the
+        // fade stays smooth even when the app is backgrounded — timers throttle,
+        // the audio thread does not.
+        const ctx = audioContextRef.current;
+        const fromNode = webAudioNodesRef.current.get(fromAudio);
+        const toNode = webAudioNodesRef.current.get(incoming);
+        if (ctx && fromNode && toNode) {
+          const t0 = ctx.currentTime;
+          const fromParam = fromNode.gain.gain;
+          const toParam = toNode.gain.gain;
+          fromParam.cancelScheduledValues(t0);
+          fromParam.setValueAtTime(fromParam.value, t0);
+          fromParam.linearRampToValueAtTime(0, t0 + fadeWindow);
+          toParam.cancelScheduledValues(t0);
+          toParam.setValueAtTime(0, t0);
+          toParam.linearRampToValueAtTime(targetVol, t0 + fadeWindow);
         }
-        const elapsed = Math.min(fadeMs, performance.now() - startTs);
-        const t = fadeMs > 0 ? elapsed / fadeMs : 1;
-        const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * (1 - t));
-        const toVol = Math.max(0, targetVol * t);
-        if ((fromAudio.currentTime || 0) >= fromStartTime) fromAudio.volume = fromVol;
-        incoming.volume = toVol;
-        if (elapsed >= fadeMs) finish();
-      };
-
-      // ~60ms ticks keep the ramp smooth while still firing when backgrounded.
-      intervalId = window.setInterval(tick, 60);
-      tick();
+        // Commit when the fade window elapses. If the app is backgrounded the
+        // timeout may be throttled — the outgoing track's `ended` event then
+        // drives forceCommit instead (the audio-thread ramp already completed).
+        timeoutId = window.setTimeout(finish, fadeMs);
+      } else {
+        const startTs = performance.now();
+        const fromStartTime = fromAudio.currentTime || 0;
+        const tick = () => {
+          if (crossfadeCancelRef.current !== cancelFade) {
+            clearTimer();
+            return;
+          }
+          const elapsed = Math.min(fadeMs, performance.now() - startTs);
+          const t = fadeMs > 0 ? elapsed / fadeMs : 1;
+          const fromVol = Math.max(0, (mutedRef.current ? 0 : volumeRef.current) * (1 - t));
+          const toVol = Math.max(0, targetVol * t);
+          if ((fromAudio.currentTime || 0) >= fromStartTime) setOutputLevel(fromAudio, fromVol);
+          setOutputLevel(incoming, toVol);
+          if (elapsed >= fadeMs) finish();
+        };
+        // ~60ms ticks keep the ramp smooth while still firing when backgrounded.
+        intervalId = window.setInterval(tick, 60);
+        tick();
+      }
     };
 
     // Force-commit immediately when the outgoing track ends mid-fade (e.g. a
@@ -1508,15 +1675,15 @@ function PlayerBar(): React.ReactElement | null {
         return;
       }
       try { fromAudio?.pause(); } catch {}
-      if (fromAudio) fromAudio.volume = 0;
-      incoming.volume = mutedRef.current ? 0 : volumeRef.current;
+      if (fromAudio) setOutputLevel(fromAudio, 0);
+      setOutputLevel(incoming, mutedRef.current ? 0 : volumeRef.current);
       if (isPlayingRef.current) incoming.play().catch(() => {});
       commit(incoming, target);
     };
 
     maybeStartCrossfadeRef.current = startCrossfade;
     forceCommitCrossfadeRef.current = forceCommit;
-  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, shuffle, shuffleRemaining]);
+  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, ensureWebAudioGraph, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, setOutputLevel, shuffle, shuffleRemaining]);
 
   // Cancel any in-flight crossfade ramp (and its timer) when the bar unmounts.
   useEffect(() => {
@@ -1524,6 +1691,20 @@ function PlayerBar(): React.ReactElement | null {
       crossfadeCancelRef.current?.();
       crossfadeCancelRef.current = null;
     };
+  }, []);
+
+  // iOS may suspend the AudioContext when backgrounded; resume it when the app
+  // returns to the foreground so a routed element doesn't stay silent. (While
+  // backgrounded, the audio session keeps it alive during active playback.)
+  useEffect(() => {
+    const resume = () => {
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended" && document.visibilityState === "visible") {
+        void ctx.resume().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", resume);
+    return () => document.removeEventListener("visibilitychange", resume);
   }, []);
 
   const publishPlaybackState = useCallback(async (options?: { keepalive?: boolean }) => {
@@ -1795,9 +1976,11 @@ function PlayerBar(): React.ReactElement | null {
       pause();
       return;
     }
+    // Build/resume the Web Audio graph inside this user gesture (iOS requirement).
+    ensureWebAudioGraph();
     requestImmediatePlayback(playbackSong);
     play();
-  }, [playbackSong, isPlaying, pause, play]);
+  }, [playbackSong, isPlaying, pause, play, ensureWebAudioGraph]);
 
   const handleToggleShuffle = useCallback(() => {
     void selectionTap();
@@ -1919,7 +2102,7 @@ function PlayerBar(): React.ReactElement | null {
         applyPendingResumeSeek(audio);
         applyStoredPodcastResume(audio);
         retryStickySeekRef.current();
-        audio.volume = isMuted ? 0 : volume;
+        setOutputLevel(audio, isMuted ? 0 : volume);
         // Belt-and-braces: a fresh load resets playbackRate to defaultPlaybackRate.
         audio.defaultPlaybackRate = effectivePlaybackRate;
         audio.playbackRate = effectivePlaybackRate;
