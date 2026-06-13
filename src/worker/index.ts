@@ -1036,14 +1036,40 @@ function parsePlatformId(entityUniqueId: string, prefix: string): string {
   return entityUniqueId.startsWith(prefix) ? entityUniqueId.slice(prefix.length).trim() : "";
 }
 
-async function fetchJsonObject(url: string, timeoutMs = SPOTIFY_REQUEST_TIMEOUT_MS): Promise<Record<string, unknown>> {
-  const response = await fetchWithTimeout(url, timeoutMs).catch(() => {
-    throw new ApiError("Upstream request failed", 502);
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
-  if (!response.ok) throw new ApiError(`Upstream request returned ${response.status}`, 502);
-  const payload = toObject(await response.json().catch(() => null));
-  if (!payload) throw new ApiError("Invalid upstream JSON", 502);
-  return payload;
+}
+
+async function fetchJsonObject(url: string, timeoutMs = SPOTIFY_REQUEST_TIMEOUT_MS): Promise<Record<string, unknown>> {
+  const maxAttempts = 3;
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response: Response | null = null;
+    try {
+      response = await fetchWithTimeout(url, timeoutMs);
+    } catch {
+      response = null;
+    }
+    if (!response) throw new ApiError("Upstream request failed", 502);
+    if (response.ok) {
+      const payload = toObject(await response.json().catch(() => null));
+      if (!payload) throw new ApiError("Invalid upstream JSON", 502);
+      return payload;
+    }
+    lastStatus = response.status;
+    // Retry transient rate-limit / server errors; honor Retry-After when present.
+    if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const backoffMs =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 4000) : 400 * attempt;
+      await delay(backoffMs);
+      continue;
+    }
+    throw new ApiError(`Upstream request returned ${response.status}`, 502);
+  }
+  throw new ApiError(`Upstream request returned ${lastStatus}`, 502);
 }
 
 async function fetchSongLinkPayload(trackId: string, region: string): Promise<Record<string, unknown>> {
@@ -1051,6 +1077,86 @@ async function fetchSongLinkPayload(trackId: string, region: string): Promise<Re
   const params = new URLSearchParams({ url: spotifyUrl });
   if (region) params.set("userCountry", region);
   return fetchJsonObject(`https://api.song.link/v1-alpha.1/links?${params.toString()}`);
+}
+
+const SPOTIFY_FALLBACK_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+function decodeJsonUnicode(value: string): string {
+  return value
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\(["\\/])/g, "$1");
+}
+
+// Auth-free title/artist lookup from Spotify's embed page. The embed HTML
+// inlines a JSON island with the track entity, which lets us seed a Deezer
+// search when the Odesli resolver is unavailable.
+async function fetchSpotifyEmbedMetadata(trackId: string): Promise<{ title: string; artist: string }> {
+  const response = await fetchWithTimeout(
+    `https://open.spotify.com/embed/track/${trackId}`,
+    SPOTIFY_REQUEST_TIMEOUT_MS,
+    { headers: { "user-agent": SPOTIFY_FALLBACK_USER_AGENT, accept: "text/html" } },
+  ).catch(() => null);
+  if (!response || !response.ok) return { title: "", artist: "" };
+  const html = await response.text().catch(() => "");
+  if (!html) return { title: "", artist: "" };
+  const title =
+    html.match(/"name"\s*:\s*"([^"]+)"\s*,\s*"uri"\s*:\s*"spotify:track:/)?.[1] ||
+    html.match(/"title"\s*:\s*"([^"]+)"/)?.[1] ||
+    "";
+  const artist = html.match(/"artists"\s*:\s*\[\s*\{\s*"name"\s*:\s*"([^"]+)"/)?.[1] || "";
+  return { title: decodeJsonUnicode(title), artist: decodeJsonUnicode(artist) };
+}
+
+// Find a track on Deezer (auth-free) by artist/title, returning its numeric id.
+async function searchDeezerTrackId(title: string, artist: string): Promise<string> {
+  const queries = [
+    artist && title ? `artist:"${artist}" track:"${title}"` : "",
+    [artist, title].filter(Boolean).join(" "),
+  ].filter(Boolean);
+  for (const query of queries) {
+    const payload = await fetchJsonObject(
+      `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=1`,
+    ).catch(() => null);
+    const data = payload && Array.isArray(payload.data) ? payload.data : [];
+    const rawId = toObject(data[0])?.id;
+    const id = typeof rawId === "number" ? String(rawId) : toStringValue(rawId);
+    if (/^\d+$/.test(id)) return id;
+  }
+  return "";
+}
+
+// Build a minimal song.link-shaped payload from a Deezer match so the existing
+// metadata / ISRC / Qobuz-availability code keeps working when Odesli is down.
+function buildFallbackSongLinkPayload(
+  trackId: string,
+  deezerId: string,
+  title: string,
+  artist: string,
+): Record<string, unknown> {
+  const spotifyKey = `SPOTIFY_SONG::${trackId}`;
+  const deezerKey = `DEEZER_SONG::${deezerId}`;
+  const entity = { title, artistName: artist, thumbnailUrl: "" };
+  return {
+    entityUniqueId: spotifyKey,
+    entitiesByUniqueId: { [spotifyKey]: entity, [deezerKey]: entity },
+    linksByPlatform: {
+      deezer: { url: `https://www.deezer.com/track/${deezerId}`, entityUniqueId: deezerKey },
+    },
+  };
+}
+
+// Resolve a Spotify track to a song.link-shaped payload. Primary source is
+// Odesli (which retries on 429); when that is rate-limited or down, fall back
+// to an auth-free Spotify-embed -> Deezer lookup so uploads keep working.
+async function resolveTrackPayload(trackId: string, region: string): Promise<Record<string, unknown>> {
+  const odesli = await fetchSongLinkPayload(trackId, region).catch(() => null);
+  if (odesli && toObject(odesli.entitiesByUniqueId)) return odesli;
+
+  const meta = await fetchSpotifyEmbedMetadata(trackId);
+  const deezerId = await searchDeezerTrackId(meta.title, meta.artist);
+  if (!deezerId) throw new ApiError("Could not resolve this track on any provider", 502);
+  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist);
 }
 
 function getPlatformLink(
@@ -2221,7 +2327,7 @@ async function resolveSpotiFlacDownloadStack(
 async function resolveStreamUrl(env: CloudflareEnv, payload: SongPayload): Promise<ResolvedAudioDownload> {
   const trackId = parseSpotifyTrackId(toStringValue(payload.spotifyUrl));
   if (!trackId) throw new ApiError("Invalid Spotify track URL or ID", 400);
-  const songLinkPayload = await fetchSongLinkPayload(trackId, toStringValue(payload.region).toUpperCase()).catch(() => ({}));
+  const songLinkPayload = await resolveTrackPayload(trackId, toStringValue(payload.region).toUpperCase()).catch(() => ({}));
   const service = toStringValue(payload.service).toLowerCase();
   const qualities = qualityLists(payload);
 
@@ -3318,7 +3424,7 @@ app.post("/api/songs/spotify/batch", async (c) => {
     if (urlType === "track") {
       const trackId = parseSpotifyTrackId(spotifyUrl);
       if (!trackId) return jsonError("Invalid track ID", 400);
-      const songLinkPayload = await fetchSongLinkPayload(trackId, region);
+      const songLinkPayload = await resolveTrackPayload(trackId, region);
       const metadata = await fetchEnhancedMetadata(trackId, songLinkPayload);
       batchTracks = [{
         id: trackId,
@@ -3432,7 +3538,7 @@ app.post("/api/songs/spotify", async (c) => {
     let title = toStringValue(payload.title);
     let artist = toStringValue(payload.artist);
     if (!title || !artist) {
-      const songLinkPayload = await fetchSongLinkPayload(trackId, toStringValue(payload.region).toUpperCase());
+      const songLinkPayload = await resolveTrackPayload(trackId, toStringValue(payload.region).toUpperCase());
       const metadata = parseSongLinkMetadata(songLinkPayload, trackId);
       title ||= metadata.title;
       artist ||= metadata.artist;
@@ -3443,7 +3549,7 @@ app.post("/api/songs/spotify", async (c) => {
     return c.json({ lyrics, fileName: `${title} - ${artist}.lrc`.replace(/[\\/:*?"<>|]/g, "_") });
   }
 
-  const songLinkPayload = await fetchSongLinkPayload(trackId, toStringValue(payload.region).toUpperCase());
+  const songLinkPayload = await resolveTrackPayload(trackId, toStringValue(payload.region).toUpperCase());
   const metadata = parseSongLinkMetadata(songLinkPayload, trackId);
   const deezerInfo = await fetchDeezerTrackInfo(parseDeezerTrackId(songLinkPayload));
 
