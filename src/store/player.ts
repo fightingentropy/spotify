@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { songKind } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
 
 export type { PlayerSong } from "@/types/player";
@@ -344,19 +345,28 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   sleepTimerEndsAt: null,
   sleepAtEndOfTrack: false,
   setQueue: (songs, startIndex, options) => {
-    const start = resolveQueueStartIndex(
-      songs.length,
-      startIndex,
-      options?.respectShuffle === true && get().shuffle,
-    );
-    const currentSong = start >= 0 ? songs[start] ?? null : null;
+    // Keep a queue to a single kind so music never auto-advances into a podcast
+    // (or radio) item. The track you explicitly start — songs[startIndex], read
+    // before any shuffle randomization — anchors the kind; mixed lists like
+    // "Recently played" (which can include podcast episodes you've listened to)
+    // are filtered down to that kind. Podcast/radio queues filter to themselves,
+    // so the Podcasts and Radio pages are unaffected. See songKind().
+    const anchorIndex = clampQueueIndex(songs.length, startIndex);
+    const anchor = anchorIndex >= 0 ? songs[anchorIndex] ?? null : null;
+    const queue = anchor ? songs.filter((item) => songKind(item) === songKind(anchor)) : songs;
+    const start = anchor
+      ? options?.respectShuffle === true && get().shuffle
+        ? resolveQueueStartIndex(queue.length, 0, true)
+        : Math.max(0, queue.findIndex((item) => item.id === anchor.id))
+      : -1;
+    const currentSong = start >= 0 ? queue[start] ?? null : null;
     set(() => ({
-      queue: songs,
+      queue,
       currentIndex: start,
       currentSong,
       playHistory: [],
       playFuture: [],
-      shuffleRemaining: get().shuffle ? createShuffleRemaining(songs.length, start) : [],
+      shuffleRemaining: get().shuffle ? createShuffleRemaining(queue.length, start) : [],
       isPlaying: currentSong != null,
     }));
     return currentSong;

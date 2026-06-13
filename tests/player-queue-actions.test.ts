@@ -16,6 +16,10 @@ function songs(...ids: string[]): PlayerSong[] {
   return ids.map(song);
 }
 
+function podcast(id: string): PlayerSong {
+  return { ...song(id), source: "podcast" };
+}
+
 function queueIds(): string[] {
   return usePlayerStore.getState().queue.map((item) => item.id);
 }
@@ -36,6 +40,79 @@ beforeEach(() => {
     isPlaying: false,
     shuffle: false,
     repeatMode: "off",
+  });
+});
+
+describe("setQueue keeps one kind per queue", () => {
+  test("starting a music track drops podcasts from a mixed list", () => {
+    const mixed = [song("a"), podcast("p1"), song("b"), podcast("p2"), song("c")];
+    const started = usePlayerStore.getState().setQueue(mixed, 2); // "b"
+
+    const state = usePlayerStore.getState();
+    expect(queueIds()).toEqual(["a", "b", "c"]);
+    expect(state.currentSong?.id).toBe("b");
+    expect(state.queue[state.currentIndex]?.id).toBe("b");
+    expect(started?.id).toBe("b");
+    expect(state.isPlaying).toBe(true);
+  });
+
+  test("re-indexes the start when an earlier item is filtered out", () => {
+    // The clicked track sits after a podcast, so its raw index shifts left once
+    // the podcast is dropped.
+    const mixed = [podcast("p1"), song("a"), song("b")];
+    usePlayerStore.getState().setQueue(mixed, 2); // "b" at raw index 2
+
+    const state = usePlayerStore.getState();
+    expect(queueIds()).toEqual(["a", "b"]);
+    expect(state.currentIndex).toBe(1);
+    expect(state.currentSong?.id).toBe("b");
+  });
+
+  test("next() on the filtered music queue never lands on a podcast", () => {
+    usePlayerStore.getState().setQueue([song("a"), podcast("p1"), song("b")], 0);
+
+    usePlayerStore.getState().next();
+    const state = usePlayerStore.getState();
+    expect(state.currentSong?.id).toBe("b");
+    expect(state.currentSong?.source).not.toBe("podcast");
+  });
+
+  test("starting a podcast keeps podcasts and drops music", () => {
+    const mixed = [song("a"), podcast("p1"), song("b"), podcast("p2")];
+    usePlayerStore.getState().setQueue(mixed, 1); // podcast "p1"
+
+    const state = usePlayerStore.getState();
+    expect(queueIds()).toEqual(["p1", "p2"]);
+    expect(state.currentIndex).toBe(0);
+    expect(state.currentSong?.id).toBe("p1");
+  });
+
+  test("shuffle play on a mixed list starts on music, not a podcast", () => {
+    usePlayerStore.setState({ shuffle: true });
+    const mixed = [song("a"), podcast("p1"), song("b"), podcast("p2"), song("c")];
+    const started = usePlayerStore.getState().setQueue(mixed, 0, { respectShuffle: true });
+
+    expect(queueIds()).toEqual(["a", "b", "c"]);
+    expect(started).not.toBeNull();
+    expect(["a", "b", "c"]).toContain(started!.id);
+    expect(started!.source).not.toBe("podcast");
+  });
+
+  test("an empty list clears the queue", () => {
+    usePlayerStore.setState({
+      queue: songs("a", "b"),
+      currentIndex: 0,
+      currentSong: song("a"),
+      isPlaying: true,
+    });
+
+    usePlayerStore.getState().setQueue([], 0);
+
+    const state = usePlayerStore.getState();
+    expect(state.queue).toEqual([]);
+    expect(state.currentIndex).toBe(-1);
+    expect(state.currentSong).toBe(null);
+    expect(state.isPlaying).toBe(false);
   });
 });
 
