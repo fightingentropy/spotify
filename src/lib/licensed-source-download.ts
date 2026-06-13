@@ -352,6 +352,35 @@ export async function resolveLicensedSourceStreamUrl(options: {
     );
   }
 
+  // spotbye returns Tidal/Qobuz lossless streams as an inline DASH manifest
+  // ("url":"MANIFEST:<base64 mpd>"), not an HTTP URL — decode it into a dash stream.
+  const inlineUrl = firstString(payload.url, data.url, audio.url, stream.url, payload.streamUrl, data.streamUrl);
+  if (inlineUrl.startsWith("MANIFEST:")) {
+    let manifestXml = "";
+    try {
+      const binary = atob(inlineUrl.slice("MANIFEST:".length));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      manifestXml = new TextDecoder().decode(bytes);
+    } catch {
+      throw new LicensedSourceDownloadError("Licensed source provider returned an unreadable manifest", 502);
+    }
+    if (!manifestXml.includes("<MPD")) {
+      throw new LicensedSourceDownloadError("Licensed source provider returned an invalid manifest", 502);
+    }
+    const inlineCodec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format);
+    return {
+      kind: "dash",
+      streamUrl: "",
+      headers: {},
+      contentType: "",
+      ...(inlineCodec ? { codec: inlineCodec } : {}),
+      ...(options.outputFormat ? { outputFormat: options.outputFormat } : {}),
+      metadata: providerMetadata(payload, data, audio, stream),
+      dash: { manifestXml, manifestUrl: "" },
+    };
+  }
+
   const streamUrl = firstString(
     payload.streamUrl,
     payload.audioUrl,
