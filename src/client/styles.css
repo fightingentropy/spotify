@@ -143,6 +143,16 @@ body.wf-now-playing-open {
   will-change: transform, opacity;
 }
 
+/* Closing should feel as smooth as opening, not abrupt. Opening decelerates
+   into place; closing mirrors it by accelerating out (gentle start, no jerk)
+   over the same duration, and holds opacity until the panel has begun sliding
+   so it glides off-screen instead of blinking out. Scoped to [data-open="false"]
+   so the entrance keeps its original curve. */
+.wf-now-playing-panel[data-open="false"] {
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1), ease, ease;
+  transition-delay: 0ms, 120ms, 0ms;
+}
+
 .wf-now-playing-art {
   transform-origin: center;
   animation: wf-cover-settle 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -190,8 +200,10 @@ body.wf-now-playing-open {
   .wf-song-card,
   .wf-list-row,
   .wf-sheet-backdrop,
-  .wf-now-playing-panel {
+  .wf-now-playing-panel,
+  .wf-now-playing-panel[data-open="false"] {
     transition-duration: 1ms;
+    transition-delay: 0ms;
   }
 }
 
