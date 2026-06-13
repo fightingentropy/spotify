@@ -561,8 +561,12 @@ export default function HomePage() {
         key={song.id}
         onPointerEnter={() => warmSongSoon(displaySong)}
         onFocus={() => warmSongSoon(displaySong)}
+        // The whole card plays on tap: the floating play button only appears
+        // on hover, which touch devices never see. It stopPropagation()s, so
+        // pointer users don't double-toggle.
+        onClick={() => handlePlayScrollerSong(songs, index)}
         className={cn(
-          "wf-song-card group w-36 shrink-0 rounded-md p-3 transition sm:w-40",
+          "wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation sm:w-40",
           active ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
         )}
       >
