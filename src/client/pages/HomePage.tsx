@@ -1,7 +1,14 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
-import { useApiData, withAccountScope, type HomePayload, type StatsHomePayload } from "@/client/api";
+import {
+  useApiData,
+  withAccountScope,
+  type DiscoverPayload,
+  type DiscoverTrack,
+  type HomePayload,
+  type StatsHomePayload,
+} from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
@@ -35,6 +42,16 @@ export default function HomePage() {
       recentlyPlayed: [],
       mostPlayed: [],
     },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
+    },
+  );
+  // Globally trending tracks (Spotify Top 50). Not account-scoped — it's the same
+  // worldwide chart for everyone.
+  const { data: discoverData } = useApiData<DiscoverPayload>(
+    "/api/discover/trending",
+    { tracks: [] },
     {
       enabled: status !== "loading",
       keepPreviousData: true,
@@ -153,6 +170,119 @@ export default function HomePage() {
     );
   };
 
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  // Tapping a Discover tile runs the normal upload pipeline (resolve -> download
+  // -> add to the Mac-mini collection), then plays the freshly-added song.
+  const handleDiscoverClick = useCallback(
+    async (track: DiscoverTrack) => {
+      if (importingId) return;
+      setImportingId(track.id);
+      setImportError(null);
+      try {
+        const res = await fetch("/api/songs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            mode: "spotify",
+            spotifyUrl: track.spotifyUrl,
+            region: "US",
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            durationMs: track.durationMs ? String(track.durationMs) : "",
+            imageUrl: track.imageUrl,
+            qualityProfile: "max",
+            outputFormat: "flac",
+          }),
+        });
+
+        let song: HomeSong | null = null;
+        if (res.ok) {
+          song = (await res.json()) as HomeSong;
+        } else if (res.status === 409) {
+          // Already in the library — locate and play the existing copy.
+          const body = (await res.json().catch(() => null)) as { existingSong?: { id?: string } } | null;
+          const existingId = body?.existingSong?.id;
+          if (existingId) {
+            const listRes = await fetch("/api/songs", { credentials: "include" });
+            const list = listRes.ok ? ((await listRes.json().catch(() => [])) as HomeSong[]) : [];
+            song = Array.isArray(list) ? list.find((entry) => entry.id === existingId) ?? null : null;
+          }
+        } else {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error || `Couldn't load this track (${res.status})`);
+        }
+
+        if (song) {
+          const resolved = resolveHomeSong(song);
+          requestImmediatePlayback(resolved);
+          setQueue([resolved], 0);
+        }
+      } catch (error) {
+        setImportError(error instanceof Error ? error.message : "Couldn't load this track");
+      } finally {
+        setImportingId(null);
+      }
+    },
+    [importingId, resolveHomeSong, setQueue],
+  );
+
+  const renderDiscoverTile = (track: DiscoverTrack) => {
+    const importing = importingId === track.id;
+    return (
+      <div
+        key={track.id}
+        onClick={() => handleDiscoverClick(track)}
+        className={cn(
+          "wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation sm:w-40",
+          importing ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
+        )}
+      >
+        <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+          <CoverImage
+            src={track.imageUrl}
+            alt={track.title}
+            fill
+            sizes="160px"
+            className="wf-song-cover object-cover"
+            loading="lazy"
+          />
+          {importing ? (
+            <div className="absolute inset-0 grid place-items-center bg-black/55">
+              <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-white/25 border-t-white" />
+            </div>
+          ) : null}
+          <button
+            type="button"
+            aria-label={`Add and play ${track.title}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleDiscoverClick(track);
+            }}
+            disabled={importing}
+            className={cn(
+              "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] wf-control-button",
+              importing ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            {importing ? (
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-black/30 border-t-black" />
+            ) : (
+              <Play size={21} fill="currentColor" className="translate-x-0.5" />
+            )}
+          </button>
+        </div>
+        <div className="mt-3 min-w-0">
+          <div className="truncate text-[16px] font-medium leading-6 text-white">{track.title}</div>
+          <div className="truncate text-[14px] leading-5 text-white/[0.62]">{track.artist || "Unknown Artist"}</div>
+        </div>
+      </div>
+    );
+  };
+
   if (loading || status === "loading") {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
@@ -172,6 +302,23 @@ export default function HomePage() {
   return (
     <div className="relative min-h-[calc(100vh-3.5rem)] overflow-x-hidden bg-background text-white">
       <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-6 xl:px-8 2xl:px-10">
+        {discoverData.tracks.length > 0 ? (
+          <section aria-label="Discover" className="mb-9 md:mb-10">
+            <h2 className="text-2xl font-bold">Discover</h2>
+            <p className="mb-4 mt-1 text-[13px] text-white/[0.5]">
+              Trending worldwide right now — tap to add it to your library
+            </p>
+            {importError ? (
+              <div role="alert" className="mb-3 text-sm text-red-400">
+                {importError}
+              </div>
+            ) : null}
+            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+              {discoverData.tracks.map((track) => renderDiscoverTile(track))}
+            </div>
+          </section>
+        ) : null}
+
         {recentlyPlayedSongs.length > 0 ? (
           <section aria-label="Recently played" className="mb-9 md:mb-10">
             <h2 className="mb-4 text-2xl font-bold">Recently played</h2>

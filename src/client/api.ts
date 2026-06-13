@@ -507,6 +507,22 @@ export type StatsHomePayload = {
   mostPlayed: { song: PlayerSong; playCount: number }[];
 };
 
+// A globally-trending track from the Discover row. Not in the library yet — it
+// carries its Spotify reference so a tap can import it via /api/songs.
+export type DiscoverTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  imageUrl: string;
+  durationMs: number | null;
+  spotifyUrl: string;
+};
+
+export type DiscoverPayload = {
+  tracks: DiscoverTrack[];
+};
+
 export type SearchIndexPayload = {
   songs: PlayerSong[];
 };

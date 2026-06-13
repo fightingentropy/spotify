@@ -3338,6 +3338,39 @@ app.get("/api/home", async (c) => {
   });
 });
 
+// Spotify's editorial "Top 50 - Global" playlist — globally trending tracks right
+// now. Fetched via the pathfinder (works anonymously for public playlists). Each
+// track carries its Spotify id so a tap can run the normal /api/songs import
+// (resolve -> download -> add to the Mac-mini collection).
+const TOP_50_GLOBAL_PLAYLIST_ID = "37i9dQZEVXbMDoHDwVN2tF";
+
+app.get("/api/discover/trending", async (c) => {
+  try {
+    const { tracks } = await fetchPathfinderPlaylistTracks(
+      TOP_50_GLOBAL_PLAYLIST_ID,
+      envString(c.env, "SPOTIFY_SP_DC"),
+      50,
+    );
+    const discover = tracks
+      .filter((track) => track.id && track.name && track.artists.length > 0)
+      .map((track) => ({
+        id: track.id,
+        title: track.name,
+        artist: track.artists.join(", "),
+        album: track.album || "",
+        imageUrl: track.imageUrl || "/apple-icon.png",
+        durationMs: typeof track.durationMs === "number" && track.durationMs > 0 ? track.durationMs : null,
+        spotifyUrl: `https://open.spotify.com/track/${track.id}`,
+      }));
+    return jsonCached(c, { tracks: discover }, {
+      cacheControl: "public, max-age=1800, stale-while-revalidate=7200",
+    });
+  } catch {
+    // Trending is a nice-to-have; degrade to empty so Home still renders.
+    return jsonCached(c, { tracks: [] }, { cacheControl: "public, max-age=120" });
+  }
+});
+
 app.get("/api/search-index", async (c) => {
   const user = c.get("user");
   return jsonCached(c, { songs: await listSearchSongs(c.get("db"), user?.id ?? null) }, {
