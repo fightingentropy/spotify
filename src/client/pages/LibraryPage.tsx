@@ -21,13 +21,18 @@ function PlaylistSkeletonRows() {
 
 export default function LibraryPage() {
   const { user, status } = useAuth();
-  const { data, loading } = useApiData<LibraryPayload>(
+  const { data, loading, error } = useApiData<LibraryPayload>(
     withAccountScope("/api/library", user?.id ?? status),
     {
       playlists: [],
       userId: null,
     },
   );
+  // Drive the playlists section from real auth state — NOT data.userId, which is
+  // null during the cold-load window (and on a fetch error) even for a signed-in
+  // user, which would otherwise flash a "Sign in" prompt at them.
+  const signedIn = !!user;
+  const showSkeleton = status === "loading" || (signedIn && loading && data.playlists.length === 0);
 
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
@@ -74,7 +79,9 @@ export default function LibraryPage() {
             </div>
           </Link>
 
-          {data.userId ? (
+          {showSkeleton ? (
+            <PlaylistSkeletonRows />
+          ) : signedIn ? (
             data.playlists.length > 0 ? (
               <>
                 <div className="px-3 pb-2 pt-4 text-xs uppercase tracking-wide opacity-60">Playlists</div>
@@ -94,13 +101,11 @@ export default function LibraryPage() {
                   </Link>
                 ))}
               </>
-            ) : loading ? (
-              <PlaylistSkeletonRows />
             ) : (
               <div className="px-3 pb-2 pt-4">
                 <div className="text-xs uppercase tracking-wide opacity-60">Playlists</div>
                 <div className="mt-2 text-sm opacity-70">
-                  You don&apos;t have any playlists yet.
+                  {error ?? "You don’t have any playlists yet."}
                 </div>
               </div>
             )

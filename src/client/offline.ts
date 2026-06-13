@@ -1168,10 +1168,31 @@ async function persistDownloadResult(
   working: OfflineDownloadRecord,
   patch: Partial<OfflineDownloadRecord>,
 ): Promise<OfflineDownloadRecord> {
-  const latest = await idbGet<OfflineDownloadRecord>(
-    DOWNLOAD_STORE,
-    downloadRecordKey(working.songId, working.accountScope),
-  ).catch(() => undefined);
+  let latest: OfflineDownloadRecord | undefined;
+  let readSucceeded = true;
+  try {
+    latest = await idbGet<OfflineDownloadRecord>(
+      DOWNLOAD_STORE,
+      downloadRecordKey(working.songId, working.accountScope),
+    );
+  } catch {
+    readSucceeded = false;
+  }
+  // The record vanished from IDB mid-download — the user cancelled/removed it
+  // while it was the one downloading. Don't resurrect it: skip the write, drop it
+  // from in-memory state, and clean up any native files written after the cancel.
+  // (A transient read error leaves readSucceeded false so we fall through and
+  // persist as before rather than dropping a genuinely-completed download.)
+  if (readSucceeded && latest === undefined) {
+    await deleteNativeOfflineFiles(patch.nativeFiles ?? working.nativeFiles).catch(() => undefined);
+    useOfflineStore.setState((state) => {
+      if (!state.records[working.songId]) return state;
+      const records = { ...state.records };
+      delete records[working.songId];
+      return { records };
+    });
+    return { ...working, ...patch };
+  }
   const base = isOfflineRecordForAccount(latest, working.accountScope) ? latest : working;
   const pinnedBy = Array.from(new Set([...base.pinnedBy, ...working.pinnedBy]));
   const merged: OfflineDownloadRecord = {

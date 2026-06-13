@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rm,
   rename,
   stat,
@@ -433,6 +434,22 @@ function resolveInside(root: string, relativePath: string): string | null {
   if (!normalized || normalized.includes("\0")) return null;
   const absolutePath = resolve(root, normalized);
   return isPathInside(root, absolutePath) ? absolutePath : null;
+}
+
+// Lexical containment (resolveInside) doesn't dereference symlinks, so a symlink
+// planted inside the root could point outside it. For paths we actually serve to
+// clients, realpath() both the root and the target and re-check containment so a
+// symlink can't escape the library directory. Returns null if the path doesn't
+// resolve (e.g. doesn't exist) or escapes the root.
+async function resolveInsideReal(root: string, relativePath: string): Promise<string | null> {
+  const absolutePath = resolveInside(root, relativePath);
+  if (!absolutePath) return null;
+  try {
+    const [realRoot, realPath] = await Promise.all([realpath(root), realpath(absolutePath)]);
+    return isPathInside(realRoot, realPath) ? absolutePath : null;
+  } catch {
+    return null;
+  }
 }
 
 function relativeFromUrlPath(pathname: string, prefix: string): string {
@@ -1538,6 +1555,9 @@ async function handleRemoteSongUpload(payload: {
     );
 
   if (existingEntry && !replaceExisting) {
+    // Drain the upstream body we opened before the duplicate check, or the
+    // socket stays alive (on Bun) until GC.
+    await response.body?.cancel().catch(() => undefined);
     return json(
       {
         error: "Song already exists in your library",
@@ -1553,6 +1573,7 @@ async function handleRemoteSongUpload(payload: {
   }
 
   if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => undefined);
     return json({ error: `Audio server returned ${response.status}` }, { status: 502 });
   }
 
@@ -2094,7 +2115,10 @@ async function lookupRemoteArtwork(song: PlayerSong): Promise<DownloadedArtwork 
   const searchResponse = await fetchWithTimeout(searchUrl.toString(), {
     headers: { accept: "application/json" },
   });
-  if (!searchResponse.ok) return null;
+  if (!searchResponse.ok) {
+    await searchResponse.body?.cancel().catch(() => undefined);
+    return null;
+  }
 
   const payload = (await searchResponse.json().catch(() => null)) as {
     results?: ItunesArtworkResult[];
@@ -2107,9 +2131,15 @@ async function lookupRemoteArtwork(song: PlayerSong): Promise<DownloadedArtwork 
 
   const artworkUrl = highResolutionItunesArtworkUrl(best.result.artworkUrl100);
   const artworkResponse = await fetchWithTimeout(artworkUrl);
-  if (!artworkResponse.ok) return null;
+  if (!artworkResponse.ok) {
+    await artworkResponse.body?.cancel().catch(() => undefined);
+    return null;
+  }
   const contentType = artworkResponse.headers.get("content-type") || "image/jpeg";
-  if (!contentType.toLowerCase().startsWith("image/")) return null;
+  if (!contentType.toLowerCase().startsWith("image/")) {
+    await artworkResponse.body?.cancel().catch(() => undefined);
+    return null;
+  }
 
   const data = new Uint8Array(await artworkResponse.arrayBuffer());
   if (data.byteLength < 256) return null;
@@ -2395,7 +2425,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const source = librarySourceForMediaRequest(request, url);
     if (!source) return forbiddenLibraryResponse();
     const relativePath = relativeFromUrlPath(pathname, "/api/files/local/");
-    const absolutePath = resolveInside(source.root, relativePath);
+    const absolutePath = await resolveInsideReal(source.root, relativePath);
     const snapshot = source.shared ? librarySnapshot : userLibrarySnapshots.get(source.key) ?? null;
     const knownEntry = snapshot?.entriesByPath.get(relativePath);
     const knownFileStat = knownEntry

@@ -214,6 +214,8 @@ const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024;
+const MAX_OFFLINE_DOWNLOAD_ITEMS = 1000;
+const MAX_OFFLINE_SONG_JSON_BYTES = 64 * 1024;
 const SPOTIFY_REQUEST_TIMEOUT_MS = 20_000;
 const DOWNLOAD_REQUEST_TIMEOUT_MS = 120_000;
 const SERVER_IMPORT_OUTPUT_FORMAT: OutputFormat = "flac";
@@ -250,6 +252,10 @@ const AUDIO_MIME_TYPES = new Set([
   "audio/x-wav",
   "audio/wave",
 ]);
+
+// A valid bcrypt hash (of a throwaway secret) compared against when no user or
+// password hash exists, so a failed signin spends the same CPU as a real one.
+const DUMMY_PASSWORD_HASH = "$2b$10$7tXHcDkbjQu2CAfr8lewqezc3JeBLP4fnqpxolFBCCxzclVG0si.K";
 
 let schemaPromise: Promise<void> | null = null;
 let songColumnsPromise: Promise<void> | null = null;
@@ -513,15 +519,30 @@ function parseOfflineDownloadRow(row: OfflineDownloadRow) {
 
 function offlineDownloadItemsFromPayload(payload: OfflineDownloadWritePayload | null | undefined) {
   if (!Array.isArray(payload?.items)) throw new ApiError("items must be an array", 400);
-  return payload.items.map((item, index) => {
+  if (payload.items.length > MAX_OFFLINE_DOWNLOAD_ITEMS) {
+    throw new ApiError(`Too many items (max ${MAX_OFFLINE_DOWNLOAD_ITEMS})`, 413);
+  }
+  // De-dup by songId, merging scopes. The table has UNIQUE(userId, songId), so a
+  // duplicate songId in one payload would otherwise throw mid-write — fatal for
+  // the replace-all PUT, which would have already deleted the user's rows.
+  const byId = new Map<string, { song: NonNullable<ReturnType<typeof coercePlayerSongPayload>>; scopes: string[] }>();
+  payload.items.forEach((item, index) => {
     const entry = toObject(item) as OfflineDownloadPayloadItem | null;
     const song = coercePlayerSongPayload(entry?.song);
     if (!song) throw new ApiError(`items[${index}].song is invalid`, 400);
-    return {
-      song,
-      scopes: coerceOfflineDownloadScopes(entry?.scopes, song.id),
-    };
+    if (JSON.stringify(song).length > MAX_OFFLINE_SONG_JSON_BYTES) {
+      throw new ApiError(`items[${index}].song is too large`, 413);
+    }
+    const scopes = coerceOfflineDownloadScopes(entry?.scopes, song.id);
+    const existing = byId.get(song.id);
+    if (existing) {
+      existing.song = song;
+      existing.scopes = coerceOfflineDownloadScopes([...existing.scopes, ...scopes], song.id);
+    } else {
+      byId.set(song.id, { song, scopes });
+    }
   });
+  return Array.from(byId.values());
 }
 
 function jsonError(message: string, status = 400): Response {
@@ -1873,6 +1894,43 @@ function audioCodecLabel(info: AudioCodecInfo): string {
   return info.codec || "unknown codec";
 }
 
+// Buffer a response body into memory while enforcing a byte budget as chunks
+// arrive. A provider that omits or understates Content-Length can otherwise slip
+// a multi-hundred-MB body past the header-only size check and OOM the isolate
+// before the post-buffer guard runs. Returns null (and cancels the stream) once
+// the budget is exceeded.
+async function readResponseBodyWithLimit(response: Response, maxBytes: number): Promise<ArrayBuffer | null> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const buffer = await response.arrayBuffer();
+    return buffer.byteLength > maxBytes ? null : buffer;
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
+}
+
 async function validateMinimumQualityResponse(
   response: Response,
   candidate: ResolvedAudioDownloadCandidate,
@@ -1887,8 +1945,8 @@ async function validateMinimumQualityResponse(
   const length = Number(response.headers.get("content-length") || "0");
   if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) return "Audio file is too large";
 
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_AUDIO_BYTES) return "Audio file is too large";
+  const buffer = await readResponseBodyWithLimit(response, MAX_AUDIO_BYTES);
+  if (!buffer) return "Audio file is too large";
   const byteInfo = classifyAudioBytes(buffer);
   if (byteInfo.quality === "lossless") {
     return new Response(buffer, {
@@ -2962,8 +3020,8 @@ async function audioFileFromResolvedResponse(
   }
   const responseType = response.headers.get("content-type") || resolved.contentType || "audio/flac";
   const ext = extensionFromResponse(response, resolved.streamUrl);
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_AUDIO_BYTES) {
+  const buffer = await readResponseBodyWithLimit(response, MAX_AUDIO_BYTES);
+  if (!buffer) {
     throw new ApiError("Audio file is too large", 413);
   }
   const fileName = `${sanitizeFileName(`${artist} - ${title}`)}${ext}`;
@@ -3086,7 +3144,10 @@ app.post("/api/auth/signin", async (c) => {
     LIMIT 1
   `;
   const user = users[0];
-  if (!user?.passwordHash || !(await compare(password, user.passwordHash))) {
+  // Always run a bcrypt compare (against a fixed dummy hash when the account or
+  // its hash is absent) so signin timing doesn't reveal whether an email exists.
+  const passwordMatches = await compare(password, user?.passwordHash || DUMMY_PASSWORD_HASH);
+  if (!user?.passwordHash || !passwordMatches) {
     return jsonError("Invalid email or password", 401);
   }
   const token = randomToken();
@@ -3204,7 +3265,11 @@ app.post("/api/profile/image", async (c) => {
 
   const imageExt = extensionForStoredFile("image", imageName, imageType || "image/jpeg");
   const key = `users/${sanitizePathSegment(user.id)}/profile/${crypto.randomUUID()}${imageExt}`;
-  const contentType = imageType || inferContentTypeFromKey(key);
+  // Derive the stored content-type solely from the validated extension — never
+  // trust the client-supplied contentType. Otherwise a caller could store an
+  // avatar as text/html and have our origin serve executable HTML (stored XSS),
+  // since /api/files serves profile images without auth.
+  const contentType = inferContentTypeFromKey(key);
   await putBuffer(c.env, key, imageBytes, contentType);
   const imageUrl = toApiFileUrl(key);
   const rows = await c.get("db")<UserRow>`
@@ -4075,17 +4140,20 @@ app.put("/api/offline-downloads", async (c) => {
   const user = requireUser(c.get("user"));
   const payload = await readJson<OfflineDownloadWritePayload>(c.req.raw);
   const items = offlineDownloadItemsFromPayload(payload);
-  const db = c.get("db");
-  await db`
-    DELETE FROM "OfflineDownload"
-    WHERE "userId" = ${user.id}
-  `;
+  // Replace-all must be atomic: D1 batch() runs as a single transaction, so a
+  // failed insert rolls back the delete instead of permanently wiping the user's
+  // offline registry. (Items are also de-duped above so an insert can't collide.)
+  const statements: D1PreparedStatement[] = [
+    c.env.DB.prepare(`DELETE FROM "OfflineDownload" WHERE "userId" = ?`).bind(user.id),
+  ];
   for (const item of items) {
-    await db`
-      INSERT INTO "OfflineDownload" ("id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt")
-      VALUES (${crypto.randomUUID()}, ${user.id}, ${item.song.id}, ${JSON.stringify(item.song)}, ${JSON.stringify(item.scopes)}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `;
+    statements.push(
+      c.env.DB.prepare(
+        `INSERT INTO "OfflineDownload" ("id", "userId", "songId", "songJson", "scopesJson", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      ).bind(crypto.randomUUID(), user.id, item.song.id, JSON.stringify(item.song), JSON.stringify(item.scopes)),
+    );
   }
+  await c.env.DB.batch(statements);
   return c.json({ ok: true, count: items.length });
 });
 
@@ -4228,7 +4296,20 @@ app.get("/api/files/*", async (c) => {
   const object = await c.env.MEDIA.head(key);
   if (!object) return jsonError("Not found", 404);
   const size = Number(object.size || 0);
-  const contentType = object.httpMetadata?.contentType || inferContentTypeFromKey(key);
+  let contentType = object.httpMetadata?.contentType || inferContentTypeFromKey(key);
+  let contentDisposition: string | null = null;
+  if (isProfileImageKey(key)) {
+    // The avatar path is unauthenticated and same-origin, so never trust stored
+    // metadata: pin the type to a known image (from the sanitized extension) and
+    // force anything else to download rather than render in the page.
+    const derived = inferContentTypeFromKey(key).split(";")[0]?.trim().toLowerCase() || "";
+    if (IMAGE_MIME_TYPES.has(derived)) {
+      contentType = derived;
+    } else {
+      contentType = "application/octet-stream";
+      contentDisposition = "attachment";
+    }
+  }
   const range = c.req.header("range");
   if (range) {
     const parsed = parseRangeHeader(range, size);
@@ -4250,6 +4331,7 @@ app.get("/api/files/*", async (c) => {
       "Accept-Ranges": "bytes",
       "Cache-Control": "private, max-age=31536000, immutable",
     });
+    if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
     applySecurityHeaders(headers);
     return new Response(partial.body, { status: 206, headers });
   }
@@ -4261,6 +4343,7 @@ app.get("/api/files/*", async (c) => {
     "Accept-Ranges": "bytes",
     "Cache-Control": "private, max-age=31536000, immutable",
   });
+  if (contentDisposition) headers.set("Content-Disposition", contentDisposition);
   applySecurityHeaders(headers);
   return new Response(full.body, { headers });
 });

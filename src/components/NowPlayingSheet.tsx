@@ -31,6 +31,7 @@ import { LyricsPanel } from "@/components/LyricsPanel";
 import { MarqueeText } from "@/components/MarqueeText";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
+import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
 const SLEEP_TIMER_MINUTE_OPTIONS = [5, 15, 30, 45, 60];
 // Horizontal artwork-swipe distance (px) that commits to a track change.
@@ -106,6 +107,10 @@ export default function NowPlayingSheet({
   const touchStartYRef = useRef<number | null>(null);
   const swipeDismissAllowedRef = useRef(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  // Trap focus inside the sheet while it's the topmost surface; defer to the
+  // queue sheet (escapeDisabled) when it's stacked on top.
+  useModalDialogFocus(open, panelRef, { enabled: !escapeDisabled });
   // Horizontal swipe on the artwork to skip tracks (mobile). The axis is locked
   // on the first move so it never fights the vertical swipe-to-dismiss or scroll.
   const coverSwipeRef = useRef<{ startX: number; startY: number; axis: "x" | "y" | null; dx: number } | null>(null);
@@ -267,6 +272,11 @@ export default function NowPlayingSheet({
       />
 
       <section
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Now playing: ${song.title}`}
+        tabIndex={-1}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         className={cn(

@@ -8,6 +8,7 @@ import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
+import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
 type QueueSheetProps = {
   open: boolean;
@@ -33,6 +34,10 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   const touchStartYRef = useRef<number | null>(null);
   const swipeDismissAllowedRef = useRef(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  // Queue sheet stacks on top of the now-playing sheet, so it owns the focus
+  // trap while open.
+  useModalDialogFocus(open, panelRef);
 
   const upNext = useMemo<QueueEntry[]>(() => {
     if (!shuffle) {
@@ -187,6 +192,11 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
       />
 
       <section
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Playback queue"
+        tabIndex={-1}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         className={cn(

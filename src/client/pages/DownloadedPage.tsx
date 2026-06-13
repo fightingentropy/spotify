@@ -40,6 +40,10 @@ export default function DownloadedPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingRef = useRef(false);
+  // Bumped on every account-switch reset. A load (especially an in-flight
+  // load-more) checks this after awaiting and discards its result if stale, so a
+  // switch can't leave the page empty or append the previous account's page.
+  const loadGenerationRef = useRef(0);
   const recordsRef = useRef<OfflineDownloadRecord[]>([]);
   const { data } = useApiData<LikedPayload>(
     withAccountScope(user ? "/api/liked" : "/api/likes", user?.id ?? status),
@@ -54,7 +58,10 @@ export default function DownloadedPage() {
   }, [hydrate]);
 
   const loadDownloads = useCallback(async (reset = false) => {
-    if (loadingRef.current) return;
+    // A reset (account switch) must never be dropped, even while a load-more is
+    // running; a non-reset load still defers to one in flight.
+    if (!reset && loadingRef.current) return;
+    const generation = loadGenerationRef.current;
     loadingRef.current = true;
     setLoadError(null);
     if (reset) {
@@ -68,6 +75,7 @@ export default function DownloadedPage() {
         offset,
         limit: DOWNLOADS_PAGE_SIZE,
       });
+      if (loadGenerationRef.current !== generation) return;
       mergeOfflineDownloadRecords(page.records);
       setTotalDownloads(page.total);
       setDownloadRecords((current) => {
@@ -82,16 +90,22 @@ export default function DownloadedPage() {
         return deduped;
       });
     } catch (error) {
+      if (loadGenerationRef.current !== generation) return;
       setLoadError(error instanceof Error ? error.message : "Could not load downloaded songs");
     } finally {
-      loadingRef.current = false;
-      setLoadingInitial(false);
-      setLoadingMore(false);
+      // A stale load (superseded by a reset) must not clear the flags the new
+      // load now owns.
+      if (loadGenerationRef.current === generation) {
+        loadingRef.current = false;
+        setLoadingInitial(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
+    loadGenerationRef.current += 1;
     recordsRef.current = [];
     setDownloadRecords([]);
     setTotalDownloads(0);

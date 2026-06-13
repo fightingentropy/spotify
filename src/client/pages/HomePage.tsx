@@ -53,6 +53,10 @@ const HOME_VIRTUALIZATION_MIN_ITEMS = 100;
 const HOME_LIST_ROW_HEIGHT = 88;
 const HOME_VIRTUAL_OVERSCAN_ROWS = 8;
 const HOME_DURATION_PROBE_LIMIT = 6;
+// Grid view renders incrementally (a screenful at a time, grown on scroll) so a
+// multi-thousand-song library doesn't reconcile every card on the first paint.
+const HOME_GRID_INITIAL_COUNT = 60;
+const HOME_GRID_CHUNK = 60;
 
 function formatDateAdded(dateStr: string | undefined): string {
   if (!dateStr) return "Unknown";
@@ -194,6 +198,8 @@ export default function HomePage() {
   });
   const [durationLookup, setDurationLookup] = useState<Record<string, number | null>>({});
   const [listVirtualRange, setListVirtualRange] = useState({ start: 0, end: 0 });
+  const [gridVisibleCount, setGridVisibleCount] = useState(HOME_GRID_INITIAL_COUNT);
+  const gridSentinelRef = useRef<HTMLDivElement | null>(null);
   const [queuedFeedbackId, setQueuedFeedbackId] = useState<string | null>(null);
   const queuedFeedbackTimeoutRef = useRef<number | null>(null);
   const durationProbeIdsRef = useRef<Set<string>>(new Set());
@@ -381,6 +387,30 @@ export default function HomePage() {
       window.removeEventListener("resize", scheduleRangeUpdate);
     };
   }, [enableVirtualList, sortedSongs.length]);
+
+  // Reset the grid window whenever the view switches or the underlying list
+  // changes (new data / re-sort), so we start from the top with a screenful.
+  useEffect(() => {
+    setGridVisibleCount(HOME_GRID_INITIAL_COUNT);
+  }, [viewMode, sortedSongs]);
+
+  // Grow the grid window as the sentinel near the bottom comes into view.
+  useEffect(() => {
+    if (viewMode !== "grid") return;
+    if (gridVisibleCount >= sortedSongs.length) return;
+    const sentinel = gridSentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setGridVisibleCount((count) => Math.min(sortedSongs.length, count + HOME_GRID_CHUNK));
+        }
+      },
+      { rootMargin: "1200px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [viewMode, gridVisibleCount, sortedSongs.length]);
 
   useEffect(() => {
     if (isPlaying) return;
@@ -899,8 +929,9 @@ export default function HomePage() {
                 </div>
               </div>
             ) : viewMode === "grid" ? (
+              <>
               <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]">
-                {sortedSongs.map((song, index) => {
+                {sortedSongs.slice(0, gridVisibleCount).map((song, index) => {
                   const displaySong = resolveHomeSong(song);
                   const active = currentSongId === song.id;
                   const liked = !!likedLookup[song.id];
@@ -978,6 +1009,10 @@ export default function HomePage() {
                   );
                 })}
               </div>
+              {gridVisibleCount < sortedSongs.length ? (
+                <div ref={gridSentinelRef} aria-hidden className="h-1 w-full" />
+              ) : null}
+              </>
             ) : enableVirtualList ? (
               <div
                 ref={listContainerRef}

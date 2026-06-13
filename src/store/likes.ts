@@ -151,6 +151,10 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       hydrated: true,
     }));
 
+    // Capture the account scope before the await: reading it afterwards would
+    // patch the wrong account's caches if the user switched accounts in-flight.
+    const accountScope = getOfflineAccountScope();
+
     try {
       const response = await fetch("/api/likes", {
         method: nextLiked ? "POST" : "DELETE",
@@ -184,7 +188,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         pending: removeKey(state.pending, songId),
         hydrated: true,
       }));
-      patchLikeApiCache(songId, nextLiked, song, getOfflineAccountScope());
+      patchLikeApiCache(songId, nextLiked, song, accountScope);
       syncAutoDownloadLiked(songId, nextLiked, song);
 
       return { ok: true, status: response.status };
@@ -198,7 +202,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           pending: removeKey(state.pending, songId),
           hydrated: true,
         }));
-        patchLikeApiCache(songId, nextLiked, song, getOfflineAccountScope());
+        patchLikeApiCache(songId, nextLiked, song, accountScope);
         syncAutoDownloadLiked(songId, nextLiked, song);
         return { ok: true, status: 202 };
       } catch {}

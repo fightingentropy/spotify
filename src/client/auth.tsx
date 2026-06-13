@@ -200,8 +200,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(initialUser);
   const [status, setStatus] = useState<AuthContextValue["status"]>(() => initialAuthStatus(initialUser));
   const userIdRef = useRef<string | null>(initialUser?.id ?? null);
+  // Bumped whenever auth state is set authoritatively (sign in/out, forced
+  // logout). An in-flight refresh() captures this at its start and bails if it
+  // changed, so a slow session check can't resurrect a just-signed-out user.
+  const authGenerationRef = useRef(0);
 
   const refresh = useCallback(async (options?: { showLoading?: boolean }) => {
+    const generation = authGenerationRef.current;
+    const isStale = () => authGenerationRef.current !== generation;
     if (isKnownOffline()) {
       const cachedUser = readCachedAuthUser();
       setUser(cachedUser);
@@ -211,6 +217,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (options?.showLoading) setStatus("loading");
     try {
       const response = await fetchSession();
+      if (isStale()) return;
       if (response.status === 401 || response.status === 403) {
         invalidateApiCache();
         clearServiceWorkerApiCache();
@@ -221,11 +228,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       if (!response.ok) throw new Error(`Session check failed with ${response.status}`);
       const data = (await response.json().catch(() => ({}))) as { user?: AuthUser | null };
+      if (isStale()) return;
       const nextUser = coerceAuthUser(data.user ?? null);
       writeCachedAuthUser(nextUser, { signedOut: !nextUser });
       setUser(nextUser);
       setStatus(nextUser ? "authenticated" : "unauthenticated");
     } catch {
+      if (isStale()) return;
       const cachedUser = readCachedAuthUser();
       setUser(cachedUser);
       setStatus(cachedUser ? "authenticated" : "unauthenticated");
@@ -252,6 +261,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const handleApiAuthRequired = () => {
+      authGenerationRef.current += 1;
       invalidateApiCache();
       clearServiceWorkerApiCache();
       writeCachedAuthUser(null, { signedOut: true });
@@ -285,6 +295,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!response.ok || !nextUser) {
       throw new Error(data.error || "Invalid email or password");
     }
+    authGenerationRef.current += 1;
     invalidateApiCache();
     clearServiceWorkerApiCache();
     writeCachedAuthUser(nextUser);
@@ -294,6 +305,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    authGenerationRef.current += 1;
     await fetch("/api/auth/signout", {
       method: "POST",
       credentials: "include",

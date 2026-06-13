@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { CheckCircle2, CircleArrowDown, RefreshCw, X } from "lucide-react";
 import {
   getScopeDownloadState,
@@ -305,7 +306,6 @@ export function OfflineBulkDownloadButton({
   hideWhenDownloaded = false,
 }: OfflineBulkDownloadButtonProps) {
   const hydrate = useOfflineStore((state) => state.hydrate);
-  const records = useOfflineStore((state) => state.records);
   const queueDownloads = useOfflineStore((state) => state.queueDownloads);
   const removeScope = useOfflineStore((state) => state.removeScope);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -315,17 +315,24 @@ export function OfflineBulkDownloadButton({
   const actionPendingRef = useRef(false);
   const confirmTitleId = useId();
   const confirmDescriptionId = useId();
-  const inMemoryStatus = getScopeDownloadState(records, songs, scope);
+  // Subscribe to a shallow-compared scope slice instead of the whole records map,
+  // so an unrelated scope's per-tick progress updates don't re-render this button;
+  // it now re-renders only when THIS scope's status/progress actually changes.
+  const { inMemoryStatus, progress } = useOfflineStore(
+    useShallow((state) => ({
+      inMemoryStatus: getScopeDownloadState(state.records, songs, scope),
+      progress: scopeProgress(state.records, songs, scope),
+    })),
+  );
   const [idbStatus, setIdbStatus] = useState<ReturnType<typeof getScopeDownloadState> | null>(null);
   // The in-memory record map is capped, so for big collections it can mis-report a
   // fully-downloaded scope as "partial"/"none". Prefer the authoritative IDB read.
   const status = idbStatus ?? inMemoryStatus;
-  const cacheableSongs = songs.filter(canCacheSong);
+  const cacheableSongs = useMemo(() => songs.filter(canCacheSong), [songs]);
   const inFlight = status === "downloading";
   const busy = actionPending || inFlight;
   const downloaded = status === "downloaded";
-  const progress = busy ? scopeProgress(records, songs, scope) : 0;
-  const progressPercent = Math.round(progress * 100);
+  const progressPercent = busy ? Math.round(progress * 100) : 0;
 
   useEffect(() => {
     void hydrate();
@@ -333,15 +340,29 @@ export function OfflineBulkDownloadButton({
 
   useEffect(() => {
     let cancelled = false;
-    readScopeDownloadState(songs, scope)
-      .then((next) => {
-        if (!cancelled) setIdbStatus(next);
-      })
-      .catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const run = () => {
+      readScopeDownloadState(songs, scope)
+        .then((next) => {
+          if (!cancelled) setIdbStatus(next);
+        })
+        .catch(() => undefined);
+    };
+    // The authoritative IDB read is one transaction per song; debounce store
+    // changes so a burst of progress ticks coalesces into a single re-read
+    // instead of N reads several times per second.
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(run, 400);
+    };
+    run();
+    const unsubscribe = useOfflineStore.subscribe(schedule);
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
+      unsubscribe();
     };
-  }, [records, songs, scope]);
+  }, [songs, scope]);
 
   useEffect(() => {
     actionPendingRef.current = actionPending;

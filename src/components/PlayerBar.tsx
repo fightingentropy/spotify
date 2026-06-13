@@ -15,7 +15,7 @@ import { isOfflinePlaybackSong, isPodcastSong, isRadioSong } from "@/lib/player-
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
 import type { PlaybackStateSnapshot } from "@/lib/playback-state";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
-import { PLAYBACK_SEEK_REQUEST_EVENT, publishPlaybackPosition } from "@/lib/playback-position";
+import { PLAYBACK_SEEK_REQUEST_EVENT, publishPlaybackPosition, subscribePlaybackPosition } from "@/lib/playback-position";
 import { useMediaSession } from "@/lib/use-media-session";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
 import { NATIVE_API_ORIGIN } from "@/lib/native-api";
@@ -350,6 +350,12 @@ function PlayerBar(): React.ReactElement | null {
   // Mirrors currentTime without forcing the snapshot/sync callbacks to rebuild on
   // every 4Hz timeupdate; read by buildPlaybackStateSnapshot for a stable identity.
   const currentTimeRef = useRef<number>(0);
+  // Wall-clock of the last currentTime *state* write from the timeupdate tick. The
+  // smooth 4Hz position goes to the scrubber leaf via publishPlaybackPosition; the
+  // React state (which re-renders this whole tree and feeds MediaSession) is only
+  // updated ~1Hz while the full sheet is closed, matching MediaSession's own 1Hz
+  // publish — so steady-state playback no longer re-renders PlayerBar at 4Hz.
+  const lastTimeStateWriteRef = useRef<number>(0);
   const consecutiveAudioErrorsRef = useRef<number>(0);
   const erroredSrcRetryRef = useRef<string | null>(null);
   const refreshNotFoundCountRef = useRef<{ id: string | null; count: number }>({ id: null, count: 0 });
@@ -1536,7 +1542,9 @@ function PlayerBar(): React.ReactElement | null {
     ) => {
       crossfadeCancelRef.current = null;
       crossfadeCommitSongIdRef.current = target.playbackSong.id;
-      advanceToIndex(target.index, { fromFuture: target.fromFuture });
+      // preservePlayState: a pause that lands mid-fade (lock screen / MediaSession)
+      // must survive the queue advance — don't let advanceToIndex force playback on.
+      advanceToIndex(target.index, { fromFuture: target.fromFuture, preservePlayState: true });
       setActiveIdx(activeIdx === 0 ? 1 : 0);
       setDuration(
         finiteMediaDuration(incoming.duration) ??
@@ -1947,8 +1955,11 @@ function PlayerBar(): React.ReactElement | null {
   const handleActiveAudioError = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
     const audio = event.currentTarget;
     if (audio !== getActiveAudio()) return;
-    // Radio / browser-local / offline sources have their own handling.
-    if (currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast || currentSongIsOffline) return;
+    // Radio / browser-local / offline sources have their own handling. Streaming
+    // podcasts (plain HTTP through the media proxy) deliberately fall through to
+    // the same retry/skip path as music so one dead episode can't wedge the
+    // queue; offline/native podcasts are already caught by currentSongIsOffline.
+    if (currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsOffline) return;
     notePlaybackNetworkFailure();
 
     const state = audioSourceStateRef.current.get(audio);
@@ -1983,7 +1994,7 @@ function PlayerBar(): React.ReactElement | null {
     }
     erroredSrcRetryRef.current = null;
     next();
-  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsPodcast, currentSongIsRadio, getActiveAudio, next, pause]);
+  }, [currentSongIsBrowserLocal, currentSongIsOffline, currentSongIsRadio, getActiveAudio, next, pause]);
 
   const handleTogglePlayback = useCallback(() => {
     void impactLight();
@@ -2130,6 +2141,8 @@ function PlayerBar(): React.ReactElement | null {
           const sticky = stickySeekRef.current;
           if (sticky?.audio === e.currentTarget && !seekIsCloseEnough(e.currentTarget.currentTime, sticky.time)) {
             currentTimeRef.current = sticky.time;
+            publishPlaybackPosition({ currentTime: sticky.time, duration });
+            lastTimeStateWriteRef.current = Date.now();
             setCurrentTime(sticky.time);
             return;
           }
@@ -2152,7 +2165,15 @@ function PlayerBar(): React.ReactElement | null {
               listen.durationSeconds = finiteMediaDuration(e.currentTarget.duration);
             }
           }
-          setCurrentTime(nextTime);
+          // Smooth 4Hz position to the scrubber leaf (and sidebar lyrics). The React
+          // state write — which re-renders this whole tree — is throttled to ~1Hz
+          // unless the full-screen sheet is open (it needs the smooth value too).
+          publishPlaybackPosition({ currentTime: nextTime, duration });
+          const nowMs = Date.now();
+          if (nowPlayingOpen || nowMs - lastTimeStateWriteRef.current >= 900) {
+            lastTimeStateWriteRef.current = nowMs;
+            setCurrentTime(nextTime);
+          }
           if (
             currentSongIsPodcast &&
             currentSongId &&
@@ -2221,7 +2242,6 @@ function PlayerBar(): React.ReactElement | null {
 
   const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !currentSongIsRadio;
   const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
-  const progress = hasSeekableDuration ? Math.min(100, Math.max(0, (safeCurrentTime / duration) * 100)) : 0;
 
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
 
@@ -2270,9 +2290,10 @@ function PlayerBar(): React.ReactElement | null {
           className="absolute inset-x-0 top-0 h-0.5 bg-white/[0.12]"
           aria-hidden
         >
-          <div
+          <PlaybackProgressFill
+            duration={duration}
+            isRadio={currentSongIsRadio}
             className="h-full bg-emerald-500 transition-[width] duration-150"
-            style={{ width: currentSongIsRadio ? "100%" : `${progress}%` }}
           />
         </div>
         <div className="h-[var(--wf-mobile-player-height)] px-3 flex items-center gap-3">
@@ -2285,7 +2306,7 @@ function PlayerBar(): React.ReactElement | null {
             <CoverImage
               src={playbackSong.imageUrl || "/apple-icon.png"}
               networkSrc={playbackSong.networkImageUrl}
-              alt="cover"
+              alt=""
               width={48}
               height={48}
               loading="eager"
@@ -2329,7 +2350,7 @@ function PlayerBar(): React.ReactElement | null {
           <CoverImage
             src={playbackSong.imageUrl || "/apple-icon.png"}
             networkSrc={playbackSong.networkImageUrl}
-            alt="cover"
+            alt=""
             width={48}
             height={48}
             loading="eager"
@@ -2400,23 +2421,7 @@ function PlayerBar(): React.ReactElement | null {
               <span className="w-10 text-[12px] text-white/[0.62]">Radio</span>
             </div>
           ) : (
-            <div className="flex w-full items-center gap-3">
-              <span className="w-10 text-right text-[12px] tabular-nums text-white/[0.62]">{formatTime(safeCurrentTime)}</span>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, duration)}
-                step={0.1}
-                value={safeCurrentTime}
-                aria-label="Playback position"
-                onChange={(e) => onSeek(Number(e.target.value))}
-                className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                style={{
-                  background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
-                }}
-              />
-              <span className="w-10 text-[12px] tabular-nums text-white/[0.62]">{formatTime(duration)}</span>
-            </div>
+            <PlaybackScrubber duration={duration} onSeek={onSeek} />
           )}
         </div>
 
@@ -2557,6 +2562,57 @@ function PlayerBar(): React.ReactElement | null {
       )}
     </>
   );
+}
+
+// Leaf components that subscribe to the 4Hz playback-position event bridge so the
+// progress UIs stay smooth without re-rendering the whole PlayerBar on every tick.
+// They retain their last value when playback pauses (no events fire) and are
+// re-seeded by PlayerBar's discrete position publishes (song change, resume, seek).
+function PlaybackScrubber({ duration, onSeek }: { duration: number; onSeek: (value: number) => void }) {
+  const [time, setTime] = useState(0);
+  useEffect(() => subscribePlaybackPosition(({ currentTime }) => setTime(currentTime)), []);
+  const seekable = duration > 0 && Number.isFinite(duration);
+  const safe = seekable ? Math.min(time, duration) : 0;
+  const progress = seekable ? Math.min(100, Math.max(0, (safe / duration) * 100)) : 0;
+  return (
+    <div className="flex w-full items-center gap-3">
+      <span className="w-10 text-right text-[12px] tabular-nums text-white/[0.62]">{formatTime(safe)}</span>
+      <input
+        type="range"
+        min={0}
+        max={Math.max(0, duration)}
+        step={0.1}
+        value={safe}
+        aria-label="Playback position"
+        onChange={(e) => {
+          const value = Number(e.target.value);
+          setTime(value);
+          onSeek(value);
+        }}
+        className="h-1.5 w-full appearance-none rounded bg-white/[0.12] accent-[#1ed760] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        style={{
+          background: `linear-gradient(to right, rgb(16 185 129) 0%, rgb(16 185 129) ${progress}%, rgba(255,255,255,0.18) ${progress}%, rgba(255,255,255,0.18) 100%)`,
+        }}
+      />
+      <span className="w-10 text-[12px] tabular-nums text-white/[0.62]">{formatTime(duration)}</span>
+    </div>
+  );
+}
+
+function PlaybackProgressFill({
+  duration,
+  isRadio,
+  className,
+}: {
+  duration: number;
+  isRadio: boolean;
+  className?: string;
+}) {
+  const [time, setTime] = useState(0);
+  useEffect(() => subscribePlaybackPosition(({ currentTime }) => setTime(currentTime)), []);
+  const seekable = duration > 0 && Number.isFinite(duration);
+  const pct = isRadio ? 100 : seekable ? Math.min(100, Math.max(0, (Math.min(time, duration) / duration) * 100)) : 0;
+  return <div className={className} style={{ width: `${pct}%` }} />;
 }
 
 export { PlayerBar };

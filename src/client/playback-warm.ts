@@ -73,10 +73,10 @@ function sweepStalePlaybackSeen(timestamp: number): void {
   }
 }
 
-async function warmPlaybackUrl(url: string): Promise<void> {
-  if (typeof window === "undefined") return;
-  if (!sameOriginCacheableUrl(url)) return;
-  if (shouldSkipSpeculativeMediaFetch()) return;
+async function warmPlaybackUrl(url: string): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  if (!sameOriginCacheableUrl(url)) return false;
+  if (shouldSkipSpeculativeMediaFetch()) return false;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PLAYBACK_WARM_TIMEOUT_MS);
   try {
@@ -90,8 +90,10 @@ async function warmPlaybackUrl(url: string): Promise<void> {
     });
     await response.body?.cancel().catch(() => undefined);
     notePlaybackNetworkSuccess();
+    return response.ok;
   } catch {
     notePlaybackNetworkFailure();
+    return false;
   } finally {
     window.clearTimeout(timeout);
   }
@@ -198,8 +200,11 @@ export async function prefetchUpcomingPlayback(
     const timestamp = now();
     if (seenAt && timestamp - seenAt < PLAYBACK_WARM_DEDUPE_MS) continue;
     sweepStalePlaybackSeen(timestamp);
+    // Mark seen up front to dedupe concurrent passes, but un-mark on failure so a
+    // warm that cached nothing isn't suppressed for the full dedupe window.
     warmPlaybackSeen.set(resolved, timestamp);
-    await warmPlaybackUrl(url);
+    const warmed = await warmPlaybackUrl(url);
+    if (!warmed) warmPlaybackSeen.delete(resolved);
   }
   await Promise.all(sidecarUrls.map((url) => cacheSidecarUrl(url).catch(() => undefined)));
 }

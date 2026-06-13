@@ -143,8 +143,14 @@ export function extractPodcastFeedMediaUrls(xmlText: string, show: PodcastShow):
     if (normalized) urls.add(normalized);
   };
   add(show.imageUrl);
-  for (const match of xmlText.matchAll(/\b(?:url|href)=(?:"([^"]*)"|'([^']*)')/gi)) {
-    add(match[1] ?? match[2] ?? "");
+  // Only pull URLs from media-bearing tags (enclosure / media:content /
+  // itunes:image) and <url> elements — never from arbitrary href= in show-notes
+  // HTML, which would let an episode turn this proxy into a relay for any link
+  // it happens to cite.
+  for (const tag of xmlText.matchAll(/<(?:enclosure|media:content|itunes:image)\b[^>]*>/gi)) {
+    for (const attr of tag[0].matchAll(/\b(?:url|href)=(?:"([^"]*)"|'([^']*)')/gi)) {
+      add(attr[1] ?? attr[2] ?? "");
+    }
   }
   for (const match of xmlText.matchAll(/<url>([^<]*)<\/url>/gi)) {
     add(match[1]);

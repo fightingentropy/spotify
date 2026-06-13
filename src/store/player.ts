@@ -56,6 +56,10 @@ type AdvanceToIndexOptions = {
   // True when the target index was peeked from playFuture (the redo stack), so
   // the commit should consume that entry rather than picking from the shuffle pool.
   fromFuture?: boolean;
+  // Keep the current isPlaying value instead of forcing playback on. The
+  // crossfade commit uses this so pausing mid-fade isn't undone when the queue
+  // advances to the incoming track.
+  preservePlayState?: boolean;
 };
 
 const MAX_PLAY_HISTORY = 200;
@@ -145,7 +149,8 @@ function readStoredCrossfadeSeconds(): number {
   try {
     if (typeof window === "undefined") return 4;
     const raw = localStorage.getItem(CROSSFADE_SECONDS_STORAGE_KEY);
-    return Math.max(0, Math.min(12, Number(raw ?? 4)));
+    const value = Number(raw ?? 4);
+    return Number.isFinite(value) ? Math.max(0, Math.min(12, value)) : 4;
   } catch {
     return 4;
   }
@@ -383,12 +388,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   advanceToIndex: (index, options) =>
     set((s) => {
       if (index < 0 || index >= s.queue.length || index === s.currentIndex) return s;
+      const nextPlaying = options?.preservePlayState ? s.isPlaying : true;
       if (!s.shuffle) {
         return {
           ...s,
           currentIndex: index,
           currentSong: s.queue[index],
-          isPlaying: true,
+          isPlaying: nextPlaying,
         };
       }
       // Mirror next()'s shuffle bookkeeping: when the target came from playFuture
@@ -404,7 +410,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         playHistory: pushHistory(s.playHistory, s.currentIndex),
         playFuture: fromFuture ? future.slice(0, -1) : [],
         shuffleRemaining: fromFuture ? s.shuffleRemaining : removeQueueIndex(s.shuffleRemaining, index),
-        isPlaying: true,
+        isPlaying: nextPlaying,
       };
     }),
   replaceSong: (song) =>

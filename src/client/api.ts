@@ -422,7 +422,11 @@ export function useApiData<T>(
     async function run() {
       const cached = await getCacheEntryAsync<T>(url);
       const cachedData = cached?.data;
-      const canReuseCurrentData = dataUrlRef.current === url || keepPreviousData;
+      // keepPreviousData should only suppress the spinner/error when data is
+      // actually on screen — on a cold load (no visible data yet) it must NOT
+      // mask fetch errors, or every page renders an outage as an empty library.
+      const hasVisibleData = dataUrlRef.current !== "";
+      const canReuseCurrentData = dataUrlRef.current === url || (keepPreviousData && hasVisibleData);
 
       if (cancelled) return;
       if (cachedData !== undefined) {
