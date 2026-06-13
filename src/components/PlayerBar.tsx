@@ -2305,6 +2305,11 @@ function PlayerBar(): React.ReactElement | null {
     // timeupdate keeps firing while iOS backgrounds throttle timers, so enforce
     // sleep-timer expiry here.
     enforceSleepTimerExpiry();
+    // A user seek is queued (onSeek debounces ~90ms before issuing it): the
+    // optimistic target is already on the scrubber, so ignore pre-seek time ticks.
+    // The native deck reports the OLD position until the seek is actually issued,
+    // which would otherwise flash the scrubber back before it jumps to the target.
+    if (pendingSeekRef.current) return;
     const sticky = stickySeekRef.current;
     if (sticky?.audio === event.currentTarget && !seekIsCloseEnough(event.currentTarget.currentTime, sticky.time)) {
       currentTimeRef.current = sticky.time;
