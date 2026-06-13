@@ -655,6 +655,16 @@ function PlayerBar(): React.ReactElement | null {
     try { audio.volume = clamped; } catch {}
   }, []);
 
+  // Build the Web Audio graph at mount on iOS, BEFORE either <audio> element ever
+  // plays. iOS leaves an element that is already "live" when createMediaElementSource
+  // runs outputting straight to the speakers (bypassing its GainNode) — which made
+  // the first-played (outgoing) side of the crossfade un-fadeable while the second
+  // (incoming) side faded correctly. Wiring both elements up front while idle avoids
+  // that; the context stays suspended until a play gesture resumes it.
+  useEffect(() => {
+    if (decideWebAudioMode()) ensureWebAudioGraph();
+  }, [decideWebAudioMode, ensureWebAudioGraph]);
+
   const unloadAudioSource = useCallback((audio: HTMLAudioElement) => {
     const current = audioSourceStateRef.current.get(audio);
     current?.hls?.destroy();
@@ -848,12 +858,17 @@ function PlayerBar(): React.ReactElement | null {
   }, [resetPendingSeek]);
 
   const playAudio = useCallback((audio: HTMLAudioElement): Promise<boolean> => {
-    // If the audio is routed through Web Audio, a suspended context = silence, so
-    // nudge it back to running on every play attempt (best-effort outside a gesture).
-    const ctx = audioContextRef.current;
-    if (ctx && ctx.state === "suspended") void ctx.resume().catch(() => {});
     const requestId = ++playRequestIdRef.current;
-    return audio.play()
+    // Ensure the Web Audio context is RUNNING before the element starts: on iOS an
+    // element that begins playing while the context is still suspended outputs
+    // straight to the speakers, bypassing its GainNode — which left the first
+    // (outgoing) crossfade track un-fadeable while the later (incoming) one, played
+    // into an already-running context, faded fine. Awaiting resume first makes the
+    // element route through its gain node so both sides of the fade work.
+    const ctx = audioContextRef.current;
+    const ready = ctx && ctx.state === "suspended" ? ctx.resume().catch(() => {}) : Promise.resolve();
+    return ready
+      .then(() => audio.play())
       .then(() => requestId === playRequestIdRef.current)
       .catch((error: unknown) => {
         if (errorName(error) === "AbortError") return false;
