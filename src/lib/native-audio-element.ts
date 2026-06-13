@@ -60,6 +60,12 @@ export class NativeAudioElement {
   // metadata loads). HTMLMediaElement would buffer the currentTime write; AVPlayer
   // takes it as a prepare option instead.
   private pendingStartAt = 0;
+  // Seek-in-flight guard: for a moment after a seek is issued, AVPlayer's periodic
+  // time observer still reports the PRE-seek position, which flashes the scrubber
+  // back before snapping forward. Ignore time events until the matching "seeked".
+  private _seeking = false;
+  private _seekTarget = 0;
+  private seekSafetyTimer: ReturnType<typeof setTimeout> | null = null;
   // Accepted-and-ignored to match the HTMLAudioElement API PlayerBar sets.
   defaultPlaybackRate = 1;
   crossOrigin: string | null = null;
@@ -100,6 +106,14 @@ export class NativeAudioElement {
       this.pendingStartAt = value;
       return;
     }
+    this._seeking = true;
+    this._seekTarget = value;
+    if (this.seekSafetyTimer) clearTimeout(this.seekSafetyTimer);
+    // Fail-safe: if "seeked" never arrives, stop suppressing after a beat.
+    this.seekSafetyTimer = setTimeout(() => {
+      this._seeking = false;
+      this.seekSafetyTimer = null;
+    }, 1500);
     void AudioEngine.seek({ deck: this.deck, position: value }).catch(() => {});
   }
 
@@ -183,11 +197,14 @@ export class NativeAudioElement {
   // --- plugin event handlers ---------------------------------------------------
 
   handleTime(currentTime: number, duration: number): void {
-    this._currentTime = currentTime;
     if (duration > 0 && duration !== this._duration) {
       this._duration = duration;
       this.dispatch("durationchange");
     }
+    // Drop pre-seek positions while a seek is in flight (prevents the scrubber
+    // flashing back to where it was before snapping to the seeked spot).
+    if (this._seeking) return;
+    this._currentTime = currentTime;
     this.dispatch("timeupdate");
   }
   handleLoaded(duration: number): void {
@@ -211,7 +228,15 @@ export class NativeAudioElement {
     this.dispatch("playing");
   }
   handleSeeked(time: number): void {
+    // Ignore an intermediate completion from a superseded seek during a rapid
+    // drag — only the one matching the latest target ends the seeking window.
+    if (this._seeking && Math.abs(time - this._seekTarget) >= 0.75) return;
     this._currentTime = time;
+    this._seeking = false;
+    if (this.seekSafetyTimer) {
+      clearTimeout(this.seekSafetyTimer);
+      this.seekSafetyTimer = null;
+    }
     this.dispatch("seeked");
   }
   handleError(): void {
