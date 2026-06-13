@@ -3,7 +3,6 @@ import { useEffect } from "react";
 import { useApiData, withAccountScope, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { SongGrid } from "@/components/SongGrid";
-import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
 
 function SongGridSkeleton() {
   return (
@@ -78,17 +77,7 @@ export default function LikedPage() {
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-4 flex flex-col items-start gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
-          <h1 className="text-2xl font-semibold leading-tight">Liked Songs</h1>
-          {songs.length > 0 ? (
-            <OfflineBulkDownloadButton
-              songs={songs}
-              scope="liked"
-              label="Download liked songs"
-              className="w-full justify-center sm:w-auto"
-            />
-          ) : null}
-        </div>
+        <h1 className="mb-4 text-2xl font-semibold leading-tight sm:mb-6">Liked Songs</h1>
         {loading && songs.length === 0 ? (
           <SongGridSkeleton />
         ) : error ? (
