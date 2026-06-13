@@ -11,6 +11,9 @@ type MediaSessionSong = {
 };
 
 type UseMediaSessionOptions = {
+  // false on native iOS: the AVPlayer engine owns MPNowPlayingInfoCenter +
+  // MPRemoteCommandCenter, so the web mediaSession must not also write them.
+  enabled?: boolean;
   song: MediaSessionSong | null;
   isPlaying: boolean;
   currentTime: number;
@@ -119,6 +122,7 @@ function clearPositionState(): void {
 }
 
 export function useMediaSession({
+  enabled = true,
   song,
   isPlaying,
   currentTime,
@@ -132,6 +136,10 @@ export function useMediaSession({
   getActiveAudio,
   audioRefs,
 }: UseMediaSessionOptions): void {
+  // A ref so the effect guards read the latest value without re-subscribing
+  // (enabled is platform-constant in practice, so it never actually flips).
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const handlersRef = useRef({ onPlay, onPause, onPrevious, onNext, onSeek });
   const songRef = useRef(song);
   const isPlayingRef = useRef(isPlaying);
@@ -167,6 +175,7 @@ export function useMediaSession({
   }, [playbackRate]);
 
   const syncMediaSession = useCallback(() => {
+    if (!enabledRef.current) return;
     const currentSong = songRef.current;
     if (!currentSong) {
       if ("mediaSession" in navigator) {
@@ -194,12 +203,12 @@ export function useMediaSession({
   }, [song?.title, song?.artist, song?.album, song?.imageUrl, song, syncMediaSession]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator) || !song) return;
+    if (!enabledRef.current || !("mediaSession" in navigator) || !song) return;
     applyPlaybackState(isPlaying);
   }, [isPlaying, song]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator) || !song) return;
+    if (!enabledRef.current || !("mediaSession" in navigator) || !song) return;
     // The OS interpolates position on its own, so there's no need to push every
     // 4Hz currentTime tick. Publish immediately when the duration or rate
     // changes (so the lock-screen scrubber rescales for VBR/HLS and doesn't
@@ -215,7 +224,7 @@ export function useMediaSession({
   }, [currentTime, duration, playbackRate, song]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator)) return;
+    if (!enabledRef.current || !("mediaSession" in navigator)) return;
 
     const onActiveAudioEvent = (event: Event) => {
       const active = getActiveAudio();

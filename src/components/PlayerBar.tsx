@@ -18,6 +18,8 @@ import type { PlaybackStateSnapshot } from "@/lib/playback-state";
 import { PLAYBACK_GESTURE_EVENT, requestImmediatePlayback, type PlaybackGestureDetail } from "@/lib/playback-gesture";
 import { PLAYBACK_SEEK_REQUEST_EVENT, publishPlaybackPosition, subscribePlaybackPosition } from "@/lib/playback-position";
 import { useMediaSession } from "@/lib/use-media-session";
+import { AudioEngine, isNativeAudioPlatform } from "@/lib/native-audio";
+import { NativeAudioElement, deckForIndex } from "@/lib/native-audio-element";
 import { resolveNativeApiUrl } from "@/lib/song-utils";
 import { NATIVE_API_ORIGIN } from "@/lib/native-api";
 import {
@@ -228,6 +230,26 @@ function crossOriginForAudioSrc(src: string): "anonymous" | "use-credentials" | 
   }
 }
 
+// Native iOS: how many seconds before the crossfade window opens to start
+// buffering the next track onto the idle AVPlayer deck, so it can rise in sync
+// with the outgoing track instead of popping in late while still loading.
+const NATIVE_CROSSFADE_PREFETCH_LEAD_S = 8;
+
+// Resolve a song's cover to an absolute http(s) URL for the native Now Playing
+// artwork fetch. Device-local (capacitor/blob) covers can't be fetched by the
+// native URLSession, so prefer the original remote URL, else skip artwork.
+function nativeArtworkUrl(song: PlayerSong): string | undefined {
+  const url = song.networkImageUrl || song.imageUrl;
+  if (!url) return undefined;
+  if (/^(blob:|data:|capacitor:)/i.test(url) || url.includes("/_capacitor_file_/")) return undefined;
+  if (/^https?:/i.test(url)) return url;
+  try {
+    return new URL(url, location.origin).href;
+  } catch {
+    return undefined;
+  }
+}
+
 function PlayerBar(): React.ReactElement | null {
   // Individual selectors so we only re-render when each specific value changes
   // (instead of on every store mutation, as a full destructure would cause).
@@ -300,6 +322,14 @@ function PlayerBar(): React.ReactElement | null {
   const audioARef = useRef<HTMLAudioElement | null>(null);
   const audioBRef = useRef<HTMLAudioElement | null>(null);
   const audioSourceStateRef = useRef<WeakMap<HTMLAudioElement, AudioSourceState>>(new WeakMap());
+  // On native iOS the two crossfade "decks" are AVPlayer-backed adapters rather
+  // than <audio> elements, so playback and the crossfade run in native code that
+  // keeps going when the screen locks. They implement the slice of
+  // HTMLAudioElement that PlayerBar uses (see native-audio-element.ts).
+  if (isNativeAudioPlatform() && !audioARef.current) {
+    audioARef.current = new NativeAudioElement(deckForIndex(0)) as unknown as HTMLAudioElement;
+    audioBRef.current = new NativeAudioElement(deckForIndex(1)) as unknown as HTMLAudioElement;
+  }
   const [activeIdx, setActiveIdx] = useState<0 | 1>(0);
   const getActiveAudio = useCallback(
     () => (activeIdx === 0 ? audioARef.current : audioBRef.current),
@@ -333,6 +363,12 @@ function PlayerBar(): React.ReactElement | null {
   // Latest crossfade trigger / force-commit, called from the active element's
   // timeupdate/ended handlers (which fire even when the tab is backgrounded).
   const maybeStartCrossfadeRef = useRef<() => void>(() => {});
+  // Native iOS: preload the next track onto the idle deck before the fade.
+  const maybePrefetchCrossfadeRef = useRef<() => void>(() => {});
+  const crossfadePrefetchRef = useRef<{
+    target: { song: PlayerSong; playbackSong: PlayerSong; index: number; fromFuture: boolean };
+    src: string;
+  } | null>(null);
   const forceCommitCrossfadeRef = useRef<() => void>(() => {});
   const suppressAutoLoadRef = useRef<boolean>(false);
   const resumeAfterSeekRef = useRef<boolean>(false);
@@ -597,9 +633,19 @@ function PlayerBar(): React.ReactElement | null {
   // first load (before the gesture that builds the graph).
   const decideWebAudioMode = useCallback((): boolean => {
     if (webAudioModeRef.current === null) {
-      // iOS must always use the gain-node path: audio.volume can't change output
-      // there, and the probe false-positives on iOS 26 (see isIosLikePlatform).
-      if (isIosLikePlatform()) {
+      if (isNativeAudioPlatform()) {
+        // Native iOS app: route the <audio> element STRAIGHT to the hardware (no
+        // AudioContext). iOS suspends a Web Audio AudioContext the moment the
+        // screen locks, which silenced playback while the element kept advancing.
+        // Direct playback into the AVAudioSession survives lock (UIBackgroundModes
+        // + activateSession). Trade-off: audio.volume is read-only on iOS, so the
+        // crossfade is disabled here (clean cut) until the native AVPlayer engine
+        // lands — see docs/native-audio-engine.md.
+        webAudioModeRef.current = false;
+      } else if (isIosLikePlatform()) {
+        // iOS Safari/PWA (non-native): audio.volume can't change output there, and
+        // the probe false-positives on iOS 26 (see isIosLikePlatform), so force the
+        // gain-node path.
         webAudioModeRef.current = true;
       } else {
         const probe = audioARef.current ?? audioBRef.current;
@@ -693,6 +739,21 @@ function PlayerBar(): React.ReactElement | null {
     if (decideWebAudioMode()) ensureWebAudioGraph();
   }, [decideWebAudioMode, ensureWebAudioGraph]);
 
+  // Native iOS: initialize the AVPlayer engine once — activates the AVAudioSession
+  // (.playback, so it survives a locked screen with UIBackgroundModes: audio),
+  // creates the two decks, and registers lock-screen remote commands. Idempotent.
+  // See docs/native-audio-engine.md.
+  useEffect(() => {
+    if (!isNativeAudioPlatform()) return;
+    void AudioEngine.configure().catch(() => {});
+  }, []);
+
+  // Native iOS: drop a stale crossfade prefetch when the track changes via a
+  // skip/next/prev (the prefetched "next" no longer applies).
+  useEffect(() => {
+    crossfadePrefetchRef.current = null;
+  }, [currentSongId]);
+
   const unloadAudioSource = useCallback((audio: HTMLAudioElement) => {
     const current = audioSourceStateRef.current.get(audio);
     current?.hls?.destroy();
@@ -780,6 +841,15 @@ function PlayerBar(): React.ReactElement | null {
     audioSourceStateRef.current.delete(audio);
     if (current && isCapacitorFileUrl(current.src)) releaseNativeAudioObjectUrl(audio, current.src);
 
+    if (isNativeAudioPlatform()) {
+      // The native AVPlayer engine plays http(s), HLS (m3u8) and file:// directly
+      // — no hls.js, no blob upgrade. The adapter turns a capacitor file URL back
+      // into a filesystem path before handing it to AVPlayer.
+      audioSourceStateRef.current.set(audio, { src: absolute, hls: null });
+      audio.src = absolute;
+      return;
+    }
+
     if (isHlsPlaylistSrc(absolute) && !canPlayHlsNatively(audio)) {
       audio.removeAttribute("src");
       audio.load();
@@ -838,6 +908,7 @@ function PlayerBar(): React.ReactElement | null {
     crossfadingRef.current = false;
     crossfadeStartedRef.current = false;
     crossfadeTargetRef.current = null;
+    crossfadePrefetchRef.current = null;
     cancel?.();
   }, []);
 
@@ -913,6 +984,10 @@ function PlayerBar(): React.ReactElement | null {
       if (!detail?.audioUrl) return;
       const audio = getActiveAudio();
       if (!audio) return;
+
+      // Native iOS: re-assert the audio session on the user's play gesture so the
+      // WebView <audio> keeps playing through it when the screen later locks.
+      if (isNativeAudioPlatform()) void AudioEngine.activateSession().catch(() => {});
 
       // This runs inside a user gesture — the only time an AudioContext may be
       // started on iOS. Build/resume the Web Audio graph here so the gain-node
@@ -1124,6 +1199,9 @@ function PlayerBar(): React.ReactElement | null {
   }, [onSeek]);
 
   useMediaSession({
+    // Native iOS owns the lock screen via the AVPlayer engine; keep the web
+    // mediaSession from also writing MPNowPlayingInfoCenter / remote commands.
+    enabled: !isNativeAudioPlatform(),
     song: playbackSong,
     isPlaying,
     currentTime,
@@ -1567,7 +1645,12 @@ function PlayerBar(): React.ReactElement | null {
       // preservePlayState: a pause that lands mid-fade (lock screen / MediaSession)
       // must survive the queue advance — don't let advanceToIndex force playback on.
       advanceToIndex(target.index, { fromFuture: target.fromFuture, preservePlayState: true });
-      setActiveIdx(activeIdx === 0 ? 1 : 0);
+      const nextActiveIdx = activeIdx === 0 ? 1 : 0;
+      setActiveIdx(nextActiveIdx);
+      // Tell the native engine which deck now drives time + Now Playing.
+      if (isNativeAudioPlatform()) {
+        void AudioEngine.setActiveDeck({ deck: deckForIndex(nextActiveIdx) }).catch(() => {});
+      }
       setDuration(
         finiteMediaDuration(incoming.duration) ??
           finiteMediaDuration(target.playbackSong.duration ?? 0) ??
@@ -1577,6 +1660,30 @@ function PlayerBar(): React.ReactElement | null {
       crossfadingRef.current = false;
       crossfadeStartedRef.current = false;
       crossfadeTargetRef.current = null;
+    };
+
+    // Native iOS: a few seconds before the fade opens, buffer the next track onto
+    // the idle deck so its volume rises in sync with the outgoing track instead of
+    // ramping up while AVPlayer is still loading it (which made it pop in late).
+    const maybePrefetchCrossfade = () => {
+      if (!isNativeAudioPlatform()) return;
+      if (!crossfadeEnabled || crossfadeStartedRef.current || crossfadingRef.current) return;
+      if (!isPlaying || repeatMode === "one" || currentSongIsPodcast) return;
+      if (crossfadePrefetchRef.current) return;
+      const fromAudio = getActiveAudio();
+      const incoming = getInactiveAudio();
+      if (!fromAudio || !incoming) return;
+      const total = finiteMediaDuration(fromAudio.duration) ?? finiteMediaDuration(duration);
+      if (total == null) return;
+      const fadeWindow = Math.min(crossfadeSeconds, Math.max(0, total / 2));
+      if (fadeWindow <= 0) return;
+      const remaining = total - (fromAudio.currentTime || 0);
+      if (remaining > fadeWindow + NATIVE_CROSSFADE_PREFETCH_LEAD_S) return;
+      const target = computeNextTarget();
+      if (!target?.playbackSong.audioUrl) return;
+      crossfadePrefetchRef.current = { target, src: resolvePlayableSrc(target.playbackSong.audioUrl) };
+      // Load (buffer) it onto the idle deck; the play/pause sync keeps it paused.
+      loadAudioSource(incoming, target.playbackSong.audioUrl);
     };
 
     const startCrossfade = () => {
@@ -1596,7 +1703,10 @@ function PlayerBar(): React.ReactElement | null {
       const remaining = total - (fromAudio.currentTime || 0);
       if (remaining > fadeWindow + 0.05) return;
 
-      const target = computeNextTarget();
+      // Reuse the deck we already prefetched (so the incoming is buffered and the
+      // shuffle target matches); else pick fresh.
+      const prefetched = isNativeAudioPlatform() ? crossfadePrefetchRef.current : null;
+      const target = prefetched?.target ?? computeNextTarget();
       if (!target) return;
 
       crossfadeStartedRef.current = true;
@@ -1609,6 +1719,44 @@ function PlayerBar(): React.ReactElement | null {
 
       const fadeMs = fadeWindow * 1000;
       const targetVol = mutedRef.current ? 0 : volumeRef.current;
+
+      if (isNativeAudioPlatform()) {
+        // The native AVPlayer engine runs the equal-power ramp on the audio thread,
+        // so the fade stays smooth even with the screen locked. It plays the
+        // incoming deck, fades from→0 / to→peak, and pauses the outgoing deck at
+        // the end; PlayerBar's timer commits the queue advance.
+        const fromDeck = deckForIndex(activeIdx);
+        const toDeck = deckForIndex(activeIdx === 0 ? 1 : 0);
+        let nativeTimeout: number | null = null;
+        const cancelNative = () => {
+          if (nativeTimeout != null) {
+            window.clearTimeout(nativeTimeout);
+            nativeTimeout = null;
+          }
+          // Restoring deck volumes cancels the native ramp; stop the incoming deck.
+          incoming.pause();
+          setOutputLevel(incoming, 0);
+          setOutputLevel(fromAudio, mutedRef.current ? 0 : volumeRef.current);
+          suppressAutoLoadRef.current = false;
+          crossfadingRef.current = false;
+          crossfadeStartedRef.current = false;
+          crossfadeTargetRef.current = null;
+        };
+        const finishNative = () => {
+          if (nativeTimeout != null) {
+            window.clearTimeout(nativeTimeout);
+            nativeTimeout = null;
+          }
+          if (crossfadeCancelRef.current !== cancelNative) return;
+          if (!isPlayingRef.current) incoming.pause();
+          commit(incoming, target);
+        };
+        crossfadeCancelRef.current = cancelNative;
+        void AudioEngine.crossfade({ from: fromDeck, to: toDeck, durationMs: fadeMs, peak: targetVol }).catch(() => {});
+        nativeTimeout = window.setTimeout(finishNative, fadeMs);
+        return;
+      }
+
       const webAudio = ensureWebAudioGraph();
 
       // Last-resort fallback: if we can neither ramp the GainNode (Web Audio) nor
@@ -1725,6 +1873,7 @@ function PlayerBar(): React.ReactElement | null {
     };
 
     maybeStartCrossfadeRef.current = startCrossfade;
+    maybePrefetchCrossfadeRef.current = maybePrefetchCrossfade;
     forceCommitCrossfadeRef.current = forceCommit;
   }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, ensureWebAudioGraph, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, setOutputLevel, shuffle, shuffleRemaining]);
 
@@ -2134,86 +2283,208 @@ function PlayerBar(): React.ReactElement | null {
     };
   }, [currentSongId, duration, handleTogglePlayback, getActiveAudio, onSeek, playbackDuration]);
 
+  // Extracted from the <audio> JSX so they can be registered on the native deck
+  // adapters too (which have no JSX props). On native iOS these run off the
+  // AVPlayer engine's events; on web they're the element's event handlers.
+  const handleLoadedMetadata = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
+    const audio = event.currentTarget;
+    if (audio !== getActiveAudio()) return;
+    const mediaDuration = finiteMediaDuration(audio.duration) ?? playbackDuration;
+    setDuration(mediaDuration ?? 0);
+    applyPendingResumeSeek(audio);
+    applyStoredPodcastResume(audio);
+    retryStickySeekRef.current();
+    setOutputLevel(audio, isMuted ? 0 : volume);
+    // Belt-and-braces: a fresh load resets playbackRate to defaultPlaybackRate.
+    audio.defaultPlaybackRate = effectivePlaybackRate;
+    audio.playbackRate = effectivePlaybackRate;
+  }, [getActiveAudio, playbackDuration, applyPendingResumeSeek, applyStoredPodcastResume, setOutputLevel, isMuted, volume, effectivePlaybackRate]);
+
+  const handleTimeUpdate = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
+    if (event.currentTarget !== getActiveAudio()) return;
+    // timeupdate keeps firing while iOS backgrounds throttle timers, so enforce
+    // sleep-timer expiry here.
+    enforceSleepTimerExpiry();
+    const sticky = stickySeekRef.current;
+    if (sticky?.audio === event.currentTarget && !seekIsCloseEnough(event.currentTarget.currentTime, sticky.time)) {
+      currentTimeRef.current = sticky.time;
+      publishPlaybackPosition({ currentTime: sticky.time, duration });
+      lastTimeStateWriteRef.current = Date.now();
+      setCurrentTime(sticky.time);
+      return;
+    }
+    const nextTime = currentSongIsRadio ? 0 : event.currentTarget.currentTime || 0;
+    currentTimeRef.current = nextTime;
+    // A pending resume target is consumed once playback reaches it; until then it
+    // blocks progress/snapshot writes so a dropped seek can't overwrite the saved
+    // position with the wrong one.
+    const pendingResume = savedSeekRef.current;
+    if (
+      pendingResume?.songId === currentSongId &&
+      (seekIsCloseEnough(nextTime, pendingResume.time) || nextTime > pendingResume.time)
+    ) {
+      savedSeekRef.current = null;
+    }
+    const listen = playListenRef.current;
+    if (listen && listen.song.id === currentSongId) {
+      if (nextTime > listen.maxPositionSeconds) listen.maxPositionSeconds = nextTime;
+      if (listen.durationSeconds == null) {
+        listen.durationSeconds = finiteMediaDuration(event.currentTarget.duration);
+      }
+    }
+    // Smooth 4Hz position to the scrubber leaf (and sidebar lyrics). The React
+    // state write — which re-renders this whole tree — is throttled to ~1Hz unless
+    // the full-screen sheet is open (it needs the smooth value too).
+    publishPlaybackPosition({ currentTime: nextTime, duration });
+    const nowMs = Date.now();
+    if (nowPlayingOpen || nowMs - lastTimeStateWriteRef.current >= 900) {
+      lastTimeStateWriteRef.current = nowMs;
+      setCurrentTime(nextTime);
+    }
+    if (
+      currentSongIsPodcast &&
+      currentSongId &&
+      !savedSeekRef.current &&
+      !audioSourceStateRef.current.get(event.currentTarget)?.nativeFallback
+    ) {
+      const now = Date.now();
+      if (now - lastPodcastProgressWriteRef.current >= PODCAST_PROGRESS_WRITE_INTERVAL_MS) {
+        lastPodcastProgressWriteRef.current = now;
+        writeEpisodeProgressGuarded(
+          currentSongId,
+          nextTime,
+          finiteMediaDuration(event.currentTarget.duration) ?? playbackDuration ?? 0,
+        );
+      }
+    }
+    // Drive the crossfade prefetch + trigger from timeupdate (fires while
+    // backgrounded). Prefetch first so the incoming deck is buffered before the
+    // fade opens.
+    if (!currentSongIsRadio) {
+      maybePrefetchCrossfadeRef.current();
+      maybeStartCrossfadeRef.current();
+    }
+  }, [getActiveAudio, enforceSleepTimerExpiry, duration, currentSongIsRadio, currentSongId, currentSongIsPodcast, nowPlayingOpen, playbackDuration]);
+
+  const handleEnded = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
+    if (event.currentTarget !== getActiveAudio()) return;
+    if (crossfadingRef.current) {
+      // A backgrounded/locked fade may not have finished on the timer before the
+      // outgoing track ended. Force-commit now so the queue can't wedge.
+      forceCommitCrossfadeRef.current();
+      return;
+    }
+    if (currentSongIsPodcast && currentSongId) markEpisodeFinished(currentSongId);
+    const audio = event.currentTarget;
+    if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1)) {
+      // Same song id replays, so the song-change boundary never fires; flush +
+      // re-arm here so each full repeat counts as a play.
+      flushPlayListen();
+      // "End of track" sleep: an in-place replay never changes currentSongId, so
+      // the song-id-change effect can't see it. Stop here instead of replaying.
+      if (usePlayerStore.getState().sleepAtEndOfTrack) {
+        pause();
+        cancelSleepTimer();
+        return;
+      }
+      beginPlayListen(currentSongId ? currentSong : null);
+      audio.currentTime = 0;
+      void playAudio(audio);
+      return;
+    }
+    next();
+  }, [getActiveAudio, currentSongIsPodcast, currentSongId, repeatMode, queue.length, flushPlayListen, pause, cancelSleepTimer, beginPlayListen, currentSong, playAudio, next]);
+
+  // Native iOS: register the same handlers the <audio> elements get as JSX props
+  // onto the AVPlayer-backed deck adapters, which dispatch synthetic events driven
+  // by the native engine.
+  useEffect(() => {
+    if (!isNativeAudioPlatform()) return;
+    const a = audioARef.current;
+    const b = audioBRef.current;
+    if (!a || !b) return;
+    const regs: Array<[string, (event: React.SyntheticEvent<HTMLAudioElement>) => void]> = [
+      ["loadedmetadata", handleLoadedMetadata],
+      ["timeupdate", handleTimeUpdate],
+      ["ended", handleEnded],
+      ["loadeddata", handleActiveAudioResumePoint],
+      ["durationchange", handleActiveAudioResumePoint],
+      ["seeked", handleActiveAudioResumePoint],
+      ["canplay", handleActiveAudioResumePoint],
+      ["canplaythrough", handleActiveAudioResumePoint],
+      ["playing", handleActiveAudioPlaying],
+      ["error", handleActiveAudioError],
+    ];
+    for (const el of [a, b]) {
+      for (const [type, fn] of regs) el.addEventListener(type, fn as unknown as EventListener);
+    }
+    return () => {
+      for (const el of [a, b]) {
+        for (const [type, fn] of regs) el.removeEventListener(type, fn as unknown as EventListener);
+      }
+    };
+  }, [handleLoadedMetadata, handleTimeUpdate, handleEnded, handleActiveAudioResumePoint, handleActiveAudioPlaying, handleActiveAudioError]);
+
+  // Native iOS: lock-screen / control-center transport buttons → store actions.
+  useEffect(() => {
+    if (!isNativeAudioPlatform()) return;
+    const handle = AudioEngine.addListener("remote", (event) => {
+      switch (event.action) {
+        case "play":
+          play();
+          break;
+        case "pause":
+          pause();
+          break;
+        case "toggle":
+          usePlayerStore.getState().toggle();
+          break;
+        case "next":
+          next();
+          break;
+        case "prev":
+          previous();
+          break;
+        case "seek":
+          if (typeof event.value === "number") onSeek(event.value);
+          break;
+      }
+    });
+    return () => {
+      void handle.then((h) => h.remove()).catch(() => {});
+    };
+  }, [play, pause, next, previous, onSeek]);
+
+  // Native iOS: push Now Playing metadata + artwork when the track changes.
+  useEffect(() => {
+    if (!isNativeAudioPlatform() || !playbackSong) return;
+    void AudioEngine.setNowPlaying({
+      title: playbackSong.title,
+      artist: playbackSong.artist,
+      album: playbackSong.album,
+      artworkUrl: nativeArtworkUrl(playbackSong),
+      duration: finiteMediaDuration(playbackSong.duration ?? 0) ?? 0,
+    }).catch(() => {});
+  }, [playbackSong]);
+
+  // Native iOS: push playback state so the lock-screen scrubber tracks reality.
+  useEffect(() => {
+    if (!isNativeAudioPlatform() || !playbackSong) return;
+    void AudioEngine.updateNowPlaying({
+      position: Math.max(0, currentTime),
+      rate: effectivePlaybackRate,
+      playing: isPlaying,
+    }).catch(() => {});
+  }, [isPlaying, currentTime, effectivePlaybackRate, playbackSong]);
+
   const renderAudio = (ref: React.RefObject<HTMLAudioElement | null>) => (
     <audio
       ref={ref}
       hidden
       playsInline
       preload="auto"
-      onLoadedMetadata={(e) => {
-        const audio = e.currentTarget;
-        if (audio !== getActiveAudio()) return;
-        const mediaDuration = finiteMediaDuration(audio.duration) ?? playbackDuration;
-        setDuration(mediaDuration ?? 0);
-        applyPendingResumeSeek(audio);
-        applyStoredPodcastResume(audio);
-        retryStickySeekRef.current();
-        setOutputLevel(audio, isMuted ? 0 : volume);
-        // Belt-and-braces: a fresh load resets playbackRate to defaultPlaybackRate.
-        audio.defaultPlaybackRate = effectivePlaybackRate;
-        audio.playbackRate = effectivePlaybackRate;
-      }}
-      onTimeUpdate={(e) => {
-        if (e.currentTarget === getActiveAudio()) {
-          // timeupdate keeps firing while iOS backgrounds throttle timers, so
-          // enforce sleep-timer expiry here.
-          enforceSleepTimerExpiry();
-          const sticky = stickySeekRef.current;
-          if (sticky?.audio === e.currentTarget && !seekIsCloseEnough(e.currentTarget.currentTime, sticky.time)) {
-            currentTimeRef.current = sticky.time;
-            publishPlaybackPosition({ currentTime: sticky.time, duration });
-            lastTimeStateWriteRef.current = Date.now();
-            setCurrentTime(sticky.time);
-            return;
-          }
-          const nextTime = currentSongIsRadio ? 0 : e.currentTarget.currentTime || 0;
-          currentTimeRef.current = nextTime;
-          // A pending resume target is consumed once playback reaches it; until
-          // then it blocks progress/snapshot writes (see below) so a dropped
-          // seek can't overwrite the saved position with the wrong one.
-          const pendingResume = savedSeekRef.current;
-          if (
-            pendingResume?.songId === currentSongId &&
-            (seekIsCloseEnough(nextTime, pendingResume.time) || nextTime > pendingResume.time)
-          ) {
-            savedSeekRef.current = null;
-          }
-          const listen = playListenRef.current;
-          if (listen && listen.song.id === currentSongId) {
-            if (nextTime > listen.maxPositionSeconds) listen.maxPositionSeconds = nextTime;
-            if (listen.durationSeconds == null) {
-              listen.durationSeconds = finiteMediaDuration(e.currentTarget.duration);
-            }
-          }
-          // Smooth 4Hz position to the scrubber leaf (and sidebar lyrics). The React
-          // state write — which re-renders this whole tree — is throttled to ~1Hz
-          // unless the full-screen sheet is open (it needs the smooth value too).
-          publishPlaybackPosition({ currentTime: nextTime, duration });
-          const nowMs = Date.now();
-          if (nowPlayingOpen || nowMs - lastTimeStateWriteRef.current >= 900) {
-            lastTimeStateWriteRef.current = nowMs;
-            setCurrentTime(nextTime);
-          }
-          if (
-            currentSongIsPodcast &&
-            currentSongId &&
-            !savedSeekRef.current &&
-            !audioSourceStateRef.current.get(e.currentTarget)?.nativeFallback
-          ) {
-            const now = Date.now();
-            if (now - lastPodcastProgressWriteRef.current >= PODCAST_PROGRESS_WRITE_INTERVAL_MS) {
-              lastPodcastProgressWriteRef.current = now;
-              writeEpisodeProgressGuarded(
-                currentSongId,
-                nextTime,
-                finiteMediaDuration(e.currentTarget.duration) ?? playbackDuration ?? 0,
-              );
-            }
-          }
-          // Drive the crossfade trigger from timeupdate (fires while backgrounded).
-          if (!currentSongIsRadio) maybeStartCrossfadeRef.current();
-        }
-      }}
+      onLoadedMetadata={handleLoadedMetadata}
+      onTimeUpdate={handleTimeUpdate}
       onLoadedData={handleActiveAudioResumePoint}
       onDurationChange={handleActiveAudioResumePoint}
       onSeeked={handleActiveAudioResumePoint}
@@ -2221,39 +2492,14 @@ function PlayerBar(): React.ReactElement | null {
       onCanPlayThrough={handleActiveAudioResumePoint}
       onPlaying={handleActiveAudioPlaying}
       onError={handleActiveAudioError}
-      onEnded={(e) => {
-        if (e.currentTarget !== getActiveAudio()) return;
-        if (crossfadingRef.current) {
-          // A backgrounded/locked fade may not have finished on the timer before
-          // the outgoing track ended. Force-commit now so the queue can't wedge.
-          forceCommitCrossfadeRef.current();
-          return;
-        }
-        if (currentSongIsPodcast && currentSongId) markEpisodeFinished(currentSongId);
-        const audio = e.currentTarget;
-        if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1)) {
-          // Same song id replays, so the song-change boundary never fires;
-          // flush + re-arm here so each full repeat counts as a play.
-          flushPlayListen();
-          // "End of track" sleep: an in-place replay never changes
-          // currentSongId, so the song-id-change effect can't see it. Stop
-          // here instead of replaying.
-          if (usePlayerStore.getState().sleepAtEndOfTrack) {
-            pause();
-            cancelSleepTimer();
-            return;
-          }
-          beginPlayListen(currentSongId ? currentSong : null);
-          audio.currentTime = 0;
-          void playAudio(audio);
-          return;
-        }
-        next();
-      }}
+      onEnded={handleEnded}
     />
   );
 
-  const audioElements = (
+  // On native iOS the deck adapters ARE the audio source (AVPlayer); no <audio>
+  // nodes are rendered. The PlayerBar event handlers are registered on the
+  // adapters in the effect below instead.
+  const audioElements = isNativeAudioPlatform() ? null : (
     <>
       {renderAudio(audioARef)}
       {renderAudio(audioBRef)}
