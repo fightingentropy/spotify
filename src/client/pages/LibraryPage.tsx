@@ -7,7 +7,7 @@ function PlaylistSkeletonRows() {
   return (
     <div className="space-y-2 px-3 py-2" aria-hidden>
       {[0, 1, 2].map((item) => (
-        <div key={item} className="flex min-h-[64px] items-center gap-4 rounded-xl">
+        <div key={item} className="flex min-h-[64px] items-center gap-3 rounded-xl">
           <div className="wf-skeleton h-14 w-14 shrink-0 rounded-lg" />
           <div className="min-w-0 flex-1 space-y-2">
             <div className="wf-skeleton h-4 w-44 max-w-full rounded-full" />
@@ -34,43 +34,43 @@ export default function LibraryPage() {
       <div className="mx-auto max-w-7xl">
         <h1 className="mb-5 text-2xl font-bold">Your Library</h1>
         <div className="space-y-2">
-          <Link to="/liked" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/liked" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 text-white">
               <Heart size={24} />
             </div>
             <div>
-              <div className="font-semibold">Liked Songs</div>
-              <div className="text-sm opacity-70">Your favorites</div>
+              <div className="text-[15px] leading-snug">Liked Songs</div>
+              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Your favorites</div>
             </div>
           </Link>
 
-          <Link to="/downloads" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/downloads" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
               <Download size={24} />
             </div>
             <div>
-              <div className="font-semibold">Downloads</div>
-              <div className="text-sm opacity-70">Saved for offline</div>
+              <div className="text-[15px] leading-snug">Downloads</div>
+              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Saved for offline</div>
             </div>
           </Link>
 
-          <Link to="/radio" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/radio" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-cyan-500/15 text-cyan-200">
               <RadioTower size={24} />
             </div>
             <div>
-              <div className="font-semibold">Radio Stations</div>
-              <div className="text-sm opacity-70">Dromos 89.8 and BBC Radio 1</div>
+              <div className="text-[15px] leading-snug">Radio Stations</div>
+              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Dromos 89.8 and BBC Radio 1</div>
             </div>
           </Link>
 
-          <Link to="/podcasts" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+          <Link to="/podcasts" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-fuchsia-500/15 text-fuchsia-200">
               <Podcast size={24} />
             </div>
             <div>
-              <div className="font-semibold">Podcasts</div>
-              <div className="text-sm opacity-70">Huberman Lab and Modern Wisdom</div>
+              <div className="text-[15px] leading-snug">Podcasts</div>
+              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Huberman Lab and Modern Wisdom</div>
             </div>
           </Link>
 
@@ -82,14 +82,14 @@ export default function LibraryPage() {
                   <Link
                     key={playlist.id}
                     to={`/playlist/${playlist.id}`}
-                    className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5"
+                    className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5"
                   >
                     <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-black/5 dark:bg-white/10">
                       <ListMusic size={24} className="opacity-80" />
                     </div>
                     <div className="min-w-0">
-                      <div className="truncate font-semibold">{playlist.name}</div>
-                      <div className="text-sm opacity-70">{playlist.songsCount} tracks</div>
+                      <div className="truncate text-[15px] leading-snug">{playlist.name}</div>
+                      <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Playlist • {playlist.songsCount} tracks</div>
                     </div>
                   </Link>
                 ))}
@@ -110,11 +110,11 @@ export default function LibraryPage() {
             </div>
           )}
 
-          <Link to="/upload" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-4 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5 lg:hidden">
+          <Link to="/upload" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5 lg:hidden">
             <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-black/5 text-lg font-semibold dark:bg-white/10">+</div>
             <div>
-              <div className="font-semibold">Upload</div>
-              <div className="text-sm opacity-70">Add new music</div>
+              <div className="text-[15px] leading-snug">Upload</div>
+              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Add new music</div>
             </div>
           </Link>
         </div>
