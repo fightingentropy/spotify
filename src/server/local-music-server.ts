@@ -2180,11 +2180,19 @@ async function handleDiscoverSync(request: Request): Promise<Response> {
     : [];
   await pruneDiscoverStaging(source, new Set(present));
   const stageRaw = Array.isArray(payload?.stage) ? payload.stage : [];
-  for (const raw of stageRaw) {
-    const item = normalizeDiscoverStageItem(raw);
-    // Materialize in the background — the long-running server has no time budget,
-    // and clients pick the newly-ready tracks up on their next status poll.
-    if (item) void stageDiscoverTrack(source, item).catch(() => {});
+  const stageItems = stageRaw
+    .map((raw) => normalizeDiscoverStageItem(raw))
+    .filter((item): item is DiscoverStageItem => item !== null);
+  // Materialize in the background, ONE at a time — the long-running server has no
+  // time budget, and serializing keeps the download/remux from spiking CPU and
+  // bandwidth (which would stutter active playback). Clients pick newly-ready
+  // tracks up on their next status poll.
+  if (stageItems.length) {
+    void (async () => {
+      for (const item of stageItems) {
+        await stageDiscoverTrack(source, item).catch(() => {});
+      }
+    })();
   }
   return json(await discoverStagingStatusBody(source));
 }

@@ -8,6 +8,9 @@
 		"nodejs_compat",
 		"global_fetch_strictly_public"
 	],
+	"triggers": {
+		"crons": ["*/15 * * * *"]
+	},
 	"assets": {
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application"

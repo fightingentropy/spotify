@@ -3345,10 +3345,10 @@ app.get("/api/home", async (c) => {
 // without adding it to the library. See the staging endpoints below + the
 // matching handlers in local-music-server.ts.
 const TOP_50_GLOBAL_PLAYLIST_ID = "37i9dQZEVXbMDoHDwVN2tF";
-// How many not-yet-staged Top-50 tracks to resolve + enqueue per Discover load.
-// Bounds the waitUntil work so the background fill stays within the Worker's
-// post-response budget; the rest fill in over subsequent loads.
-const DISCOVER_STAGE_BATCH = 4;
+// How many not-yet-staged Top-50 tracks to resolve + enqueue per cron tick.
+// Resolution walks many providers and is slow, so this is bounded; the rest
+// fill in over subsequent ticks.
+const DISCOVER_STAGE_BATCH = 6;
 
 type DiscoverTrendingTrack = {
   id: string;
@@ -3417,21 +3417,18 @@ async function fillDiscoverStaging(
         resolved,
       });
     } catch {
-      // Skip this track; a later Discover load retries it.
+      // Skip this track; a later cron tick retries it.
     }
   }
   await macMiniDiscoverFetch(env, "/api/discover/sync", "POST", { present: presentIds, stage }, 10_000).catch(() => {});
 }
 
-app.get("/api/discover/trending", async (c) => {
-  let discover: DiscoverTrendingTrack[] = [];
+// Fetch + normalize the current "Top 50 - Global" chart (shared by the trending
+// endpoint and the cron fill).
+async function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingTrack[]> {
   try {
-    const { tracks } = await fetchPathfinderPlaylistTracks(
-      TOP_50_GLOBAL_PLAYLIST_ID,
-      envString(c.env, "SPOTIFY_SP_DC"),
-      50,
-    );
-    discover = tracks
+    const { tracks } = await fetchPathfinderPlaylistTracks(TOP_50_GLOBAL_PLAYLIST_ID, envString(env, "SPOTIFY_SP_DC"), 50);
+    return tracks
       .filter((track) => track.id && track.name && track.artists.length > 0)
       .map((track) => ({
         id: track.id,
@@ -3443,17 +3440,47 @@ app.get("/api/discover/trending", async (c) => {
         spotifyUrl: `https://open.spotify.com/track/${track.id}`,
       }));
   } catch {
-    // Trending is a nice-to-have; degrade to empty so Home still renders.
+    return [];
+  }
+}
+
+// Cron-driven background fill: stage a batch of not-yet-cached Top-50 tracks and
+// hand the Mac-mini the current chart so it refreshes lastSeen + prunes stale
+// entries. Runs on a Cron Trigger because per-track resolution can take tens of
+// seconds — too slow for a request's post-response waitUntil budget.
+async function runDiscoverFill(env: CloudflareEnv): Promise<void> {
+  if (!isMacMiniMusicConfigured(env)) return;
+  const discover = await fetchTop50DiscoverTracks(env);
+  if (!discover.length) return;
+  const staged = new Set<string>();
+  try {
+    const res = await macMiniDiscoverFetch(env, "/api/discover/staging", "GET", undefined, 8_000);
+    if (res.ok) {
+      const body = (await res.json()) as { entries?: DiscoverStagingStatusEntry[] };
+      for (const entry of body.entries ?? []) staged.add(entry.trackId);
+    }
+  } catch {
+    // best-effort
+  }
+  const missing = discover.filter((track) => !staged.has(track.id)).slice(0, DISCOVER_STAGE_BATCH);
+  const presentIds = discover.map((track) => track.id);
+  await fillDiscoverStaging(env, presentIds, missing);
+}
+
+app.get("/api/discover/trending", async (c) => {
+  const discover = await fetchTop50DiscoverTracks(c.env);
+  if (!discover.length) {
     return jsonCached(c, { tracks: [] }, { cacheControl: "public, max-age=120" });
   }
-
-  if (!discover.length || !isMacMiniMusicConfigured(c.env)) {
+  if (!isMacMiniMusicConfigured(c.env)) {
     return jsonCached(c, { tracks: discover }, {
       cacheControl: "public, max-age=1800, stale-while-revalidate=7200",
     });
   }
 
   // Mark which tracks are already staged (instantly playable from .discover).
+  // The actual fill happens on the cron (runDiscoverFill); this endpoint only
+  // reads status, so it stays fast.
   const staged = new Map<string, DiscoverStagingStatusEntry>();
   try {
     const res = await macMiniDiscoverFetch(c.env, "/api/discover/staging", "GET", undefined, 4_000);
@@ -3472,18 +3499,7 @@ app.get("/api/discover/trending", async (c) => {
       : { ...track, staged: false };
   });
 
-  // Background-fill the not-yet-staged tracks and refresh/prune the cache.
-  const missing = discover.filter((track) => !staged.has(track.id)).slice(0, DISCOVER_STAGE_BATCH);
-  const presentIds = discover.map((track) => track.id);
-  const fill = fillDiscoverStaging(c.env, presentIds, missing).catch(() => {});
-  try {
-    c.executionCtx.waitUntil(fill);
-  } catch {
-    // No executionCtx (e.g. dev): let it run detached.
-    void fill;
-  }
-
-  // Short cache: a track's staged status changes as the background fill completes.
+  // Short cache: a track's staged status changes as the cron fill completes.
   return jsonCached(c, { tracks }, { cacheControl: "private, max-age=30, stale-while-revalidate=300" });
 });
 
@@ -4615,4 +4631,12 @@ app.all("*", async (c) => {
   });
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Cron Trigger (see wrangler.jsonc "triggers.crons"): keep the Discover
+  // ".discover" staging cache filled + pruned. Runs with a real time budget,
+  // unlike a request's post-response waitUntil (where slow resolution is killed).
+  async scheduled(_event: unknown, env: CloudflareEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) {
+    ctx.waitUntil(runDiscoverFill(env).catch(() => {}));
+  },
+};
