@@ -1430,6 +1430,57 @@ function extractLrcFromSpotifyLyricsApi(payload: unknown): string {
   return lines.join("\n").trim();
 }
 
+const MUSIXMATCH_BASE = "https://apic-desktop.musixmatch.com/ws/1.1";
+const MUSIXMATCH_APP_ID = "web-desktop-app-v1.0";
+const MUSIXMATCH_COOKIE = "AWSELB=0; AWSELBCORS=0";
+
+let musixmatchTokenCache: { token: string; expiresAtMs: number } | null = null;
+
+// Musixmatch's desktop API bootstraps an anonymous user token via token.get,
+// which is then required for lyrics lookups — no stored credential needed.
+async function musixmatchUserToken(): Promise<string> {
+  if (musixmatchTokenCache && musixmatchTokenCache.expiresAtMs > Date.now()) {
+    return musixmatchTokenCache.token;
+  }
+  const response = await fetchWithTimeout(
+    `${MUSIXMATCH_BASE}/token.get?app_id=${MUSIXMATCH_APP_ID}&format=json`,
+    SPOTIFY_REQUEST_TIMEOUT_MS,
+    { headers: { cookie: MUSIXMATCH_COOKIE, "user-agent": SPOTIFY_FALLBACK_USER_AGENT } },
+  ).catch(() => null);
+  if (!response?.ok) return "";
+  const payload = toObject(await response.json().catch(() => null));
+  const body = toObject(toObject(payload?.message)?.body);
+  const token = toStringValue(body?.user_token);
+  if (!token || token === "UpgradeOnlyUrlError") return "";
+  musixmatchTokenCache = { token, expiresAtMs: Date.now() + 9 * 60 * 1000 };
+  return token;
+}
+
+// Fetch synced (LRC) lyrics from Musixmatch by track/artist match.
+async function fetchMusixmatchLyrics(title: string, artist: string): Promise<string> {
+  if (!title || !artist) return "";
+  const token = await musixmatchUserToken();
+  if (!token) return "";
+  const params = new URLSearchParams({
+    format: "json",
+    app_id: MUSIXMATCH_APP_ID,
+    usertoken: token,
+    q_track: title,
+    q_artist: artist,
+    subtitle_format: "lrc",
+  });
+  const response = await fetchWithTimeout(
+    `${MUSIXMATCH_BASE}/matcher.subtitle.get?${params.toString()}`,
+    SPOTIFY_REQUEST_TIMEOUT_MS,
+    { headers: { cookie: MUSIXMATCH_COOKIE, "user-agent": SPOTIFY_FALLBACK_USER_AGENT } },
+  ).catch(() => null);
+  if (!response?.ok) return "";
+  const payload = toObject(await response.json().catch(() => null));
+  const body = toObject(toObject(payload?.message)?.body);
+  const subtitle = toObject(body?.subtitle);
+  return toStringValue(subtitle?.subtitle_body);
+}
+
 async function fetchLyricsText(trackId: string, title: string, artist: string): Promise<string> {
   const spotifyLyricsUrl = `https://spotify-lyrics-api-pi.vercel.app/?trackid=${encodeURIComponent(trackId)}&format=lrc`;
   const spotifyLyricsRes = await fetchWithTimeout(spotifyLyricsUrl, SPOTIFY_REQUEST_TIMEOUT_MS).catch(() => null);
@@ -1441,6 +1492,8 @@ async function fetchLyricsText(trackId: string, title: string, artist: string): 
       if (lrc) return lrc;
     }
   }
+  const musixmatchLyrics = await fetchMusixmatchLyrics(title, artist).catch(() => "");
+  if (musixmatchLyrics) return musixmatchLyrics;
   const lrclibUrl = `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
   const lrclibRes = await fetchWithTimeout(lrclibUrl, SPOTIFY_REQUEST_TIMEOUT_MS).catch(() => null);
   if (lrclibRes?.ok) {
