@@ -49,6 +49,7 @@ import {
   scrapeSpotifyTrackIdsFromHtml,
   type SpotifyBatchTrack,
 } from "@/lib/spotify-pathfinder";
+import { resolveTidalTrackIdByIsrc } from "@/lib/tidal-isrc";
 
 type Variables = {
   user: AuthUser | null;
@@ -1189,6 +1190,24 @@ async function resolveTrackPayload(
   const deezerId = await searchDeezerTrackId(meta.title, meta.artist);
   if (!deezerId) throw new ApiError("Could not resolve this track on any provider", 502);
   return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist);
+}
+
+// Best-effort: when a resolved payload has an ISRC (via its Deezer link) but no
+// Tidal link, look the Tidal id up by ISRC and inject it so the Hi-Res spotbye
+// Tidal source can be used instead of the lossy GDStudio fallback.
+async function enrichTidalLink(songLinkPayload: Record<string, unknown>, region: string): Promise<void> {
+  if (!songLinkPayload || typeof songLinkPayload !== "object") return;
+  if (tidalTrackIdFromSongLinkPayload(songLinkPayload)) return;
+  const isrc = await resolveDeezerIsrc(songLinkPayload).catch(() => "");
+  if (!isrc) return;
+  const tidalId = await resolveTidalTrackIdByIsrc(isrc, region).catch(() => "");
+  if (!tidalId) return;
+  const links = toObject(songLinkPayload.linksByPlatform) ?? {};
+  links.tidal = {
+    url: `https://tidal.com/browse/track/${tidalId}`,
+    entityUniqueId: `TIDAL_SONG::${tidalId}`,
+  };
+  songLinkPayload.linksByPlatform = links;
 }
 
 function getPlatformLink(
@@ -2417,6 +2436,7 @@ async function resolveStreamUrl(env: CloudflareEnv, payload: SongPayload): Promi
     toStringValue(payload.region).toUpperCase(),
     envString(env, "SPOTIFY_SP_DC"),
   ).catch(() => ({}));
+  await enrichTidalLink(songLinkPayload, toStringValue(payload.region).toUpperCase());
   const service = toStringValue(payload.service).toLowerCase();
   const qualities = qualityLists(payload);
 
