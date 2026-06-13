@@ -3351,27 +3351,9 @@ app.get("/api/discover/trending", async (c) => {
       envString(c.env, "SPOTIFY_SP_DC"),
       50,
     );
-    // Keep it a *discovery* row, not one artist's album: a fresh release can
-    // occupy a dozen of the top 50 slots, so cap how many a single artist
-    // contributes (chart order otherwise preserved).
-    const PER_ARTIST_LIMIT = 2;
-    const perArtist = new Map<string, number>();
-    const discover: Array<{
-      id: string;
-      title: string;
-      artist: string;
-      album: string;
-      imageUrl: string;
-      durationMs: number | null;
-      spotifyUrl: string;
-    }> = [];
-    for (const track of tracks) {
-      if (!track.id || !track.name || track.artists.length === 0) continue;
-      const primaryArtist = track.artists[0].trim().toLowerCase();
-      const used = perArtist.get(primaryArtist) ?? 0;
-      if (used >= PER_ARTIST_LIMIT) continue;
-      perArtist.set(primaryArtist, used + 1);
-      discover.push({
+    const discover = tracks
+      .filter((track) => track.id && track.name && track.artists.length > 0)
+      .map((track) => ({
         id: track.id,
         title: track.name,
         artist: track.artists.join(", "),
@@ -3379,8 +3361,7 @@ app.get("/api/discover/trending", async (c) => {
         imageUrl: track.imageUrl || "/apple-icon.png",
         durationMs: typeof track.durationMs === "number" && track.durationMs > 0 ? track.durationMs : null,
         spotifyUrl: `https://open.spotify.com/track/${track.id}`,
-      });
-    }
+      }));
     return jsonCached(c, { tracks: discover }, {
       cacheControl: "public, max-age=1800, stale-while-revalidate=7200",
     });
