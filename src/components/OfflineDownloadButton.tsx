@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
-import { CheckCircle2, CircleArrowDown, RefreshCw, X } from "lucide-react";
+import { CircleArrowDown, RefreshCw, X } from "lucide-react";
 import {
   getScopeDownloadState,
   getSongDownloadState,
@@ -42,9 +42,11 @@ function canCacheSong(song: PlayerSong): boolean {
 function DownloadProgressPie({
   progress,
   size = 18,
+  className,
 }: {
   progress: number;
   size?: number;
+  className?: string;
 }) {
   const clamped = Math.max(0, Math.min(1, progress));
   const style = {
@@ -56,11 +58,34 @@ function DownloadProgressPie({
   return (
     <span
       aria-hidden
-      className="relative block rounded-full shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_52%,transparent)]"
+      className={cn(
+        "relative block rounded-full shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_52%,transparent)]",
+        className,
+      )}
       style={style}
     >
       <span className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-current" />
     </span>
+  );
+}
+
+// A filled "downloaded" badge: a solid emerald disc with a check cut into it.
+// Colors are hard-coded (not `currentColor`) on purpose — callers pass a muted
+// `text-foreground/70` class that tailwind-merge would otherwise apply to the
+// icon, graying out the done state so it reads like an in-progress ring.
+function DownloadedBadge({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="#10b981" />
+      <path
+        d="M6.75 12.5l3.4 3.4 7.1-7.4"
+        fill="none"
+        stroke="#04140d"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -196,13 +221,6 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
           ? `Downloading ${progressPercent}% · tap to cancel`
           : "Download for offline playback";
 
-  const Icon =
-    status === "downloaded"
-      ? CheckCircle2
-      : status === "failed"
-        ? RefreshCw
-        : CircleArrowDown;
-
   return (
     <>
       <button
@@ -225,16 +243,20 @@ export function OfflineSongDownloadButton({ song, className }: OfflineSongDownlo
       >
         {inFlight ? (
           <>
-            <DownloadProgressPie progress={progress} />
+            <DownloadProgressPie progress={progress} className="text-emerald-400" />
             <X
               size={14}
-              className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 group-hover:block group-focus-visible:block"
+              className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 text-white group-hover:block group-focus-visible:block"
             />
           </>
         ) : actionPending ? (
           <DownloadProgressPie progress={progress} />
+        ) : status === "downloaded" ? (
+          <DownloadedBadge size={18} />
+        ) : status === "failed" ? (
+          <RefreshCw size={18} className="text-red-400" />
         ) : (
-          <Icon size={18} />
+          <CircleArrowDown size={18} />
         )}
       </button>
 
