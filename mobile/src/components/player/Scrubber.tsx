@@ -1,18 +1,23 @@
 import { useState } from "react";
-import { Text, View } from "react-native";
-import Slider from "@react-native-community/slider";
+import { type LayoutChangeEvent, Text, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { seekTo } from "@/audio/actions";
 import { useAudioProgress } from "@/audio/progress";
 import { formatTime } from "@/lib/format";
 import { colors } from "@/theme";
 
-// Spotify-style scrubber: white filled track + white thumb on a faint track, with
-// elapsed on the left and REMAINING (negative) on the right. Reads the
-// backend-agnostic progress store (fed by the native dual-deck engine on iOS, RNTP
-// elsewhere); while dragging we hold a local value so the thumb doesn't snap back
-// to the reported position. For radio there is no scrubber — a live indicator shows.
+const TRACK_H = 3; // thin track, Spotify-style
+const THUMB = 12; // small flat thumb (no shadow), unlike the bulky native slider
+const ROW_H = 22; // touch row height
+
+// Spotify-style scrubber: a delicate 3px track with a small flat white thumb,
+// elapsed on the left and REMAINING (negative) on the right. Custom (not the
+// community Slider, whose native iOS thumb is bulky + shadowed). Reads the
+// backend-agnostic progress store; while dragging we hold a local value so the
+// thumb doesn't snap back. For radio there is no scrubber — a live dot shows.
 export function Scrubber({ live = false }: { live?: boolean }) {
   const { position, duration } = useAudioProgress();
+  const [width, setWidth] = useState(0);
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
 
@@ -29,25 +34,77 @@ export function Scrubber({ live = false }: { live?: boolean }) {
 
   const max = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const value = seeking ? seekValue : position;
+  const pct = max > 0 && width > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  const fillW = pct * width;
+  const thumbLeft = Math.min(Math.max(0, fillW - THUMB / 2), Math.max(0, width - THUMB));
+
+  const posFromX = (x: number) => (max <= 0 || width <= 0 ? 0 : Math.min(1, Math.max(0, x / width)) * max);
+
+  // runOnJS(true) → callbacks run on the JS thread, so we can call setState/seekTo
+  // directly (no reanimated worklets). `e.x` is the touch x within the track row.
+  const pan = Gesture.Pan()
+    .runOnJS(true)
+    .minDistance(0)
+    .onBegin((e) => {
+      setSeeking(true);
+      setSeekValue(posFromX(e.x));
+    })
+    .onUpdate((e) => setSeekValue(posFromX(e.x)))
+    .onEnd((e) => {
+      setSeeking(false);
+      void seekTo(posFromX(e.x));
+    });
+  const tap = Gesture.Tap()
+    .runOnJS(true)
+    .onEnd((e) => void seekTo(posFromX(e.x)));
+  const gesture = Gesture.Race(tap, pan);
 
   return (
     <View className="w-full">
-      <Slider
-        style={{ width: "100%", height: 32 }}
-        minimumValue={0}
-        maximumValue={max || 1}
-        value={Math.min(value, max || 1)}
-        minimumTrackTintColor="#ffffff"
-        maximumTrackTintColor="rgba(255,255,255,0.3)"
-        thumbTintColor="#ffffff"
-        onSlidingStart={() => setSeeking(true)}
-        onValueChange={(v) => setSeekValue(v)}
-        onSlidingComplete={(v) => {
-          setSeeking(false);
-          void seekTo(v);
-        }}
-      />
-      <View className="flex-row justify-between">
+      <GestureDetector gesture={gesture}>
+        <View
+          style={{ height: ROW_H, justifyContent: "center" }}
+          onLayout={(e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width)}
+        >
+          {/* remaining (faint) track */}
+          <View
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: (ROW_H - TRACK_H) / 2,
+              height: TRACK_H,
+              borderRadius: TRACK_H / 2,
+              backgroundColor: "rgba(255,255,255,0.3)",
+            }}
+          />
+          {/* elapsed (white) fill */}
+          <View
+            style={{
+              position: "absolute",
+              left: 0,
+              top: (ROW_H - TRACK_H) / 2,
+              height: TRACK_H,
+              width: fillW,
+              borderRadius: TRACK_H / 2,
+              backgroundColor: "#fff",
+            }}
+          />
+          {/* thumb */}
+          <View
+            style={{
+              position: "absolute",
+              top: (ROW_H - THUMB) / 2,
+              left: thumbLeft,
+              width: THUMB,
+              height: THUMB,
+              borderRadius: THUMB / 2,
+              backgroundColor: "#fff",
+            }}
+          />
+        </View>
+      </GestureDetector>
+      <View className="flex-row justify-between" style={{ marginTop: 6 }}>
         <Text style={{ color: colors.muted, fontVariant: ["tabular-nums"] }} className="text-xs">
           {formatTime(value)}
         </Text>

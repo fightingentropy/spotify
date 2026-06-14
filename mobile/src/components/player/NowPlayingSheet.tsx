@@ -155,9 +155,9 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
                 <PressableScale onPress={toggle} accessibilityLabel={isPlaying ? "Pause" : "Play"}>
                   <View className="h-16 w-16 items-center justify-center rounded-full" style={{ backgroundColor: "#fff" }}>
                     {isPlaying ? (
-                      <Pause size={30} color="#000" fill="#000" />
+                      <Pause size={26} color="#000" fill="#000" strokeWidth={0} />
                     ) : (
-                      <Play size={30} color="#000" fill="#000" style={{ marginLeft: 3 }} />
+                      <Play size={26} color="#000" fill="#000" strokeWidth={0} style={{ marginLeft: 2 }} />
                     )}
                   </View>
                 </PressableScale>
