@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Text, useWindowDimensions, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { ChevronDown, ListMusic, MicVocal, Moon, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react-native";
@@ -18,6 +19,7 @@ import { useUiStore } from "@/store/ui";
 
 export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const song = usePlayerStore((s) => s.currentSong);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const shuffle = usePlayerStore((s) => s.shuffle);
@@ -50,7 +52,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
 
   return (
     <Sheet visible={visible} onClose={onClose} heightPct={0.94}>
-      <View style={{ flex: 1, paddingHorizontal: 24, paddingBottom: 32 }}>
+      <View style={{ flex: 1, paddingHorizontal: 24, paddingBottom: insets.bottom + 32 }}>
         {/* header */}
         <View className="flex-row items-center justify-between py-2">
           <PressableScale onPress={onClose} hitSlop={10} accessibilityLabel="Close now playing">
