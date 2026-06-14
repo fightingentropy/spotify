@@ -12,8 +12,10 @@ import {
 import { seekTo } from "@/audio/actions";
 import { useAudioProgress } from "@/audio/progress";
 import { toAbsoluteApiUrl } from "@/lib/config";
+import { apiFetch } from "@/lib/http";
 import { parseLrc, type LrcLine } from "@/lib/lrc";
 import { activeLyricIndex, hasSyncedTiming } from "@/lib/lyrics";
+import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
 
@@ -26,54 +28,100 @@ const USER_SCROLL_HOLD_MS = 2_600;
 // Fetches and renders a song's lyrics. Synced (.lrc with timestamps) files
 // highlight the line being sung and keep it centered — pausing while the user
 // scrolls — and seek when a line is tapped; plain files render as static text.
+type LyricsState =
+  | { status: "loading" }
+  | { status: "finding" }
+  | { status: "ready"; lines: LrcLine[] }
+  | { status: "error"; message: string };
+
 export function LyricsView({ song }: { song: PlayerSong }) {
-  const [lines, setLines] = useState<LrcLine[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<LyricsState>({ status: "loading" });
+  const replaceSong = usePlayerStore((s) => s.replaceSong);
+  // The last song we auto-requested lyrics for, so a 404 doesn't loop.
+  const requestedRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setLines(null);
-    setError(null);
-    if (!song.lyricsUrl) {
-      setError("No lyrics available");
+
+    // Has a lyrics sidecar — load and parse it.
+    if (song.lyricsUrl) {
+      setState({ status: "loading" });
+      (async () => {
+        try {
+          const res = await fetch(toAbsoluteApiUrl(song.lyricsUrl), { credentials: "include" });
+          if (!res.ok) throw new Error("No lyrics available");
+          const raw = await res.text();
+          if (!cancelled) setState({ status: "ready", lines: parseLrc(raw) });
+        } catch {
+          if (!cancelled) setState({ status: "error", message: "No lyrics available" });
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // No lyrics yet — ask the server to fetch them from the provider (once).
+    if (requestedRef.current === song.id) {
+      setState({ status: "error", message: "No lyrics found for this track" });
       return;
     }
+    requestedRef.current = song.id;
+    setState({ status: "finding" });
     (async () => {
       try {
-        const res = await fetch(toAbsoluteApiUrl(song.lyricsUrl), { credentials: "include" });
-        if (!res.ok) throw new Error("No lyrics available");
-        const raw = await res.text();
-        if (!cancelled) setLines(parseLrc(raw));
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "No lyrics available");
+        const res = await apiFetch(`/api/songs/${encodeURIComponent(song.id)}/lyrics`, { method: "POST" });
+        if (res.ok) {
+          const updated = (await res.json()) as PlayerSong;
+          if (cancelled) return;
+          if (updated?.lyricsUrl) {
+            // Persist the resolved song so the rest of the app (and reopening
+            // lyrics) sees it; this re-runs the effect to load the sidecar.
+            replaceSong(updated);
+            return;
+          }
+        }
+        if (!cancelled) setState({ status: "error", message: "No lyrics found for this track" });
+      } catch {
+        if (!cancelled) setState({ status: "error", message: "Couldn't load lyrics" });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [song.lyricsUrl]);
+  }, [song.id, song.lyricsUrl, replaceSong]);
 
-  if (error) {
+  if (state.status === "finding") {
     return (
       <View className="items-center py-12">
-        <Text style={{ color: colors.muted }}>{error}</Text>
+        <ActivityIndicator color={colors.emerald} />
+        <Text className="mt-3 text-sm" style={{ color: colors.muted }}>
+          Finding lyrics…
+        </Text>
       </View>
     );
   }
-  if (!lines) {
+  if (state.status === "loading") {
     return (
       <View className="items-center py-12">
         <ActivityIndicator color={colors.emerald} />
       </View>
     );
   }
-  if (hasSyncedTiming(lines)) {
-    return <SyncedLyrics lines={lines} />;
+  if (state.status === "error") {
+    return (
+      <View className="items-center py-12">
+        <Text style={{ color: colors.muted }}>{state.message}</Text>
+      </View>
+    );
+  }
+  if (hasSyncedTiming(state.lines)) {
+    return <SyncedLyrics lines={state.lines} />;
   }
   // No usable timing data — keep the static plain-text rendering.
   return (
     <ScrollView contentContainerStyle={{ paddingVertical: 16 }}>
-      {lines.map((line, i) => (
+      {state.lines.map((line, i) => (
         <Text key={i} className="mb-3 text-[18px] font-semibold leading-7" style={{ color: colors.foreground }}>
           {line.text || "♪"}
         </Text>

@@ -2457,6 +2457,131 @@ async function handlePatchSong(source: LibrarySource, id: string, request: Reque
   return updated ? json(updated.song) : notFound("Song not found");
 }
 
+// --- Lyrics auto-fetch (LRCLIB) ------------------------------------------
+// LRCLIB (https://lrclib.net) is a free, crowd-sourced synced-lyrics API.
+// We pull the timed .lrc (or plain text) for a track and write it as a sidecar
+// next to the audio file so the normal library scan exposes `lyricsUrl`. Lyric
+// text only ever flows provider -> sidecar file; it is never logged.
+const LRCLIB_API = "https://lrclib.net/api";
+const LRCLIB_USER_AGENT = "spotify-fightingentropy/1.0 (+https://spotify.fightingentropy.org)";
+
+type ResolvedLyrics = { synced: string | null; plain: string | null };
+
+function pickLyrics(synced: unknown, plain: unknown): ResolvedLyrics | null {
+  const s = typeof synced === "string" && synced.trim() ? synced : null;
+  const p = typeof plain === "string" && plain.trim() ? plain : null;
+  return s || p ? { synced: s, plain: p } : null;
+}
+
+async function lrclibFetchJson(path: string, params: URLSearchParams): Promise<unknown | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(`${LRCLIB_API}${path}?${params.toString()}`, {
+      headers: { "User-Agent": LRCLIB_USER_AGENT, Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchLyricsFromProvider(opts: {
+  artist: string;
+  title: string;
+  album?: string | null;
+  durationSec?: number | null;
+}): Promise<ResolvedLyrics | null> {
+  const artist = opts.artist?.trim();
+  const title = opts.title?.trim();
+  if (!artist || !title) return null;
+  const duration = opts.durationSec && opts.durationSec > 0 ? Math.round(opts.durationSec) : null;
+
+  // 1) Exact match — most reliable when the duration is known.
+  {
+    const params = new URLSearchParams({ artist_name: artist, track_name: title });
+    if (opts.album?.trim()) params.set("album_name", opts.album.trim());
+    if (duration) params.set("duration", String(duration));
+    const data = (await lrclibFetchJson("/get", params)) as Record<string, unknown> | null;
+    if (data && typeof data === "object" && data.instrumental !== true) {
+      const got = pickLyrics(data.syncedLyrics, data.plainLyrics);
+      if (got) return got;
+    }
+  }
+
+  // 2) Search fallback — prefer synced, then the closest duration.
+  {
+    const params = new URLSearchParams({ track_name: title, artist_name: artist });
+    const list = await lrclibFetchJson("/search", params);
+    if (Array.isArray(list) && list.length > 0) {
+      const best = list
+        .filter(
+          (r) =>
+            r && typeof r === "object" && r.instrumental !== true && (r.syncedLyrics || r.plainLyrics),
+        )
+        .map((r) => ({
+          r,
+          hasSynced: Boolean(r.syncedLyrics),
+          delta:
+            duration && typeof r.duration === "number"
+              ? Math.abs(r.duration - duration)
+              : Number.MAX_SAFE_INTEGER,
+        }))
+        .sort((a, b) => (a.hasSynced === b.hasSynced ? a.delta - b.delta : a.hasSynced ? -1 : 1))[0];
+      if (best) return pickLyrics(best.r.syncedLyrics, best.r.plainLyrics);
+    }
+  }
+
+  return null;
+}
+
+// POST /api/songs/:id/lyrics — fetch lyrics from the provider and save the
+// sidecar. `?force=1` re-fetches even if the song already has lyrics.
+async function handleFetchLyrics(source: LibrarySource, id: string, request: Request): Promise<Response> {
+  const snapshot = await getLibrary(source);
+  const entry = snapshot.entriesById.get(id);
+  if (!entry) return notFound("Song not found");
+
+  const force = new URL(request.url).searchParams.get("force") === "1";
+  if (entry.song.lyricsUrl && !force) {
+    return json(songForRequest(entry.song, request));
+  }
+
+  const resolved = await fetchLyricsFromProvider({
+    artist: entry.song.artist,
+    title: entry.song.title,
+    album: entry.song.album ?? null,
+    durationSec: entry.song.duration ?? null,
+  });
+  const body = resolved?.synced || resolved?.plain || "";
+  if (!body.trim()) {
+    return json({ error: "No lyrics found for this track", code: "LYRICS_NOT_FOUND" }, { status: 404 });
+  }
+  if (byteLength(body) > MAX_LYRICS_BYTES) {
+    return json({ error: "Lyrics are too large" }, { status: 413 });
+  }
+
+  const stem = basename(entry.absolutePath, extname(entry.absolutePath));
+  const lyricsName = `${stem}.lrc`;
+  await writeFile(resolve(dirname(entry.absolutePath), lyricsName), `${body}\n`, "utf8");
+  const sidecar = await readSidecar(entry.absolutePath);
+  await writeSidecar(entry.absolutePath, {
+    ...sidecar,
+    version: 1,
+    lyricsFile: lyricsName,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const next = await getLibrary(source, true);
+  const updated = next.entriesById.get(id);
+  if (!updated) return json({ error: "Song could not be rescanned" }, { status: 500 });
+  return json(songForRequest(updated.song, request));
+}
+
 async function handleSongAssets(source: LibrarySource, id: string, request: Request): Promise<Response> {
   const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
@@ -2865,6 +2990,12 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
       const source = librarySourceForRequest(request);
       if (!source) return forbiddenLibraryResponse();
       return request.method === "POST" ? handleSongAssets(source, id, request) : methodNotAllowed();
+    }
+    if (rest.endsWith("/lyrics")) {
+      const id = safeDecode(rest.slice(0, -"/lyrics".length));
+      const source = librarySourceForRequest(request);
+      if (!source) return forbiddenLibraryResponse();
+      return request.method === "POST" ? handleFetchLyrics(source, id, request) : methodNotAllowed();
     }
     const id = safeDecode(rest);
     if (request.method === "GET") {
