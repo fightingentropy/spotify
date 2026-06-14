@@ -2130,6 +2130,30 @@ function discoverEntryToSong(entry: DiscoverStagingEntry): PlayerSong {
   };
 }
 
+// Discover staging files live in the shared root but are streamed by clients
+// that can't present the proxy token or a session cookie — notably the native
+// iOS AVPlayer, which fetches the URL directly (bypassing the Worker). Sign
+// their media URLs for the shared scope, exactly as songForRequest does for
+// normal library songs, so hasValidMediaSignature() authorizes them. Without
+// this the native player gets a 403 and the track silently fails to load.
+const DISCOVER_MEDIA_IDENTITY: RequestUserIdentity = {
+  id: LOCAL_USER.id,
+  email: LOCAL_USER.email,
+  name: LOCAL_USER.name,
+  local: false,
+};
+function signDiscoverMediaUrl(mediaUrl: string | undefined): string | undefined {
+  return appendMediaSignature(mediaUrl, DISCOVER_MEDIA_IDENTITY) ?? mediaUrl;
+}
+function signDiscoverSong(song: PlayerSong): PlayerSong {
+  return {
+    ...song,
+    imageUrl: signDiscoverMediaUrl(song.imageUrl) || song.imageUrl,
+    audioUrl: signDiscoverMediaUrl(song.audioUrl) || song.audioUrl,
+    lyricsUrl: signDiscoverMediaUrl(song.lyricsUrl),
+  };
+}
+
 function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
@@ -2155,12 +2179,15 @@ async function discoverStagingStatusBody(
   const manifest = await readDiscoverManifest(source);
   const entries = Object.values(manifest.entries)
     .filter((entry) => existsSync(resolve(source.root, entry.stagedRelPath)))
-    .map((entry) => ({
-      trackId: entry.trackId,
-      id: entry.finalId,
-      audioUrl: `/api/files/local/${encodeRelativePath(entry.stagedRelPath)}`,
-      duration: entry.durationMs ? Math.round(entry.durationMs / 1000) : undefined,
-    }));
+    .map((entry) => {
+      const audioUrl = `/api/files/local/${encodeRelativePath(entry.stagedRelPath)}`;
+      return {
+        trackId: entry.trackId,
+        id: entry.finalId,
+        audioUrl: signDiscoverMediaUrl(audioUrl) || audioUrl,
+        duration: entry.durationMs ? Math.round(entry.durationMs / 1000) : undefined,
+      };
+    });
   return { entries };
 }
 
@@ -2205,7 +2232,7 @@ async function handleDiscoverStageNow(request: Request): Promise<Response> {
   if (!item) return json({ error: "trackId, title, artist, and resolved are required" }, { status: 400 });
   const entry = await stageDiscoverTrack(source, item);
   if (!entry) return json({ error: "Could not stage this track" }, { status: 502 });
-  return json(discoverEntryToSong(entry));
+  return json(signDiscoverSong(discoverEntryToSong(entry)));
 }
 
 async function handleDiscoverPromote(request: Request): Promise<Response> {
@@ -2229,7 +2256,7 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
     );
   if (duplicate) {
     await removeDiscoverEntry(source, trackId);
-    return json(duplicate.song);
+    return json(signDiscoverSong(duplicate.song));
   }
 
   const stagedAudioPath = resolve(source.root, entry.stagedRelPath);
@@ -2268,7 +2295,7 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
   const scanned = next.entriesByPath.get(finalRel);
   await removeDiscoverEntry(source, trackId);
   if (!scanned) return json({ error: "Promoted song could not be scanned" }, { status: 500 });
-  return json(scanned.song);
+  return json(signDiscoverSong(scanned.song));
 }
 
 async function handleSongUpload(source: LibrarySource, request: Request): Promise<Response> {
