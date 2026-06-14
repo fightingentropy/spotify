@@ -1,0 +1,105 @@
+import * as FileSystem from "expo-file-system/legacy";
+import * as SQLite from "expo-sqlite";
+
+// expo-sqlite store for offline download records. Mirrors the web app's
+// IndexedDB `downloads_v2` store: composite key [accountScope, songId] (here a
+// single TEXT primary key), with status/updatedAt available for queries.
+export type DownloadRow = {
+  key: string; // `${accountScope}:${songId}`
+  accountScope: string;
+  songId: string;
+  scopes: string; // JSON string[]
+  status: string;
+  song: string; // JSON PlayerSong
+  audioPath: string | null;
+  coverPath: string | null;
+  lyricsPath: string | null;
+  updatedAt: number;
+};
+
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+
+async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const db = await SQLite.openDatabaseAsync("spotify-offline.db");
+      await db.execAsync(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS downloads (
+          key TEXT PRIMARY KEY NOT NULL,
+          accountScope TEXT NOT NULL,
+          songId TEXT NOT NULL,
+          scopes TEXT NOT NULL,
+          status TEXT NOT NULL,
+          song TEXT NOT NULL,
+          audioPath TEXT,
+          coverPath TEXT,
+          lyricsPath TEXT,
+          updatedAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_downloads_account ON downloads (accountScope);
+        CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads (status);
+      `);
+      return db;
+    })();
+  }
+  return dbPromise;
+}
+
+export async function dbAllRows(): Promise<DownloadRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<DownloadRow>("SELECT * FROM downloads ORDER BY updatedAt DESC");
+}
+
+export async function dbUpsertRow(row: DownloadRow): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO downloads
+      (key, accountScope, songId, scopes, status, song, audioPath, coverPath, lyricsPath, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [row.key, row.accountScope, row.songId, row.scopes, row.status, row.song, row.audioPath, row.coverPath, row.lyricsPath, row.updatedAt],
+  );
+}
+
+export async function dbDeleteRow(key: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM downloads WHERE key = ?", [key]);
+}
+
+// All rows whose status is "ready" for an account scope. Used by the verify pass
+// and the storage total — mirrors the web app's readDownloadedRecordsPage, which
+// reads only the "downloaded" status. SQLite has no in-memory cap, so this is the
+// authoritative set (the store's in-memory `records` map is the same set today,
+// but this keeps the verify/total logic correct if that ever changes).
+export async function readAllDownloadedRecords(accountScope: string): Promise<DownloadRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<DownloadRow>(
+    "SELECT * FROM downloads WHERE accountScope = ? AND status = 'ready' ORDER BY updatedAt DESC",
+    [accountScope],
+  );
+}
+
+// Check that a downloaded record's audio file still exists on disk with a
+// non-empty size. RN's port of the web verifyOrRepairRecord: there is no Cache
+// API to re-stage from, so a missing/empty file can't be repaired in place —
+// instead the row is flipped back to "queued" (audioPath cleared) so the serial
+// download pump re-downloads it on its next run. Cover/lyrics are best-effort
+// sidecars in the pump and are not gated here, matching the pump's own behavior.
+export async function verifyOrRepairRecord(row: DownloadRow): Promise<{ ok: boolean }> {
+  const audioPath = row.audioPath;
+  if (audioPath) {
+    try {
+      const info = await FileSystem.getInfoAsync(audioPath);
+      if (info.exists && !info.isDirectory && info.size > 0) return { ok: true };
+    } catch {
+      // fall through to repair
+    }
+  }
+  await dbUpsertRow({
+    ...row,
+    status: "queued",
+    audioPath: null,
+    updatedAt: Date.now(),
+  });
+  return { ok: false };
+}

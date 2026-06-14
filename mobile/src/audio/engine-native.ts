@@ -1,0 +1,502 @@
+import AudioEngine, {
+  type CrossfadeCompleteEvent,
+  type DeckId,
+  type EndedEvent,
+  type ErrorEvent,
+  type PlayingEvent,
+  type RemoteEvent,
+  type SeekedEvent,
+  type TimeEvent,
+} from "../../modules/audio-engine";
+import { toAbsoluteApiUrl } from "@/lib/config";
+import { isPodcastSong, isRadioSong } from "@/lib/player-song";
+import { createPlayListen, flushPlayListen, type PlayListenEntry } from "@/lib/play-events";
+import {
+  isEpisodeFinished,
+  markEpisodeFinished,
+  PODCAST_PROGRESS_WRITE_INTERVAL_MS,
+  PODCAST_RESUME_MIN_SECONDS,
+  readEpisodeProgress,
+  writeEpisodeProgressGuarded,
+} from "@/lib/podcast-progress";
+import { resolveOfflinePlaybackSong } from "@/store/offline";
+import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
+import { lockScreenArtwork } from "@/audio/track";
+import { isOwnHandledSong, MAX_CONSECUTIVE_AUDIO_ERRORS, refreshCurrentSong } from "@/audio/refresh";
+import { enforceSleepTimer } from "@/audio/sleep";
+import { publishPlaybackState, setLastPosition, takePendingResumeSeek } from "@/audio/playback-sync";
+import { resetAudioProgress, setAudioProgress, useAudioProgressStore } from "@/audio/progress";
+import type { PlayerSong } from "@/types/player";
+
+// iOS dual-deck native audio engine. The native AudioEngine module (two AVPlayer
+// decks A/B, an equal-power crossfade ramp on a background-safe 33ms timer, and
+// the lock-screen Now Playing center) owns audio OUTPUT; this file owns all
+// ORCHESTRATION — which song goes on which deck, when to prefetch the next track,
+// when to fade, and committing the queue advance. Mirrors the original web
+// PlayerBar crossfade state machine. Android uses engine-rntp.ts instead.
+
+const PREFETCH_LEAD_S = 8; // start warming the next track this far before the fade
+const NOW_PLAYING_THROTTLE_MS = 1000; // lock-screen scrubber refresh cadence
+
+type StoreState = ReturnType<typeof usePlayerStore.getState>;
+type NextTrack = { index: number; song: PlayerSong; fromFuture: boolean };
+
+let started = false;
+let activeDeck: DeckId = "A";
+const deckSong: Record<DeckId, PlayerSong | null> = { A: null, B: null };
+const deckKey: Record<DeckId, string | null> = { A: null, B: null };
+let loadSeq = 0;
+let currentListen: PlayListenEntry | null = null;
+
+// crossfade scheduling state
+let crossfading = false;
+let prefetchDeck: DeckId | null = null;
+let prefetchIndex: number | null = null;
+let prefetchFromFuture = false;
+
+// error circuit-breaker
+let consecutiveErrors = 0;
+let erroredKeyRetry: string | null = null;
+
+// throttles
+let lastPodcastWriteMs = 0;
+let lastNowPlayingMs = 0;
+
+function other(deck: DeckId): DeckId {
+  return deck === "A" ? "B" : "A";
+}
+
+function trackKey(song: PlayerSong): string {
+  return `${song.id}|${toAbsoluteApiUrl(song.audioUrl)}`;
+}
+
+function currentVolume(): number {
+  const { volume, isMuted } = usePlayerStore.getState();
+  return isMuted ? 0 : volume;
+}
+
+function currentRate(song: PlayerSong | null): number {
+  return song && isPodcastSong(song) ? usePlayerStore.getState().playbackRate : 1;
+}
+
+// Crossfade only applies to music — never bleed a podcast or radio station.
+function crossfadeEligible(song: PlayerSong | null | undefined): boolean {
+  return !!song && !isPodcastSong(song) && !isRadioSong(song);
+}
+
+function computeStartAt(song: PlayerSong): number {
+  const pending = takePendingResumeSeek(song.id);
+  if (pending != null) return pending;
+  if (isPodcastSong(song)) {
+    const progress = readEpisodeProgress(song.id);
+    if (progress && progress.time >= PODCAST_RESUME_MIN_SECONDS && !isEpisodeFinished(progress)) {
+      return progress.time;
+    }
+  }
+  return 0;
+}
+
+function setNowPlayingFor(song: PlayerSong): void {
+  void AudioEngine.setNowPlaying({
+    title: song.title,
+    artist: song.artist,
+    album: song.album ?? "",
+    duration: song.duration ?? 0,
+    artworkUrl: lockScreenArtwork(song),
+  });
+}
+
+function clearPrefetch(): void {
+  prefetchDeck = null;
+  prefetchIndex = null;
+  prefetchFromFuture = false;
+}
+
+// The next track in *playback* order (mirrors next() under shuffle/repeat).
+function computeNext(s: StoreState): NextTrack | null {
+  const indices = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, 1, {
+    shuffle: s.shuffle,
+    repeatMode: s.repeatMode,
+    playFuture: s.playFuture,
+    shuffleRemaining: s.shuffleRemaining,
+  });
+  const index = indices[0];
+  if (index === undefined) return null;
+  const song = s.queue[index];
+  if (!song) return null;
+  const fromFuture = s.shuffle && s.playFuture.length > 0 && s.playFuture[s.playFuture.length - 1] === index;
+  return { index, song, fromFuture };
+}
+
+// --- track loading (hard cut: user skip / select / initial) -----------------
+async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<void> {
+  const resolved = song ? resolveOfflinePlaybackSong(song) : null;
+  const key = resolved ? trackKey(resolved) : null;
+
+  // Already the active deck's track (crossfade just committed, or a no-op store
+  // change) — just reconcile play/pause; never reload.
+  if (key && key === deckKey[activeDeck]) {
+    await syncPlayState(isPlaying);
+    return;
+  }
+
+  // Switching tracks by hand cancels any in-flight / prepared crossfade.
+  await abortCrossfade();
+
+  flushPlayListen(currentListen);
+  currentListen = song ? createPlayListen(song) : null;
+
+  const seq = ++loadSeq;
+  if (!song || !resolved) {
+    await AudioEngine.releaseDeck("A");
+    await AudioEngine.releaseDeck("B");
+    deckSong.A = deckSong.B = null;
+    deckKey.A = deckKey.B = null;
+    resetAudioProgress(0);
+    return;
+  }
+
+  // Free the idle deck and (re)load onto the active deck.
+  const target = activeDeck;
+  const idle = other(target);
+  await AudioEngine.releaseDeck(idle);
+  deckSong[idle] = null;
+  deckKey[idle] = null;
+
+  await AudioEngine.setActiveDeck(target);
+  const startAt = computeStartAt(song);
+  resetAudioProgress(song.duration ?? 0);
+  await AudioEngine.prepare({ deck: target, url: toAbsoluteApiUrl(resolved.audioUrl), id: song.id, startAt });
+  if (seq !== loadSeq) return;
+  deckSong[target] = song;
+  deckKey[target] = key;
+  await AudioEngine.setVolume(target, currentVolume());
+  await AudioEngine.setRate(target, currentRate(song));
+  setNowPlayingFor(song);
+  // Read isPlaying LIVE (not the captured param). This load is a long async chain,
+  // and a pause that lands mid-load must win — otherwise the deck plays while the
+  // store shows paused. Cross-device restore hits this: setQueue (→playing) is
+  // immediately followed by pause(), and that pause has to stick.
+  if (usePlayerStore.getState().isPlaying) await AudioEngine.play(target);
+  else await AudioEngine.pause(target);
+
+  void refreshCurrentSong(song);
+  void publishPlaybackState(true);
+}
+
+async function syncPlayState(isPlaying: boolean): Promise<void> {
+  if (isPlaying) {
+    await AudioEngine.play(activeDeck);
+  } else {
+    if (crossfading) await abortCrossfade();
+    await AudioEngine.pause(activeDeck);
+  }
+}
+
+// Cancel an in-flight or prepared crossfade and restore the active deck to full
+// volume. The native setVolume cancels the ramp.
+async function abortCrossfade(): Promise<void> {
+  if (!crossfading && prefetchDeck == null) return;
+  const idle = prefetchDeck ?? other(activeDeck);
+  if (crossfading) {
+    await AudioEngine.setVolume(activeDeck, currentVolume());
+  }
+  await AudioEngine.releaseDeck(idle);
+  deckSong[idle] = null;
+  deckKey[idle] = null;
+  crossfading = false;
+  clearPrefetch();
+}
+
+async function applyVolume(): Promise<void> {
+  if (crossfading) return; // don't cancel an in-flight ramp
+  await AudioEngine.setVolume(activeDeck, currentVolume());
+}
+
+async function applyRate(song: PlayerSong | null): Promise<void> {
+  await AudioEngine.setRate(activeDeck, currentRate(song));
+}
+
+// --- native event handlers --------------------------------------------------
+function onTime(e: TimeEvent): void {
+  if (e.deck !== activeDeck) return; // only the active deck drives the clock
+  setLastPosition(e.currentTime);
+  setAudioProgress(e.currentTime, e.duration);
+
+  const s = usePlayerStore.getState();
+  const song = s.currentSong;
+  if (!song) return;
+
+  // play-listen tracking → fire play-event at 30s OR ≥50%.
+  if (currentListen) {
+    if (e.currentTime > currentListen.maxPositionSeconds) currentListen.maxPositionSeconds = e.currentTime;
+    if (Number.isFinite(e.duration) && e.duration > 0) currentListen.durationSeconds = e.duration;
+    flushPlayListen(currentListen);
+  }
+
+  // podcast progress write (~5s).
+  if (isPodcastSong(song)) {
+    const now = Date.now();
+    if (now - lastPodcastWriteMs >= PODCAST_PROGRESS_WRITE_INTERVAL_MS) {
+      lastPodcastWriteMs = now;
+      writeEpisodeProgressGuarded(song.id, e.currentTime, e.duration);
+    }
+  }
+
+  enforceSleepTimer();
+
+  // lock-screen scrubber (throttled; iOS extrapolates between updates via rate).
+  const now = Date.now();
+  if (now - lastNowPlayingMs >= NOW_PLAYING_THROTTLE_MS) {
+    lastNowPlayingMs = now;
+    void AudioEngine.updateNowPlaying({ position: e.currentTime, rate: currentRate(song), playing: s.isPlaying });
+  }
+
+  // cross-device resume publish (self-throttled to ~8s).
+  if (s.isPlaying) void publishPlaybackState(false);
+
+  maybeCrossfade(e, s, song);
+}
+
+function maybeCrossfade(e: TimeEvent, s: StoreState, song: PlayerSong): void {
+  if (crossfading) return;
+  if (!s.crossfadeEnabled || s.crossfadeSeconds <= 0) return;
+  if (s.repeatMode === "one") return; // replay handled on `ended`
+  if (s.sleepAtEndOfTrack) return; // stop at end, don't bleed into the next track
+  if (!crossfadeEligible(song)) return;
+  if (!Number.isFinite(e.duration) || e.duration <= 0) return;
+
+  const remaining = e.duration - e.currentTime;
+  if (remaining <= 0) return;
+  const fade = Math.min(s.crossfadeSeconds, Math.max(0.1, e.duration - 0.1));
+
+  const next = computeNext(s);
+  if (!next || !crossfadeEligible(next.song)) return; // next is podcast/radio/none → hard-cut on ended
+
+  // 1) Prefetch the upcoming track onto the idle deck ~8s before the fade window.
+  if (prefetchIndex !== next.index && remaining <= fade + PREFETCH_LEAD_S) {
+    void prefetchNext(next);
+    return;
+  }
+  // 2) Arm the crossfade once the fade window opens.
+  if (prefetchDeck != null && prefetchIndex === next.index && remaining <= fade + 0.05) {
+    void startCrossfade(fade);
+  }
+}
+
+async function prefetchNext(next: NextTrack): Promise<void> {
+  const idle = other(activeDeck);
+  const seq = loadSeq;
+  const resolved = resolveOfflinePlaybackSong(next.song);
+  prefetchDeck = idle;
+  prefetchIndex = next.index;
+  prefetchFromFuture = next.fromFuture;
+  await AudioEngine.prepare({ deck: idle, url: toAbsoluteApiUrl(resolved.audioUrl), id: next.song.id, startAt: 0 });
+  if (seq !== loadSeq) return; // a hard load superseded the prefetch
+  deckSong[idle] = next.song;
+  deckKey[idle] = trackKey(resolved);
+  await AudioEngine.setVolume(idle, 0); // silent until the ramp lifts it
+}
+
+async function startCrossfade(fade: number): Promise<void> {
+  if (crossfading || prefetchDeck == null) return;
+  if (deckSong[prefetchDeck] == null) return; // prefetch not ready yet
+  const from = activeDeck;
+  const to = prefetchDeck;
+  crossfading = true;
+  await AudioEngine.crossfade(from, to, Math.max(1, Math.round(fade * 1000)), currentVolume());
+}
+
+function onCrossfadeComplete(e: CrossfadeCompleteEvent): void {
+  const from = e.from;
+  const to = e.to;
+  // Native already swapped its activeDeck to `to` and zeroed/paused `from`.
+  activeDeck = to;
+  flushPlayListen(currentListen);
+  const newSong = deckSong[to];
+  currentListen = newSong ? createPlayListen(newSong) : null;
+
+  // Commit the queue advance to the EXACT track we faded into — without a reload
+  // (it's already playing on the now-active deck). advanceToIndex mirrors next()'s
+  // shuffle bookkeeping; preservePlayState avoids forcing play on a paused fade.
+  if (prefetchIndex != null) {
+    usePlayerStore.getState().advanceToIndex(prefetchIndex, {
+      fromFuture: prefetchFromFuture,
+      preservePlayState: true,
+    });
+  }
+
+  if (newSong) {
+    setNowPlayingFor(newSong);
+    resetAudioProgress(newSong.duration ?? 0);
+  }
+
+  // Recycle the outgoing deck for the next prefetch.
+  void AudioEngine.releaseDeck(from);
+  deckSong[from] = null;
+  deckKey[from] = null;
+
+  crossfading = false;
+  clearPrefetch();
+  lastNowPlayingMs = 0; // force an immediate lock-screen refresh for the new track
+
+  if (newSong) {
+    void publishPlaybackState(true);
+    void refreshCurrentSong(newSong);
+  }
+}
+
+async function onEnded(e: EndedEvent): Promise<void> {
+  if (e.deck !== activeDeck) return; // outgoing deck after a fade — ignore
+  if (crossfading) return; // crossfadeComplete drives this transition
+  const s = usePlayerStore.getState();
+  const song = s.currentSong;
+  if (song && isPodcastSong(song)) markEpisodeFinished(song.id);
+
+  if (s.repeatMode === "one") {
+    flushPlayListen(currentListen);
+    currentListen = song ? createPlayListen(song) : null;
+    await AudioEngine.seek(activeDeck, 0);
+    await AudioEngine.play(activeDeck);
+    return;
+  }
+  if (s.sleepAtEndOfTrack) {
+    s.pause();
+    s.cancelSleepTimer();
+    return;
+  }
+  flushPlayListen(currentListen);
+  s.next(); // store advances → subscription hard-loads the next track
+}
+
+async function onError(e: ErrorEvent): Promise<void> {
+  // Prefetched (idle) deck failed: abandon the prefetch; the transition will
+  // hard-cut on `ended` and retry/skip through the active-deck path.
+  if (e.deck !== activeDeck) {
+    if (prefetchDeck === e.deck) {
+      await AudioEngine.releaseDeck(e.deck);
+      deckSong[e.deck] = null;
+      deckKey[e.deck] = null;
+      clearPrefetch();
+    }
+    return;
+  }
+
+  const s = usePlayerStore.getState();
+  const song = s.currentSong;
+  if (!song) return;
+  if (isOwnHandledSong(song)) return; // radio/offline/local manage their own URLs
+
+  const baseUrl = toAbsoluteApiUrl(song.audioUrl);
+  const isHls = /\.m3u8(\?|$)/i.test(baseUrl);
+
+  // Retry the same track ONCE with a cache-busted URL.
+  if (!isHls && erroredKeyRetry !== baseUrl) {
+    erroredKeyRetry = baseUrl;
+    const busted = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}__retry=${Date.now()}`;
+    const seq = ++loadSeq;
+    await AudioEngine.prepare({ deck: activeDeck, url: busted, id: song.id, startAt: 0 });
+    if (seq !== loadSeq) return;
+    deckSong[activeDeck] = song;
+    deckKey[activeDeck] = `${song.id}|${busted}`;
+    if (s.isPlaying) await AudioEngine.play(activeDeck);
+    return;
+  }
+
+  consecutiveErrors += 1;
+  if (consecutiveErrors >= MAX_CONSECUTIVE_AUDIO_ERRORS) {
+    consecutiveErrors = 0;
+    erroredKeyRetry = null;
+    s.pause(); // stop — don't loop a dead queue forever
+    return;
+  }
+  erroredKeyRetry = null;
+  s.next(); // skip
+}
+
+function onPlaying(e: PlayingEvent): void {
+  if (e.deck === activeDeck) {
+    consecutiveErrors = 0;
+    erroredKeyRetry = null;
+  }
+}
+
+function onSeeked(e: SeekedEvent): void {
+  if (e.deck === activeDeck) {
+    setLastPosition(e.currentTime);
+    setAudioProgress(e.currentTime, useAudioProgressStore.getState().duration);
+  }
+}
+
+function onRemote(e: RemoteEvent): void {
+  const s = usePlayerStore.getState();
+  switch (e.action) {
+    case "play":
+      s.play();
+      break;
+    case "pause":
+      s.pause();
+      break;
+    case "toggle":
+      s.toggle();
+      break;
+    case "next":
+      s.next();
+      break;
+    case "prev":
+      s.previous();
+      break;
+    case "seek":
+      if (typeof e.value === "number") void seekNative(e.value);
+      break;
+  }
+}
+
+// --- store subscription -----------------------------------------------------
+function subscribeToStore(): void {
+  let prev = usePlayerStore.getState();
+  usePlayerStore.subscribe((state) => {
+    const songChanged =
+      state.currentSong?.id !== prev.currentSong?.id ||
+      state.currentSong?.audioUrl !== prev.currentSong?.audioUrl;
+    if (songChanged) {
+      void hardLoad(state.currentSong, state.isPlaying);
+    } else if (state.isPlaying !== prev.isPlaying) {
+      void syncPlayState(state.isPlaying);
+      void publishPlaybackState(true);
+    }
+    if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume();
+    if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong);
+    prev = state;
+  });
+}
+
+// UI seek (Scrubber) — routes to the active deck.
+export async function seekNative(seconds: number): Promise<void> {
+  const position = Math.max(0, seconds);
+  setLastPosition(position);
+  setAudioProgress(position, useAudioProgressStore.getState().duration);
+  await AudioEngine.seek(activeDeck, position);
+}
+
+export async function initNativeAudio(): Promise<void> {
+  if (started) return;
+  started = true;
+
+  await AudioEngine.configure(); // idempotent (OnCreate also runs it)
+
+  AudioEngine.addListener("time", onTime);
+  AudioEngine.addListener("ended", (e) => void onEnded(e));
+  AudioEngine.addListener("error", (e) => void onError(e));
+  AudioEngine.addListener("playing", onPlaying);
+  AudioEngine.addListener("seeked", onSeeked);
+  AudioEngine.addListener("crossfadeComplete", onCrossfadeComplete);
+  AudioEngine.addListener("remote", onRemote);
+
+  subscribeToStore();
+  await applyVolume();
+
+  // If a song was already current (e.g. restored before init), load it.
+  const { currentSong, isPlaying } = usePlayerStore.getState();
+  if (currentSong) await hardLoad(currentSong, isPlaying);
+}
