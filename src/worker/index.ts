@@ -3782,6 +3782,89 @@ app.get("/api/stats/home", async (c) => {
   return jsonCached(c, { recentlyPlayed, mostPlayed });
 });
 
+// Weekly listening stats (Spotify "Listening stats" screen): minutes listened,
+// top artist, and top song per Monday-anchored week, aggregated from PlayEvent.
+app.get("/api/stats/listening", async (c) => {
+  const user = requireUser(c.get("user"));
+  if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+    return jsonCached(c, { weeks: [] });
+  }
+  const db = c.get("db");
+  const WEEKS = 6;
+  const rows = await db<{ songJson: string; createdAt: string; durationMs: number | null }>`
+    SELECT "songJson", "createdAt", "durationMs"
+    FROM "PlayEvent"
+    WHERE "userId" = ${user.id} AND "createdAt" >= datetime('now', ${`-${WEEKS * 7} days`})
+    ORDER BY "createdAt" DESC
+  `;
+
+  // Monday-anchored ISO date (YYYY-MM-DD) for a PlayEvent timestamp. createdAt is
+  // SQLite CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS", UTC); normalize to ISO-UTC so
+  // the worker runtime parses it as UTC rather than local time.
+  const mondayOf = (raw: string): string => {
+    let s = raw.includes("T") ? raw : raw.replace(" ", "T");
+    if (!s.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(s)) s += "Z";
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return "";
+    const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
+    const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - dow));
+    return monday.toISOString().slice(0, 10);
+  };
+
+  type Bucket = {
+    weekStart: string;
+    seconds: number;
+    songs: Map<string, { song: PlayerSong; count: number }>;
+    artists: Map<string, { name: string; image: string | null; count: number }>;
+  };
+  const buckets = new Map<string, Bucket>();
+  for (const row of rows) {
+    const song = parsePlayEventSongJson(row.songJson);
+    if (!song) continue;
+    const wk = mondayOf(row.createdAt);
+    if (!wk) continue;
+    let b = buckets.get(wk);
+    if (!b) {
+      b = { weekStart: wk, seconds: 0, songs: new Map(), artists: new Map() };
+      buckets.set(wk, b);
+    }
+    // Prefer the actual listened time (durationMs); fall back to the track length
+    // (song.duration is in seconds) when an event predates duration reporting.
+    const playedMs = Number(row.durationMs);
+    b.seconds +=
+      Number.isFinite(playedMs) && playedMs > 0
+        ? playedMs / 1000
+        : typeof song.duration === "number" && song.duration > 0
+          ? song.duration
+          : 0;
+    const sEntry = b.songs.get(song.id);
+    if (sEntry) sEntry.count += 1;
+    else b.songs.set(song.id, { song, count: 1 });
+    const artistName = (song.artist || "Unknown Artist").trim();
+    const aEntry = b.artists.get(artistName);
+    if (aEntry) aEntry.count += 1;
+    else b.artists.set(artistName, { name: artistName, image: song.imageUrl ?? null, count: 1 });
+  }
+
+  const weeks = [...buckets.values()]
+    .sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1))
+    .map((b) => {
+      const topSong = [...b.songs.values()].sort((x, y) => y.count - x.count)[0]?.song ?? null;
+      const topArtist = [...b.artists.values()].sort((x, y) => y.count - x.count)[0] ?? null;
+      const start = new Date(`${b.weekStart}T00:00:00Z`);
+      const end = new Date(start.getTime() + 6 * 86_400_000);
+      return {
+        weekStart: b.weekStart,
+        weekEnd: end.toISOString().slice(0, 10),
+        minutesListened: Math.round(b.seconds / 60),
+        topSong,
+        topArtist: topArtist ? { name: topArtist.name, image: topArtist.image } : null,
+      };
+    });
+
+  return jsonCached(c, { weeks });
+});
+
 app.get("/api/liked", async (c) => {
   const user = requireUser(c.get("user"));
   const rows = await listLikedSongs(c.get("db"), user.id);

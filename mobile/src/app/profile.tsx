@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
-import { Camera, ChevronRight, LogOut, User } from "lucide-react-native";
+import { Camera, ChevronRight, LineChart, LogOut, User } from "lucide-react-native";
 import { Screen } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -71,6 +71,13 @@ export default function ProfileScreen() {
         </View>
 
         <View className="mt-10">
+          <PressableScale scaleTo={1} onPress={() => router.push("/listening-stats")} className="flex-row items-center justify-between py-4">
+            <View className="flex-row items-center gap-3">
+              <LineChart size={20} color={colors.foreground} />
+              <Text className="text-base" style={{ color: colors.foreground }}>Listening stats</Text>
+            </View>
+            <ChevronRight size={20} color={colors.muted} />
+          </PressableScale>
           <PressableScale scaleTo={1} onPress={() => router.push("/settings")} className="flex-row items-center justify-between py-4">
             <Text className="text-base" style={{ color: colors.foreground }}>Settings</Text>
             <ChevronRight size={20} color={colors.muted} />

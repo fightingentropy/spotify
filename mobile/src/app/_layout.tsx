@@ -69,6 +69,7 @@ export default function RootLayout() {
             <Stack.Screen name="upload" options={{ ...headerOptions, title: "Upload" }} />
             <Stack.Screen name="settings" options={{ ...headerOptions, title: "Settings" }} />
             <Stack.Screen name="profile" options={{ ...headerOptions, title: "Profile" }} />
+            <Stack.Screen name="listening-stats" options={{ ...headerOptions, title: "Listening stats" }} />
             <Stack.Screen name="playlist/[id]" options={{ ...headerOptions, title: "" }} />
           </Stack>
           <PlayerSheets />
