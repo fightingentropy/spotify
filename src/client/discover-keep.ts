@@ -9,13 +9,15 @@ import type { PlayerSong } from "@/types/player";
 // promoted song, the original song if it wasn't staged, or null if promotion
 // failed (callers should abort the keep action in that case).
 export async function promoteStagedSong(song: PlayerSong): Promise<PlayerSong | null> {
-  if (!song.staged || !song.discoverTrackId) return song;
+  if (!song.discoverTrackId) return song;
   try {
     const res = await fetch("/api/discover/promote", {
       method: "POST",
       headers: { "content-type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ trackId: song.discoverTrackId }),
+      // finalId lets the server stay idempotent: if this track was already
+      // promoted (no longer staged), it returns the existing library song.
+      body: JSON.stringify({ trackId: song.discoverTrackId, finalId: song.id }),
     });
     if (!res.ok) return null;
     const promoted = (await res.json()) as PlayerSong;

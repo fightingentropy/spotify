@@ -2239,13 +2239,23 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
   const source = librarySourceForRequest(request);
   if (!source || !source.shared) return forbiddenLibraryResponse();
-  const payload = await readJsonBody<{ trackId?: unknown }>(request);
+  const payload = await readJsonBody<{ trackId?: unknown; finalId?: unknown }>(request);
   const trackId = typeof payload?.trackId === "string" ? payload.trackId.trim() : "";
   if (!trackId) return json({ error: "trackId is required" }, { status: 400 });
 
   const manifest = await readDiscoverManifest(source);
   const entry = manifest.entries[trackId];
-  if (!entry) return notFound("Staged track not found");
+  if (!entry) {
+    // Idempotent: this track was already promoted (no longer staged). If the
+    // client passed the expected final library id and that song exists, return
+    // it so "keep" still succeeds instead of erroring.
+    const finalId = typeof payload?.finalId === "string" ? payload.finalId.trim() : "";
+    if (finalId) {
+      const existing = (await getLibrary(source)).entriesById.get(finalId);
+      if (existing) return json(signDiscoverSong(existing.song));
+    }
+    return notFound("Staged track not found");
+  }
 
   // Already owned (same title+artist already in the library)? Keep that, drop the staging copy.
   const snapshot = await getLibrary(source);

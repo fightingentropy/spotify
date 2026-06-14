@@ -134,16 +134,6 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: true, status: 200 };
     }
 
-    // Keep a staged Discover track: promote it into the library first (you can't
-    // like a song that isn't in the library yet). The promoted song keeps the
-    // same id, so the optimistic state below is unaffected.
-    if (nextLiked && song?.staged && song.discoverTrackId) {
-      const promoted = await promoteStagedSong(song);
-      if (!promoted) return { ok: false, status: 502, error: "Couldn't save this track" };
-      song = promoted;
-      songId = promoted.id;
-    }
-
     void impactLight();
 
     if (isLocalSongId(songId)) {
@@ -156,11 +146,41 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       return { ok: true, status: 200 };
     }
 
+    // Optimistically reflect the like immediately so the heart responds on tap,
+    // even while a staged Discover track is being promoted (a round-trip that can
+    // take a moment). Reverted below if the promote or the save fails.
     set((state) => ({
       likedSongIds: nextLiked ? { ...state.likedSongIds, [songId]: true } : removeKey(state.likedSongIds, songId),
       pending: { ...state.pending, [songId]: true },
       hydrated: true,
     }));
+
+    // Keep a Discover track: promote it into the library first (you can't like a
+    // song that isn't in the library yet). Promotion is idempotent and usually
+    // keeps the same id; if it differs, move the optimistic like onto the new id.
+    if (nextLiked && song?.discoverTrackId) {
+      const promoted = await promoteStagedSong(song);
+      if (!promoted) {
+        set((state) => ({
+          likedSongIds: prevLiked
+            ? { ...state.likedSongIds, [songId]: true }
+            : removeKey(state.likedSongIds, songId),
+          pending: removeKey(state.pending, songId),
+          hydrated: true,
+        }));
+        return { ok: false, status: 502, error: "Couldn't save this track" };
+      }
+      if (promoted.id !== songId) {
+        const previousId = songId;
+        set((state) => ({
+          likedSongIds: { ...removeKey(state.likedSongIds, previousId), [promoted.id]: true },
+          pending: { ...removeKey(state.pending, previousId), [promoted.id]: true },
+          hydrated: true,
+        }));
+      }
+      song = promoted;
+      songId = promoted.id;
+    }
 
     // Capture the account scope before the await: reading it afterwards would
     // patch the wrong account's caches if the user switched accounts in-flight.

@@ -2056,14 +2056,12 @@ export const useOfflineStore = create<OfflineState>((set, get) => ({
   },
   queueDownloads: async (songs, scope) => {
     await get().hydrate();
-    // Keep a staged Discover track: promote it into the library before pinning it
+    // Keep a Discover track: promote it into the library before pinning it
     // offline, so the download references the permanent library copy rather than
     // the .discover staging file that rotation eventually deletes.
-    if (songs.some((song) => song.staged && song.discoverTrackId)) {
+    if (songs.some((song) => song.discoverTrackId)) {
       songs = await Promise.all(
-        songs.map(async (song) =>
-          song.staged && song.discoverTrackId ? (await promoteStagedSong(song)) ?? song : song,
-        ),
+        songs.map(async (song) => (song.discoverTrackId ? (await promoteStagedSong(song)) ?? song : song)),
       );
     }
     const timestamp = now();

@@ -62,6 +62,7 @@ export default function HomePage() {
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
   const currentSongId = usePlayerStore((state) => state.currentSong?.id ?? null);
+  const currentDiscoverTrackId = usePlayerStore((state) => state.currentSong?.discoverTrackId ?? null);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
 
   // Subscribe to a stable signature of only the downloaded record ids rather
@@ -236,13 +237,24 @@ export default function HomePage() {
 
   const renderDiscoverTile = (track: DiscoverTrack) => {
     const importing = importingId === track.id;
+    const active = currentDiscoverTrackId != null && currentDiscoverTrackId === track.id;
+    const activePlaying = active && isPlaying;
+    // Tapping the active tile toggles play/pause; tapping another tile plays it.
+    const onTap = () => {
+      if (active) {
+        if (isPlaying) pause();
+        else play();
+        return;
+      }
+      void handleDiscoverClick(track);
+    };
     return (
       <div
         key={track.id}
-        onClick={() => handleDiscoverClick(track)}
+        onClick={onTap}
         className={cn(
           "wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation sm:w-40",
-          importing ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
+          active || importing ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
         )}
       >
         <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
@@ -261,26 +273,30 @@ export default function HomePage() {
           ) : null}
           <button
             type="button"
-            aria-label={`Play ${track.title}`}
+            aria-label={activePlaying ? `Pause ${track.title}` : `Play ${track.title}`}
             onClick={(event) => {
               event.stopPropagation();
-              handleDiscoverClick(track);
+              onTap();
             }}
             disabled={importing}
             className={cn(
               "absolute bottom-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-[#1ed760] text-black shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1ed760] focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212] wf-control-button",
-              importing ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+              active || importing ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
             )}
           >
             {importing ? (
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-black/30 border-t-black" />
+            ) : activePlaying ? (
+              <Pause size={21} fill="currentColor" />
             ) : (
               <Play size={21} fill="currentColor" className="translate-x-0.5" />
             )}
           </button>
         </div>
         <div className="mt-3 min-w-0">
-          <div className="truncate text-[16px] font-medium leading-6 text-white">{track.title}</div>
+          <div className={cn("truncate text-[16px] font-medium leading-6 text-white", active && "text-[#1ed760]")}>
+            {track.title}
+          </div>
           <div className="truncate text-[14px] leading-5 text-white/[0.62]">{track.artist || "Unknown Artist"}</div>
         </div>
       </div>
