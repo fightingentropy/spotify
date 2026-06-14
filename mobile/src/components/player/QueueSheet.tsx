@@ -56,7 +56,7 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
   );
 
   return (
-    <Sheet visible={visible} onClose={onClose} heightPct={0.8}>
+    <Sheet visible={visible} onClose={onClose} heightPct={0.8} zIndex={200}>
       <FlatList
         data={upcoming}
         keyExtractor={(i) => String(i)}

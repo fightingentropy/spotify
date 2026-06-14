@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { Modal, useWindowDimensions, View } from "react-native";
+import { StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -13,22 +13,27 @@ import { colors, motion } from "@/theme";
 
 const DRAG_CLOSE_THRESHOLD = 120;
 
-// Reusable controlled bottom sheet. Renders nothing while closed; on `visible`
-// it mounts a transparent Modal with a tap-to-close backdrop (fades in) and a
+// Reusable controlled bottom sheet. Renders nothing while closed; on `visible` it
+// mounts a z-indexed, full-screen absolute overlay (rendered in PlayerSheets at the
+// root, above the navigator) with a tap-to-close backdrop that fades in and a
 // bottom-pinned panel that slides up. On `visible=false` it plays the exit
-// animation, then unmounts. Pan the handle/panel down past ~120px to close.
+// animation, then unmounts. Pan the panel down past ~120px to close.
 //
-// Replaces @gorhom/bottom-sheet, whose BottomSheetModal.present() is a no-op on
-// RN 0.85 + React 19 + new architecture.
+// NOT an RN <Modal>: a second Modal can't reliably present over an already-open
+// Modal on iOS, which broke opening the Queue / Sleep-timer sheets from within the
+// Now Playing sheet. An absolute overlay stacks correctly via `zIndex` — sub-sheets
+// pass a higher zIndex so they sit above the sheet that opened them.
 export function Sheet({
   visible,
   onClose,
   heightPct = 0.94,
+  zIndex = 100,
   children,
 }: {
   visible: boolean;
   onClose: () => void;
   heightPct?: number;
+  zIndex?: number;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -70,8 +75,7 @@ export function Sheet({
 
   const panelStyle = useAnimatedStyle(() => {
     // Slide the full panel height when hidden; add the live drag offset.
-    const hiddenY = panelH;
-    const base = hiddenY * (1 - progress.value);
+    const base = panelH * (1 - progress.value);
     return { transform: [{ translateY: base + dragY.value }] };
   });
 
@@ -92,47 +96,40 @@ export function Sheet({
   if (!mounted) return null;
 
   return (
-    <Modal transparent visible animationType="none" onRequestClose={onClose} statusBarTranslucent>
-      <View style={{ flex: 1, justifyContent: "flex-end" }}>
-        {/* backdrop: tap to close */}
+    <View style={[StyleSheet.absoluteFill, { zIndex, elevation: zIndex, justifyContent: "flex-end" }]}>
+      {/* backdrop: tap to close */}
+      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: colors.backdrop }, backdropStyle]}>
+        <View
+          style={{ flex: 1 }}
+          onTouchEnd={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        />
+      </Animated.View>
+
+      {/* panel */}
+      <GestureDetector gesture={pan}>
         <Animated.View
           style={[
-            { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.backdrop },
-            backdropStyle,
+            {
+              height: panelH,
+              backgroundColor: colors.background,
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              overflow: "hidden",
+            },
+            panelStyle,
           ]}
         >
-          <Animated.View
-            style={{ flex: 1 }}
-            onTouchEnd={onClose}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-          />
+          {/* grab handle */}
+          <View style={{ alignItems: "center", paddingTop: 10, paddingBottom: 4 }}>
+            <View
+              style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.3)" }}
+            />
+          </View>
+          <View style={{ flex: 1 }}>{children}</View>
         </Animated.View>
-
-        {/* panel */}
-        <GestureDetector gesture={pan}>
-          <Animated.View
-            style={[
-              {
-                height: panelH,
-                backgroundColor: colors.background,
-                borderTopLeftRadius: 20,
-                borderTopRightRadius: 20,
-                overflow: "hidden",
-              },
-              panelStyle,
-            ]}
-          >
-            {/* grab handle */}
-            <View style={{ alignItems: "center", paddingTop: 10, paddingBottom: 4 }}>
-              <View
-                style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.3)" }}
-              />
-            </View>
-            <View style={{ flex: 1 }}>{children}</View>
-          </Animated.View>
-        </GestureDetector>
-      </View>
-    </Modal>
+      </GestureDetector>
+    </View>
   );
 }

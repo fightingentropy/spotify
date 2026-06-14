@@ -33,7 +33,7 @@ export function SleepTimerSheet({ visible, onClose }: { visible: boolean; onClos
   );
 
   return (
-    <Sheet visible={visible} onClose={onClose} heightPct={0.5}>
+    <Sheet visible={visible} onClose={onClose} heightPct={0.5} zIndex={200}>
       <View style={{ paddingBottom: 32 }}>
         <View className="px-5 pb-2 pt-1">
           <Text className="text-lg font-bold" style={{ color: colors.foreground }}>

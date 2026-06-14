@@ -35,7 +35,7 @@ export function TrackActionsMenu({ visible, onClose }: { visible: boolean; onClo
   );
 
   return (
-    <Sheet visible={visible} onClose={onClose} heightPct={0.5}>
+    <Sheet visible={visible} onClose={onClose} heightPct={0.5} zIndex={200}>
       <View style={{ paddingBottom: 32 }}>
         {song ? (
           <>
