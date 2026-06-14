@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import {
@@ -13,6 +13,7 @@ import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { usePlayerStore } from "@/store/player";
+import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
@@ -25,7 +26,7 @@ type HomeSong = PlayerSong & {
 
 export default function HomePage() {
   const { user, status } = useAuth();
-  const { loading, error } = useApiData<HomePayload>(
+  const { data: homeData, loading, error } = useApiData<HomePayload>(
     withAccountScope("/api/home", user?.id ?? status),
     {
       songs: [],
@@ -36,6 +37,13 @@ export default function HomePage() {
       keepPreviousData: true,
     },
   );
+  // Hydrate the likes store from Home. Home no longer renders a SongGrid (which
+  // used to do this), so without this the like buttons stay disabled until the
+  // user opens a page that lists songs — including the heart for Discover tracks.
+  const mergeInitialLikes = useLikesStore((state) => state.mergeInitial);
+  useEffect(() => {
+    mergeInitialLikes(homeData.likedSongIds);
+  }, [mergeInitialLikes, homeData.likedSongIds]);
   const { data: statsData } = useApiData<StatsHomePayload>(
     withAccountScope("/api/stats/home", user?.id ?? status),
     {

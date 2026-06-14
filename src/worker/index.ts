@@ -3544,10 +3544,17 @@ app.post("/api/discover/stage", async (c) => {
 app.post("/api/discover/promote", async (c) => {
   requireUser(c.get("user"));
   if (!isMacMiniMusicConfigured(c.env)) return jsonError("Discover streaming is not available", 503);
-  const payload = await readJson<{ trackId?: unknown }>(c.req.raw);
+  const payload = await readJson<{ trackId?: unknown; finalId?: unknown }>(c.req.raw);
   const trackId = toStringValue(payload?.trackId);
   if (!trackId) return jsonError("trackId is required", 400);
-  const res = await macMiniDiscoverFetch(c.env, "/api/discover/promote", "POST", { trackId }, 30_000);
+  const finalId = toStringValue(payload?.finalId);
+  const res = await macMiniDiscoverFetch(
+    c.env,
+    "/api/discover/promote",
+    "POST",
+    { trackId, finalId },
+    30_000,
+  );
   return new Response(await res.text(), {
     status: res.status,
     headers: { "content-type": "application/json" },
