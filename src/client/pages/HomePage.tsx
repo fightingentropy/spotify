@@ -308,10 +308,7 @@ export default function HomePage() {
       <div className="relative px-4 pb-10 pt-12 sm:px-6 md:pt-16 lg:px-6 xl:px-8 2xl:px-10">
         {discoverData.tracks.length > 0 ? (
           <section aria-label="Discover" className="mb-9 md:mb-10">
-            <h2 className="text-2xl font-bold">Discover</h2>
-            <p className="mb-4 mt-1 text-[13px] text-white/[0.5]">
-              Trending worldwide right now — tap to add it to your library
-            </p>
+            <h2 className="mb-4 text-2xl font-bold">Discover</h2>
             {importError ? (
               <div role="alert" className="mb-3 text-sm text-red-400">
                 {importError}
