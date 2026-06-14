@@ -463,30 +463,34 @@ export default function NowPlayingSheet({
                     )}
                   />
                 </button>
-                <button
-                  type="button"
-                  aria-label="Previous"
-                  onClick={previous}
-                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
-                >
-                  <SkipBack size={24} />
-                </button>
-                <button
-                  type="button"
-                  aria-label={isPlaying ? "Pause" : "Play"}
-                  onClick={handleTogglePlayback}
-                  className="wf-control-button h-16 w-16 rounded-full grid place-items-center bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 touch-manipulation"
-                >
-                  {isPlaying ? <Pause size={28} /> : <Play size={28} className="translate-x-[2px]" />}
-                </button>
-                <button
-                  type="button"
-                  aria-label="Next"
-                  onClick={next}
-                  className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
-                >
-                  <SkipForward size={24} />
-                </button>
+                {/* prev / play / next grouped with a real gap so a Next tap that
+                    drifts left can't land on the big play/pause button. */}
+                <div className="flex items-center gap-7">
+                  <button
+                    type="button"
+                    aria-label="Previous"
+                    onClick={previous}
+                    className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
+                  >
+                    <SkipBack size={24} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={isPlaying ? "Pause" : "Play"}
+                    onClick={handleTogglePlayback}
+                    className="wf-control-button h-14 w-14 rounded-full grid place-items-center bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 touch-manipulation"
+                  >
+                    {isPlaying ? <Pause size={26} /> : <Play size={26} className="translate-x-[2px]" />}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Next"
+                    onClick={next}
+                    className="wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation"
+                  >
+                    <SkipForward size={24} />
+                  </button>
+                </div>
                 <button
                   type="button"
                   aria-label="Repeat"
