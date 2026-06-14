@@ -1,14 +1,15 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { CoverImage } from "@/components/CoverImage";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
-import { Check, Heart, ListPlus, Pause, Play } from "lucide-react";
+import { Pause, Play } from "lucide-react";
 import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
+import { TrackActionsButton } from "@/components/TrackActionsMenu";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type SongCardProps = {
@@ -44,9 +45,6 @@ const SongCardComponent = function SongCard({
   const setSong = usePlayerStore((state) => state.setSong);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
-  const addToQueue = usePlayerStore((state) => state.addToQueue);
-  const [queued, setQueued] = useState(false);
-  const queuedTimeoutRef = useRef<number | null>(null);
   const offlineRecord = useOfflineStore(useCallback((state) => state.records[song.id], [song.id]));
   const isActive = usePlayerStore(useCallback((state) => state.currentSong?.id === song.id, [song.id]));
   const isActiveAndPlaying = usePlayerStore(
@@ -72,35 +70,6 @@ const SongCardComponent = function SongCard({
       play();
     }
   }, [isActive, isActiveAndPlaying, onPlayAt, pause, play, resolvedSong, setSong, song, songIndex]);
-
-  const handleToggleLike = useCallback(
-    async (event: MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      if (likePending || !onToggleLike) return;
-      await onToggleLike(song.id, !liked);
-    },
-    [likePending, liked, onToggleLike, song.id]
-  );
-
-  useEffect(() => {
-    return () => {
-      if (queuedTimeoutRef.current != null) window.clearTimeout(queuedTimeoutRef.current);
-    };
-  }, []);
-
-  const handleAddToQueue = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      addToQueue(song);
-      setQueued(true);
-      if (queuedTimeoutRef.current != null) window.clearTimeout(queuedTimeoutRef.current);
-      queuedTimeoutRef.current = window.setTimeout(() => {
-        queuedTimeoutRef.current = null;
-        setQueued(false);
-      }, 1500);
-    },
-    [addToQueue, song],
-  );
 
   if (hideIfUnliked && !liked) return null;
 
@@ -139,47 +108,16 @@ const SongCardComponent = function SongCard({
         />
       ) : null}
 
-      {showQueue ? (
-        <button
-          type="button"
-          aria-label="Add to queue"
-          title="Add to queue"
-          onClick={handleAddToQueue}
-          className={cn(
-            "absolute top-12 right-2 z-30 h-9 w-9 rounded-full grid place-items-center transition bg-black/40 backdrop-blur",
-            "wf-control-button",
-            "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
-            queued ? "text-emerald-500" : "text-white/90",
-          )}
-        >
-          {queued ? <Check size={18} /> : <ListPlus size={18} />}
-        </button>
-      ) : null}
-
-      {showLike ? (
-        <button
-          type="button"
-          aria-label={liked ? "In liked songs" : "Save to liked songs"}
-          title={!canLike ? "Sign in to like songs" : liked ? "In liked songs" : "Save to liked songs"}
-          disabled={likePending}
-          onClick={handleToggleLike}
-          className={cn(
-            "absolute top-2 right-2 z-30 h-9 w-9 rounded-full grid place-items-center transition text-white/90 bg-black/40 backdrop-blur",
-            "wf-control-button",
-            canLike ? "hover:bg-black/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500" : "opacity-80",
-            likePending && "opacity-60 cursor-wait"
-          )}
-        >
-          <Heart
-            size={18}
-            className={cn(
-              "transition-colors",
-              liked ? "fill-emerald-500 text-emerald-500" : "text-white",
-              likePending && "animate-pulse"
-            )}
-          />
-        </button>
-      ) : null}
+      <TrackActionsButton
+        song={song}
+        liked={liked}
+        likePending={likePending}
+        canLike={canLike}
+        onToggleLike={onToggleLike}
+        showLike={showLike}
+        showQueue={showQueue}
+        className="absolute right-2 top-2 z-30 h-9 w-9 text-white/90 bg-black/40 backdrop-blur hover:bg-black/60"
+      />
 
       <div className="pointer-events-none absolute bottom-2 left-2 right-2 z-20 flex items-end justify-between gap-2">
         <div className="text-left min-w-0 flex-1">
