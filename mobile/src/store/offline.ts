@@ -52,7 +52,7 @@ export function setOfflineAccountScope(scope: string | null | undefined): void {
   accountScope = scope?.trim() || "anonymous";
 }
 
-function keyFor(scope: string, songId: string): string {
+export function keyFor(scope: string, songId: string): string {
   return `${scope}:${songId}`;
 }
 function safeName(value: string): string {

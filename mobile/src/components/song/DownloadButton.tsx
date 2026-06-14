@@ -3,7 +3,7 @@ import { ActivityIndicator, type StyleProp, View, type ViewStyle } from "react-n
 import { PressableScale } from "@/components/ui/PressableScale";
 import { colors } from "@/theme";
 import { isRadioSong } from "@/lib/player-song";
-import { type DownloadScope, useOfflineStore } from "@/store/offline";
+import { type DownloadScope, getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
 // The download affordance is deliberately NOT lucide `Download` (that glyph is
@@ -21,7 +21,7 @@ export function DownloadButton({
   size?: number;
   style?: StyleProp<ViewStyle>;
 }) {
-  const record = useOfflineStore((s) => s.records[song.id]);
+  const record = useOfflineStore((s) => s.records[keyFor(getOfflineAccountScope(), song.id)]);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
   const unpinScope = useOfflineStore((s) => s.unpinScope);
   if (isRadioSong(song)) return null;

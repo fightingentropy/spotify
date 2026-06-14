@@ -23,6 +23,9 @@ const headerOptions = {
   headerStyle: { backgroundColor: colors.background },
   headerTintColor: colors.foreground,
   headerShadowVisible: false,
+  // Show only the back chevron — not the previous route's title (which was the
+  // expo-router group name "(tabs)").
+  headerBackButtonDisplayMode: "minimal",
 } as const;
 
 export default function RootLayout() {
@@ -50,7 +53,16 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="signin" options={{ presentation: "modal" }} />
             <Stack.Screen name="register" options={{ presentation: "modal" }} />
-            <Stack.Screen name="liked" options={{ ...headerOptions, title: "Liked Songs" }} />
+            <Stack.Screen
+              name="liked"
+              options={{
+                ...headerOptions,
+                title: "",
+                headerTransparent: true,
+                headerStyle: { backgroundColor: "transparent" },
+                headerTintColor: "#fff",
+              }}
+            />
             <Stack.Screen name="downloads" options={{ ...headerOptions, title: "Downloads" }} />
             <Stack.Screen name="radio" options={{ ...headerOptions, title: "Radio Stations" }} />
             <Stack.Screen name="podcasts" options={{ ...headerOptions, title: "Podcasts" }} />

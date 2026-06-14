@@ -1,6 +1,6 @@
 import { apiFetch } from "@/lib/http";
 import { isOfflinePlaybackSong, isRadioSong } from "@/lib/player-song";
-import { useOfflineStore } from "@/store/offline";
+import { getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
 // Ported from src/client/play-events.ts. fetch → apiFetch; capacitor-file checks
@@ -22,7 +22,7 @@ function isRecordablePlayEventSong(song: PlayerSong): boolean {
 function canonicalPlayEventSong(song: PlayerSong): PlayerSong | null {
   const base = (() => {
     if (!isOfflinePlaybackSong(song)) return song;
-    const canonical = useOfflineStore.getState().records[song.id]?.song;
+    const canonical = useOfflineStore.getState().records[keyFor(getOfflineAccountScope(), song.id)]?.song;
     if (!canonical || isOfflinePlaybackSong(canonical)) return null;
     return canonical;
   })();
