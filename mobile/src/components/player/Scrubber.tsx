@@ -6,10 +6,11 @@ import { useAudioProgress } from "@/audio/progress";
 import { formatTime } from "@/lib/format";
 import { colors } from "@/theme";
 
-// Emerald scrubber. Reads the backend-agnostic progress store (fed by the native
-// dual-deck engine on iOS, RNTP elsewhere); while dragging we hold a local value
-// so the thumb doesn't snap back to the reported position. For radio there is no
-// scrubber — a live indicator is shown instead.
+// Spotify-style scrubber: white filled track + white thumb on a faint track, with
+// elapsed on the left and REMAINING (negative) on the right. Reads the
+// backend-agnostic progress store (fed by the native dual-deck engine on iOS, RNTP
+// elsewhere); while dragging we hold a local value so the thumb doesn't snap back
+// to the reported position. For radio there is no scrubber — a live indicator shows.
 export function Scrubber({ live = false }: { live?: boolean }) {
   const { position, duration } = useAudioProgress();
   const [seeking, setSeeking] = useState(false);
@@ -36,9 +37,9 @@ export function Scrubber({ live = false }: { live?: boolean }) {
         minimumValue={0}
         maximumValue={max || 1}
         value={Math.min(value, max || 1)}
-        minimumTrackTintColor={colors.emerald}
-        maximumTrackTintColor="rgba(255,255,255,0.2)"
-        thumbTintColor={colors.emerald}
+        minimumTrackTintColor="#ffffff"
+        maximumTrackTintColor="rgba(255,255,255,0.3)"
+        thumbTintColor="#ffffff"
         onSlidingStart={() => setSeeking(true)}
         onValueChange={(v) => setSeekValue(v)}
         onSlidingComplete={(v) => {
@@ -51,7 +52,7 @@ export function Scrubber({ live = false }: { live?: boolean }) {
           {formatTime(value)}
         </Text>
         <Text style={{ color: colors.muted, fontVariant: ["tabular-nums"] }} className="text-xs">
-          {formatTime(max)}
+          {max > 0 ? `-${formatTime(Math.max(0, max - value))}` : formatTime(max)}
         </Text>
       </View>
     </View>
