@@ -2,7 +2,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { ArrowDownToLine, ArrowDownUp, Heart, LayoutGrid, List as ListIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Upload } from "lucide-react-native";
+import { ArrowDownToLine, ArrowDownUp, Heart, LayoutGrid, List as ListIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -156,6 +156,13 @@ export default function LibraryScreen() {
       subtitle: "Add music from Spotify or a file",
       onPress: () => router.push("/upload"),
     };
+    const events: LibItem = {
+      key: "events",
+      cover: gradientCover(["#7c3aed", "#4c1d95"], (s) => <Ticket size={s} color="#fff" />),
+      title: "Live Events",
+      subtitle: "Concerts & venues near you",
+      onPress: () => router.push("/events"),
+    };
     const playlists: LibItem[] = data.playlists.map((pl) => ({
       key: `pl-${pl.id}`,
       cover: imageCover(pl.imageUrl),
@@ -173,7 +180,7 @@ export default function LibraryScreen() {
 
     if (filter === "playlists") return [liked, ...playlists];
     if (filter === "podcasts") return shows;
-    return [liked, downloads, radio, podcastsShortcut, upload, ...playlists];
+    return [liked, downloads, radio, podcastsShortcut, upload, events, ...playlists];
   }, [filter, data.playlists, user, router]);
 
   const showPlaylistSkeleton = loading && data.playlists.length === 0 && filter !== "podcasts";

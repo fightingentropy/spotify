@@ -3782,6 +3782,74 @@ app.get("/api/stats/home", async (c) => {
   return jsonCached(c, { recentlyPlayed, mostPlayed });
 });
 
+// --- Live Events: Ticketmaster Discovery proxy ------------------------------
+// Keeps the API key server-side (TICKETMASTER_API_KEY secret). Returns the same
+// { sections } shape the mobile Live Events screen expects; on missing key/error
+// it returns empty sections and the app falls back to its sample list.
+type TicketmasterImage = { url: string; width?: number; ratio?: string };
+type TicketmasterEvent = {
+  id: string;
+  name: string;
+  images?: TicketmasterImage[];
+  dates?: { start?: { localDate?: string } };
+  classifications?: { genre?: { name?: string } }[];
+  _embedded?: {
+    venues?: { name?: string; city?: { name?: string } }[];
+    attractions?: { name?: string }[];
+  };
+};
+type LiveEventDto = { id: string; artists: string; venue: string; date: string; imageUrl: string; genre?: string };
+
+function pickTicketmasterImage(images?: TicketmasterImage[]): string {
+  if (!images || images.length === 0) return "";
+  const sorted = [...images].sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
+  const wide = sorted.find((i) => (i.width ?? 0) >= 600 && (i.ratio === "16_9" || i.ratio === "4_3"));
+  return (wide ?? sorted[0]).url;
+}
+
+function mapTicketmasterEvent(ev: TicketmasterEvent): LiveEventDto | null {
+  const date = ev.dates?.start?.localDate;
+  if (!date) return null;
+  const venue = ev._embedded?.venues ?? [];
+  const venueLabel = [venue[0]?.name, venue[0]?.city?.name].filter(Boolean).join(", ");
+  const attractions = (ev._embedded?.attractions ?? []).map((a) => a.name).filter((n): n is string => !!n);
+  const artists = attractions.length ? attractions.slice(0, 3).join(", ") : ev.name;
+  const imageUrl = pickTicketmasterImage(ev.images);
+  if (!imageUrl) return null;
+  return { id: ev.id, artists, venue: venueLabel, date, imageUrl, genre: ev.classifications?.[0]?.genre?.name };
+}
+
+app.get("/api/events", async (c) => {
+  const apiKey = envString(c.env, "TICKETMASTER_API_KEY");
+  if (!apiKey) return jsonCached(c, { sections: [] });
+
+  const city = (new URL(c.req.url).searchParams.get("city") || "London").slice(0, 60);
+  const startDateTime = `${new Date().toISOString().slice(0, 19)}Z`; // only upcoming events
+  const base = "https://app.ticketmaster.com/discovery/v2/events.json";
+  const common = `apikey=${encodeURIComponent(apiKey)}&segmentName=Music&countryCode=GB&size=12&startDateTime=${startDateTime}&city=${encodeURIComponent(city)}`;
+
+  const fetchEvents = async (extra: string): Promise<LiveEventDto[]> => {
+    try {
+      const res = await fetch(`${base}?${common}&${extra}`, { headers: { accept: "application/json" } });
+      if (!res.ok) return [];
+      const data = (await res.json()) as { _embedded?: { events?: TicketmasterEvent[] } };
+      return (data._embedded?.events ?? []).map(mapTicketmasterEvent).filter((e): e is LiveEventDto => e !== null);
+    } catch {
+      return [];
+    }
+  };
+
+  const [forYou, popular] = await Promise.all([fetchEvents("sort=date,asc"), fetchEvents("sort=relevance,desc")]);
+  const forYouIds = new Set(forYou.map((e) => e.id));
+  const popularDedup = popular.filter((e) => !forYouIds.has(e.id));
+
+  const sections: { key: string; eyebrow: string; title: string; events: LiveEventDto[] }[] = [];
+  if (forYou.length) sections.push({ key: "for-you", eyebrow: "Concerts we think you’ll like", title: "Just for you", events: forYou });
+  if (popularDedup.length) sections.push({ key: "popular", eyebrow: "What’s trending right now", title: `Popular in ${city}`, events: popularDedup });
+
+  return jsonCached(c, { sections });
+});
+
 // Weekly listening stats (Spotify "Listening stats" screen): minutes listened,
 // top artist, and top song per Monday-anchored week, aggregated from PlayEvent.
 app.get("/api/stats/listening", async (c) => {

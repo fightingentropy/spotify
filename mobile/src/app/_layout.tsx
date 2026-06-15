@@ -69,6 +69,7 @@ export default function RootLayout() {
             <Stack.Screen name="downloads" options={{ ...headerOptions, title: "Downloads" }} />
             <Stack.Screen name="radio" options={{ ...headerOptions, title: "Radio Stations" }} />
             <Stack.Screen name="podcasts" options={{ ...headerOptions, title: "Podcasts" }} />
+            <Stack.Screen name="events" options={{ headerShown: false }} />
             <Stack.Screen name="upload" options={{ ...headerOptions, title: "Upload" }} />
             <Stack.Screen name="settings" options={{ ...headerOptions, title: "Settings" }} />
             <Stack.Screen name="settings/playback" options={{ ...headerOptions, title: "Playback" }} />
