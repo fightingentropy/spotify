@@ -37,7 +37,14 @@ const AUDIO_EXTENSIONS = new Set([
 
 // iTunes Search is rate limited to roughly 20 requests/minute per IP.
 const REQUEST_DELAY_MS = 3_200;
+// Deezer's public API is far more generous; a small courtesy delay is plenty.
+const DEEZER_DELAY_MS = 350;
 const USER_AGENT = "spotify-selfhost-cover-backfill/1.0 (personal library)";
+// Edition noise that, when present in a candidate but NOT in the wanted title,
+// means we matched a remix/live/cover edition — deprioritise it so the original
+// release art wins (e.g. prefer "Sober" over "Sober (Version 6)").
+const VERSION_NOISE =
+  /(remix|live|version|extended|sped\s*up|slowed|karaoke|cover|instrumental|tribute|acoustic|remaster|\bedit\b|\bmix\b)/i;
 
 type ItunesResult = {
   artistName?: string;
@@ -85,7 +92,13 @@ function similarity(left: string, right: string): number {
   const b = normalizeText(right);
   if (!a || !b) return 0;
   if (a === b) return 1;
-  if (a.includes(b) || b.includes(a)) return 0.85;
+  // Space-insensitive: "Side Kick" vs "Sidekick", "XXX TENTACION" vs "XXXTENTACION".
+  const aTight = a.replace(/\s+/g, "");
+  const bTight = b.replace(/\s+/g, "");
+  if (aTight === bTight) return 0.97;
+  if (a.includes(b) || b.includes(a) || aTight.includes(bTight) || bTight.includes(aTight)) {
+    return 0.85;
+  }
   const aTokens = new Set(a.split(" "));
   const bTokens = new Set(b.split(" "));
   let shared = 0;
@@ -115,6 +128,38 @@ async function itunesSearch(term: string, entity: "song" | "album"): Promise<Itu
   return Array.isArray(payload?.results) ? payload.results : [];
 }
 
+type DeezerTrack = {
+  title?: string;
+  artist?: { name?: string };
+  album?: { title?: string; cover_xl?: string; cover_big?: string };
+};
+
+// Deezer has broader catalogue coverage than iTunes for this library (mainstream
+// + Greek/Albanian) and returns the actual release rather than the karaoke /
+// string-quartet covers iTunes Search surfaces for many well-known tracks
+// (it returned "Vitamin String Quartet - B.Y.O.B." for System Of A Down). Results
+// are mapped into the iTunes shape so pickBest/downloadArtwork stay shared;
+// cover_xl is already 1000x1000.
+async function deezerSearch(term: string): Promise<ItunesResult[]> {
+  const url = new URL("https://api.deezer.com/search");
+  url.searchParams.set("q", term);
+  url.searchParams.set("limit", "10");
+
+  const response = await fetch(url.toString(), {
+    headers: { accept: "application/json", "user-agent": USER_AGENT },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) return [];
+  const payload = (await response.json().catch(() => null)) as { data?: DeezerTrack[] } | null;
+  const tracks = Array.isArray(payload?.data) ? payload.data : [];
+  return tracks.map((track) => ({
+    artistName: track.artist?.name,
+    trackName: track.title,
+    collectionName: track.album?.title,
+    artworkUrl100: track.album?.cover_xl || track.album?.cover_big,
+  }));
+}
+
 function pickBest(
   results: ItunesResult[],
   meta: { artist: string; title: string; album?: string },
@@ -131,7 +176,14 @@ function pickBest(
         similarity(stripVersionSuffix(meta.title), result.trackName || ""),
         meta.album ? similarity(meta.album, result.collectionName || "") : 0,
       );
-      return { result, score: artistScore * 2 + titleScore * 3, artistScore, titleScore };
+      const editionPenalty =
+        VERSION_NOISE.test(result.trackName || "") && !VERSION_NOISE.test(meta.title) ? 0.6 : 0;
+      return {
+        result,
+        score: artistScore * 2 + titleScore * 3 - editionPenalty,
+        artistScore,
+        titleScore,
+      };
     })
     .filter((entry) => entry.artistScore >= 0.45 && entry.titleScore >= 0.45)
     .sort((leftEntry, rightEntry) => rightEntry.score - leftEntry.score);
@@ -170,6 +222,27 @@ async function findArtwork(meta: {
       term: `${primaryArtist(meta.artist)} ${meta.album}`,
       entity: "album",
     });
+  }
+
+  // Deezer first (see deezerSearch): clean primary-artist + de-versioned title,
+  // then the raw tags. Falls through to iTunes below when Deezer has no match.
+  const deezerTerms = [
+    `${primaryArtist(meta.artist)} ${stripVersionSuffix(meta.title)}`,
+    `${meta.artist} ${meta.title}`,
+  ];
+  for (const term of deezerTerms) {
+    if (!term.trim()) continue;
+    const results = await deezerSearch(term);
+    await sleep(DEEZER_DELAY_MS);
+    const best = pickBest(results, meta);
+    if (!best?.result.artworkUrl100) continue;
+    const data = await downloadArtwork(best.result.artworkUrl100);
+    if (data) {
+      return {
+        data,
+        matched: `deezer (${best.result.artistName} - ${best.result.trackName || best.result.collectionName})`,
+      };
+    }
   }
 
   for (const attempt of attempts) {
