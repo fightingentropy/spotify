@@ -1,62 +1,77 @@
-import { ScrollView, Switch, Text, View } from "react-native";
-import Slider from "@react-native-community/slider";
-import { OfflineSettings } from "@/components/OfflineSettings";
+import { ScrollView, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import Constants from "expo-constants";
+import { ArrowDownToLine, ChevronRight, Info, User, Volume2 } from "lucide-react-native";
 import { Screen } from "@/components/ui/Screen";
-import { usePlayerStore } from "@/store/player";
+import { PressableScale } from "@/components/ui/PressableScale";
+import { useAuth } from "@/lib/auth";
 import { colors } from "@/theme";
 
-function SectionLabel({ children }: { children: string }) {
-  return (
-    <Text className="mb-2 mt-6 px-4 text-xs font-semibold uppercase tracking-wide" style={{ color: colors.muted }}>
-      {children}
-    </Text>
-  );
-}
+const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
 
-function RowSwitch({ title, subtitle, value, onValueChange }: { title: string; subtitle?: string; value: boolean; onValueChange: (v: boolean) => void }) {
+// One Spotify-style menu row: leading icon, title + subtitle, trailing chevron.
+function SettingsRow({
+  Icon,
+  title,
+  subtitle,
+  onPress,
+}: {
+  Icon: typeof User;
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+}) {
   return (
-    <View className="flex-row items-center justify-between px-4 py-3">
-      <View className="mr-4 flex-1">
-        <Text className="text-base" style={{ color: colors.foreground }}>{title}</Text>
-        {subtitle ? <Text className="mt-0.5 text-sm" style={{ color: colors.muted }}>{subtitle}</Text> : null}
+    <PressableScale scaleTo={1} onPress={onPress} className="flex-row items-center gap-4 px-4 py-3.5">
+      <Icon size={24} color={colors.foreground} />
+      <View className="min-w-0 flex-1">
+        <Text className="text-[17px] font-semibold" style={{ color: colors.foreground }}>
+          {title}
+        </Text>
+        <Text numberOfLines={1} className="mt-0.5 text-[13px]" style={{ color: colors.muted }}>
+          {subtitle}
+        </Text>
       </View>
-      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.emerald, false: "#3a3a3a" }} thumbColor="#fff" />
-    </View>
+      <ChevronRight size={20} color={colors.muted} />
+    </PressableScale>
   );
 }
 
 export default function SettingsScreen() {
-  const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
-  const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
-  const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
-  const setCrossfadeSeconds = usePlayerStore((s) => s.setCrossfadeSeconds);
+  const router = useRouter();
+  const { user, signOut } = useAuth();
 
   return (
     <Screen topInset={false}>
-      <ScrollView style={{ flex: 1, backgroundColor: colors.background }}>
-        <SectionLabel>Crossfade</SectionLabel>
-        <RowSwitch title="Crossfade" subtitle="Blend the end of one track into the next" value={crossfadeEnabled} onValueChange={setCrossfadeEnabled} />
-        {crossfadeEnabled ? (
-          <View className="px-4 py-2">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-sm" style={{ color: colors.muted }}>Duration</Text>
-              <Text className="text-sm font-semibold" style={{ color: colors.emerald }}>{crossfadeSeconds}s</Text>
-            </View>
-            <Slider
-              minimumValue={0}
-              maximumValue={12}
-              step={1}
-              value={crossfadeSeconds}
-              onValueChange={setCrossfadeSeconds}
-              minimumTrackTintColor={colors.emerald}
-              maximumTrackTintColor="rgba(255,255,255,0.2)"
-              thumbTintColor={colors.emerald}
-            />
-          </View>
-        ) : null}
+      <ScrollView contentContainerStyle={{ paddingTop: 6, paddingBottom: 48 }}>
+        <SettingsRow
+          Icon={User}
+          title="Account"
+          subtitle={user?.email ?? "Manage your account"}
+          onPress={() => router.push("/profile")}
+        />
+        <SettingsRow Icon={Volume2} title="Playback" subtitle="Crossfade" onPress={() => router.push("/settings/playback")} />
+        <SettingsRow
+          Icon={ArrowDownToLine}
+          title="Data-saving and offline"
+          subtitle="Downloads • Offline"
+          onPress={() => router.push("/settings/storage")}
+        />
+        <SettingsRow Icon={Info} title="About" subtitle={`Version ${APP_VERSION}`} onPress={() => router.push("/settings/about")} />
 
-        <SectionLabel>Offline</SectionLabel>
-        <OfflineSettings />
+        <View className="mt-10 items-center">
+          <PressableScale
+            onPress={() => void signOut()}
+            className="rounded-full px-12 py-3"
+            style={{ backgroundColor: "#fff" }}
+            accessibilityRole="button"
+            accessibilityLabel="Log out"
+          >
+            <Text className="text-base font-bold" style={{ color: "#000" }}>
+              Log out
+            </Text>
+          </PressableScale>
+        </View>
       </ScrollView>
     </Screen>
   );
