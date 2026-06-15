@@ -117,14 +117,21 @@ export default function PodcastShowScreen() {
           keyExtractor={(e) => e.id}
           renderItem={renderEpisode}
           ListHeaderComponent={
-            <View className="flex-row items-center gap-4 p-4">
-              <View className="h-20 w-20 overflow-hidden rounded-lg" style={{ backgroundColor: colors.card }}>
-                <CoverImage src={show.imageUrl} style={{ width: "100%", height: "100%" }} />
+            <View className="px-4 pb-2 pt-4">
+              <View className="flex-row items-center gap-4">
+                <View className="h-20 w-20 overflow-hidden rounded-lg" style={{ backgroundColor: colors.card }}>
+                  <CoverImage src={show.imageUrl} style={{ width: "100%", height: "100%" }} />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <Text className="text-xl font-bold" style={{ color: colors.foreground }}>{show.title}</Text>
+                  <Text className="text-sm" style={{ color: colors.muted }}>{show.author}</Text>
+                </View>
               </View>
-              <View className="min-w-0 flex-1">
-                <Text className="text-xl font-bold" style={{ color: colors.foreground }}>{show.title}</Text>
-                <Text className="text-sm" style={{ color: colors.muted }}>{show.author}</Text>
-              </View>
+              {show.description ? (
+                <Text className="mt-3 text-[13px] leading-5" style={{ color: colors.muted }}>
+                  {show.description}
+                </Text>
+              ) : null}
             </View>
           }
           ListEmptyComponent={<EmptyState title="No episodes" />}
