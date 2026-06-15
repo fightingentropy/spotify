@@ -73,6 +73,7 @@ export default function RootLayout() {
             <Stack.Screen name="upload" options={{ ...headerOptions, title: "Upload" }} />
             <Stack.Screen name="settings" options={{ ...headerOptions, title: "Settings" }} />
             <Stack.Screen name="settings/playback" options={{ ...headerOptions, title: "Playback" }} />
+            <Stack.Screen name="settings/lyrics" options={{ ...headerOptions, title: "Lyrics" }} />
             <Stack.Screen name="settings/storage" options={{ ...headerOptions, title: "Data-saving and offline" }} />
             <Stack.Screen name="settings/about" options={{ ...headerOptions, title: "About" }} />
             <Stack.Screen name="profile" options={{ ...headerOptions, title: "Profile" }} />

@@ -12,10 +12,12 @@ import {
 import { seekTo } from "@/audio/actions";
 import { useAudioProgress } from "@/audio/progress";
 import { toAbsoluteApiUrl } from "@/lib/config";
+import { hasGreek, transliterateGreek } from "@/lib/greek-phonetics";
 import { apiFetch } from "@/lib/http";
 import { parseLrc, type LrcLine } from "@/lib/lrc";
 import { activeLyricIndex, hasSyncedTiming } from "@/lib/lyrics";
 import { usePlayerStore } from "@/store/player";
+import { usePreferencesStore } from "@/store/preferences";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
 
@@ -37,6 +39,7 @@ type LyricsState =
 export function LyricsView({ song }: { song: PlayerSong }) {
   const [state, setState] = useState<LyricsState>({ status: "loading" });
   const replaceSong = usePlayerStore((s) => s.replaceSong);
+  const greekPhonetics = usePreferencesStore((s) => s.greekPhonetics);
   // The last song we auto-requested lyrics for, so a 404 doesn't loop.
   const requestedRef = useRef<string | null>(null);
 
@@ -116,21 +119,31 @@ export function LyricsView({ song }: { song: PlayerSong }) {
     );
   }
   if (hasSyncedTiming(state.lines)) {
-    return <SyncedLyrics lines={state.lines} />;
+    return <SyncedLyrics lines={state.lines} greekPhonetics={greekPhonetics} />;
   }
   // No usable timing data — keep the static plain-text rendering.
   return (
     <ScrollView contentContainerStyle={{ paddingVertical: 16 }}>
-      {state.lines.map((line, i) => (
-        <Text key={i} className="mb-3 text-[18px] font-semibold leading-7" style={{ color: colors.foreground }}>
-          {line.text || "♪"}
-        </Text>
-      ))}
+      {state.lines.map((line, i) => {
+        const phonetic = greekPhonetics && hasGreek(line.text) ? transliterateGreek(line.text) : null;
+        return (
+          <View key={i} className="mb-3">
+            <Text className="text-[18px] font-semibold leading-7" style={{ color: colors.foreground }}>
+              {line.text || "♪"}
+            </Text>
+            {phonetic ? (
+              <Text className="mt-0.5 text-[15px] italic leading-6" style={{ color: colors.muted }}>
+                {phonetic}
+              </Text>
+            ) : null}
+          </View>
+        );
+      })}
     </ScrollView>
   );
 }
 
-function SyncedLyrics({ lines }: { lines: LrcLine[] }) {
+function SyncedLyrics({ lines, greekPhonetics }: { lines: LrcLine[]; greekPhonetics: boolean }) {
   const { position } = useAudioProgress();
   const scrollRef = useRef<ScrollView>(null);
   // Y offset of each line within the scroll content (filled via onLayout).
@@ -181,10 +194,12 @@ function SyncedLyrics({ lines }: { lines: LrcLine[] }) {
       {lines.map((line, i) => {
         const timed = line.time >= 0;
         const isActive = i === activeIndex;
+        const phonetic = greekPhonetics && hasGreek(line.text) ? transliterateGreek(line.text) : null;
         return (
           <Pressable
             key={i}
             disabled={!timed}
+            style={{ paddingVertical: 6 }}
             onLayout={(e: LayoutChangeEvent) => {
               lineOffsets.current[i] = e.nativeEvent.layout.y;
             }}
@@ -196,12 +211,17 @@ function SyncedLyrics({ lines }: { lines: LrcLine[] }) {
               void seekTo(line.time);
             }}
           >
-            <Text
-              className="py-1.5 text-[21px] font-bold leading-7"
-              style={{ color: isActive ? colors.emerald : colors.dim }}
-            >
+            <Text className="text-[21px] font-bold leading-7" style={{ color: isActive ? colors.emerald : colors.dim }}>
               {line.text || "♪"}
             </Text>
+            {phonetic ? (
+              <Text
+                className="mt-0.5 text-[16px] font-semibold italic leading-6"
+                style={{ color: isActive ? "rgba(16,185,129,0.7)" : "rgba(255,255,255,0.32)" }}
+              >
+                {phonetic}
+              </Text>
+            ) : null}
           </Pressable>
         );
       })}

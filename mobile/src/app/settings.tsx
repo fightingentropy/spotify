@@ -1,7 +1,7 @@
 import { ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
-import { ArrowDownToLine, ChevronRight, Info, User, Volume2 } from "lucide-react-native";
+import { ArrowDownToLine, ChevronRight, Info, Languages, User, Volume2 } from "lucide-react-native";
 import { Screen } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { useAuth } from "@/lib/auth";
@@ -51,6 +51,12 @@ export default function SettingsScreen() {
           onPress={() => router.push("/profile")}
         />
         <SettingsRow Icon={Volume2} title="Playback" subtitle="Crossfade" onPress={() => router.push("/settings/playback")} />
+        <SettingsRow
+          Icon={Languages}
+          title="Lyrics"
+          subtitle="Greek pronunciation"
+          onPress={() => router.push("/settings/lyrics")}
+        />
         <SettingsRow
           Icon={ArrowDownToLine}
           title="Data-saving and offline"
