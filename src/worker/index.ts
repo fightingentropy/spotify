@@ -3809,16 +3809,38 @@ function pickTicketmasterImage(images?: TicketmasterImage[]): string {
   return (wide ?? sorted[0]).url;
 }
 
+// Ticketmaster lists promoters/series and ticket tiers as "attractions" (e.g.
+// "American Express Presents BST Hyde Park", "OVO Arena Wembley - Premium
+// Packages"). Drop them so card titles show the real acts.
+const PROMOTER_NOISE = /\b(Presents|Premium Packages?|VIP Packages?|Hospitality)\b/i;
+
 function mapTicketmasterEvent(ev: TicketmasterEvent): LiveEventDto | null {
   const date = ev.dates?.start?.localDate;
   if (!date) return null;
   const venue = ev._embedded?.venues ?? [];
   const venueLabel = [venue[0]?.name, venue[0]?.city?.name].filter(Boolean).join(", ");
-  const attractions = (ev._embedded?.attractions ?? []).map((a) => a.name).filter((n): n is string => !!n);
+  const attractions = (ev._embedded?.attractions ?? [])
+    .map((a) => a.name)
+    .filter((n): n is string => !!n && !PROMOTER_NOISE.test(n));
   const artists = attractions.length ? attractions.slice(0, 3).join(", ") : ev.name;
   const imageUrl = pickTicketmasterImage(ev.images);
   if (!imageUrl) return null;
   return { id: ev.id, artists, venue: venueLabel, date, imageUrl, genre: ev.classifications?.[0]?.genre?.name };
+}
+
+const artistKey = (e: LiveEventDto): string => e.artists.trim().toLowerCase();
+
+// Ticketmaster lists one event per tour date, so a multi-night stadium run
+// (e.g. Harry Styles × 6 nights at Wembley) floods a section with the same
+// lineup. Keep only the first card per artist so each row shows a variety of
+// acts; the shared `seen` set also stops one act appearing in two sections.
+function dedupeByArtist(events: LiveEventDto[], seen: Set<string>): LiveEventDto[] {
+  return events.filter((e) => {
+    const key = artistKey(e);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 app.get("/api/events", async (c) => {
@@ -3828,7 +3850,8 @@ app.get("/api/events", async (c) => {
   const city = (new URL(c.req.url).searchParams.get("city") || "London").slice(0, 60);
   const startDateTime = `${new Date().toISOString().slice(0, 19)}Z`; // only upcoming events
   const base = "https://app.ticketmaster.com/discovery/v2/events.json";
-  const common = `apikey=${encodeURIComponent(apiKey)}&segmentName=Music&countryCode=GB&size=12&startDateTime=${startDateTime}&city=${encodeURIComponent(city)}`;
+  // Over-fetch (size=40) so per-artist dedup still leaves a full row of acts.
+  const common = `apikey=${encodeURIComponent(apiKey)}&segmentName=Music&countryCode=GB&size=40&startDateTime=${startDateTime}&city=${encodeURIComponent(city)}`;
 
   const fetchEvents = async (extra: string): Promise<LiveEventDto[]> => {
     try {
@@ -3842,11 +3865,15 @@ app.get("/api/events", async (c) => {
   };
 
   const [forYou, popular] = await Promise.all([fetchEvents("sort=date,asc"), fetchEvents("sort=relevance,desc")]);
-  const forYouIds = new Set(forYou.map((e) => e.id));
-  const popularDedup = popular.filter((e) => !forYouIds.has(e.id));
+  // Cap each row at 12 distinct acts. Popular excludes only acts *visible* in
+  // "Just for you" — not its hidden tail — so a top act buried deep in the
+  // date-sorted list (e.g. Harry Styles) can still headline Popular.
+  const forYouDedup = dedupeByArtist(forYou, new Set<string>()).slice(0, 12);
+  const seen = new Set(forYouDedup.map(artistKey));
+  const popularDedup = dedupeByArtist(popular, seen).slice(0, 12);
 
   const sections: { key: string; eyebrow: string; title: string; events: LiveEventDto[] }[] = [];
-  if (forYou.length) sections.push({ key: "for-you", eyebrow: "Concerts we think you’ll like", title: "Just for you", events: forYou });
+  if (forYouDedup.length) sections.push({ key: "for-you", eyebrow: "Concerts we think you’ll like", title: "Just for you", events: forYouDedup });
   if (popularDedup.length) sections.push({ key: "popular", eyebrow: "What’s trending right now", title: `Popular in ${city}`, events: popularDedup });
 
   return jsonCached(c, { sections });
