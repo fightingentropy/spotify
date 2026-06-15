@@ -21,10 +21,6 @@
     "mini:check": "bash scripts/check-mini.sh",
     "deploy": "vite build && wrangler deploy",
     "upload": "vite build && wrangler deploy --dry-run",
-    "cap:sync": "vite build && cap sync",
-    "cap:ios": "vite build && cap open ios",
-    "cap:android": "vite build && cap open android",
-    "cap:copy": "vite build && cap copy",
     "download:liked": "bun scripts/download-liked-to-music.ts",
     "icons": "bun scripts/generate-icons.ts",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
@@ -46,9 +42,6 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@capacitor/android": "^8.4.0",
-    "@capacitor/cli": "^8.4.0",
-    "@capacitor/ios": "^8.4.0",
     "@cloudflare/vite-plugin": "^1.40.0",
     "@tailwindcss/postcss": "^4.3.0",
     "@types/node": "^25.9.2",
