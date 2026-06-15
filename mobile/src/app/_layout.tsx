@@ -12,7 +12,9 @@ import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import { AuthProvider } from "@/lib/auth";
 import { AudioBootstrap } from "@/components/AudioBootstrap";
+import { MiniPlayer } from "@/components/player/MiniPlayer";
 import { PlayerSheets } from "@/components/player/PlayerSheets";
+import { TabBar } from "@/components/nav/TabBar";
 import { initOfflineSync } from "@/store/offline";
 import { colors } from "@/theme";
 
@@ -72,6 +74,8 @@ export default function RootLayout() {
             <Stack.Screen name="listening-stats" options={{ ...headerOptions, title: "Listening stats" }} />
             <Stack.Screen name="playlist/[id]" options={{ ...headerOptions, title: "" }} />
           </Stack>
+          <TabBar />
+          <MiniPlayer />
           <PlayerSheets />
         </AuthProvider>
       </SafeAreaProvider>

@@ -1,4 +1,5 @@
 import { Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Pause, Play } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -8,15 +9,20 @@ import { colors, layout } from "@/theme";
 import { usePlayerStore } from "@/store/player";
 import { useUiStore } from "@/store/ui";
 
-// The persistent mini-player bar above the tab bar: cover + title/artist + heart
-// + play/pause; tapping it (anywhere but the controls) opens the Now Playing sheet.
+// The persistent mini-player bar: cover + title/artist + heart + play/pause; tapping
+// it (anywhere but the controls) opens the Now Playing sheet. Mounted once at the
+// root so it stays visible on every screen, not just the tabs.
 export function MiniPlayer() {
   const song = usePlayerStore((s) => s.currentSong);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const toggle = usePlayerStore((s) => s.toggle);
   const openNowPlaying = useUiStore((s) => s.openNowPlaying);
+  const insets = useSafeAreaInsets();
 
   if (!song) return null;
+
+  // The tab bar is mounted globally on every screen, so the bar always sits above it.
+  const bottom = layout.mobileNavHeight + insets.bottom;
 
   return (
     <PressableScale
@@ -25,7 +31,7 @@ export function MiniPlayer() {
       accessibilityRole="button"
       accessibilityLabel={`Open now playing: ${song.title}`}
       className="flex-row items-center gap-3 px-3"
-      style={{ height: layout.mobilePlayerHeight, backgroundColor: colors.surface }}
+      style={{ position: "absolute", left: 0, right: 0, bottom, height: layout.mobilePlayerHeight, backgroundColor: colors.surface }}
     >
       <View className="h-11 w-11 overflow-hidden rounded">
         <CoverImage src={song.imageUrl} networkSrc={song.networkImageUrl} style={{ width: "100%", height: "100%" }} recyclingKey={song.id} />
