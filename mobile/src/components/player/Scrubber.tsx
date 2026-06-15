@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type LayoutChangeEvent, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { seekTo } from "@/audio/actions";
 import { useAudioProgress } from "@/audio/progress";
 import { formatTime } from "@/lib/format";
+import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
 
 const TRACK_H = 3; // thin track, Spotify-style
@@ -17,9 +18,18 @@ const ROW_H = 22; // touch row height
 // thumb doesn't snap back. For radio there is no scrubber — a live dot shows.
 export function Scrubber({ live = false }: { live?: boolean }) {
   const { position, duration } = useAudioProgress();
+  const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
   const [width, setWidth] = useState(0);
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
+
+  // Never carry the seek/hold state across a track change. The new track starts at
+  // 0 (resetAudioProgress) and the scrubber must follow the live position, not a
+  // stale seekValue — otherwise a seek on one song bleeds its position into the
+  // next. Bulletproof backstop independent of any gesture-callback quirk.
+  useEffect(() => {
+    setSeeking(false);
+  }, [currentSongId]);
 
   if (live) {
     return (
@@ -45,7 +55,12 @@ export function Scrubber({ live = false }: { live?: boolean }) {
   const pan = Gesture.Pan()
     .runOnJS(true)
     .minDistance(0)
-    .onBegin((e) => {
+    // Set the hold state on ACTIVATION (onStart), not onBegin. onBegin fires on
+    // touch-down even for a tap — which the Tap gesture then wins via Race — and a
+    // pan cancelled straight out of BEGAN need not fire onEnd, leaving `seeking`
+    // stuck true so the scrubber freezes on `seekValue`. A pan that genuinely
+    // activates always ends or cancels, so onEnd/onFinalize reliably clear it.
+    .onStart((e) => {
       setSeeking(true);
       setSeekValue(posFromX(e.x));
     })
@@ -53,7 +68,10 @@ export function Scrubber({ live = false }: { live?: boolean }) {
     .onEnd((e) => {
       setSeeking(false);
       void seekTo(posFromX(e.x));
-    });
+    })
+    .onFinalize(() => setSeeking(false));
+  // A tap seeks directly via the live position store; it never touches `seeking`,
+  // so it can't leave the thumb held. (onStart above means the pan ignores taps.)
   const tap = Gesture.Tap()
     .runOnJS(true)
     .onEnd((e) => void seekTo(posFromX(e.x)));
