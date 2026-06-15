@@ -3,6 +3,7 @@ import { API_AUTH_REQUIRED_EVENT, emit } from "@/lib/events";
 import { apiFetch } from "@/lib/http";
 import {
   readOfflineApiSnapshot,
+  readOfflineApiSnapshotSync,
   removeOfflineApiSnapshots,
   writeOfflineApiSnapshot,
 } from "@/lib/offline-snapshots";
@@ -72,6 +73,7 @@ function isPersistableApiUrl(url: string): boolean {
   const path = getApiPath(url);
   return (
     path === "/api/home" ||
+    path === "/api/discover/trending" ||
     path === "/api/search-index" ||
     path === "/api/library" ||
     path === "/api/liked" ||
@@ -129,6 +131,20 @@ async function getCacheEntryAsync<T>(url: string): Promise<ApiCacheEntry<T> | un
 
 function getCachedData<T>(url: string): T | undefined {
   return getCacheEntry<T>(url)?.data;
+}
+
+// Synchronously hydrate the in-memory cache from a persisted MMKV snapshot, so
+// useApiData can paint cached data on its very first render instead of flashing
+// empty and popping in a tick later once the async snapshot read resolves. Only
+// touches persistable URLs and never clobbers a live in-memory entry.
+function primeFromSnapshotSync<T>(url: string): T | undefined {
+  const existing = getCacheEntry<T>(url);
+  if (existing?.data !== undefined) return existing.data;
+  if (apiCache.has(url) || !isPersistableApiUrl(url)) return undefined;
+  const snapshot = readOfflineApiSnapshotSync<T>(url);
+  if (!snapshot || snapshot.data === undefined) return undefined;
+  apiCache.set(url, { data: snapshot.data, etag: snapshot.etag ?? null, fetchedAt: snapshot.fetchedAt });
+  return snapshot.data;
 }
 
 function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
@@ -207,12 +223,13 @@ function hasStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function cloneCacheData<T>(value: T): T {
-  try {
-    return structuredClone(value);
-  } catch {
-    return JSON.parse(JSON.stringify(value)) as T;
-  }
+// A shallow copy is enough for the like-cache patch: updateLikedIdsInPayload /
+// updateLikedSongsInPayload only ever REASSIGN top-level arrays (likedSongIds /
+// likes / songs) to freshly-built ones — they never mutate existing array
+// contents or nested song objects. So we avoid deep-cloning what can be a large
+// song list on every heart tap.
+function shallowCloneCacheData<T>(value: T): T {
+  return (value && typeof value === "object" ? { ...value } : value) as T;
 }
 
 function updateLikedIdsInPayload(data: unknown, songId: string, nextLiked: boolean): boolean {
@@ -283,7 +300,7 @@ export function patchLikeApiCache(
       continue;
     }
 
-    const next = cloneCacheData(entry.data);
+    const next = shallowCloneCacheData(entry.data);
     let changed = updateLikedIdsInPayload(next, songId, nextLiked);
     if (path === "/api/liked") {
       changed = updateLikedSongsInPayload(next, { songId, nextLiked, song }) || changed;
@@ -391,7 +408,10 @@ export function useApiData<T>(
 ) {
   const enabled = options?.enabled ?? true;
   const keepPreviousData = options?.keepPreviousData ?? false;
-  const cachedInitial = getCachedData<T>(url);
+  // Prefer the live in-memory cache, then fall back to a synchronous read of the
+  // persisted snapshot — both available on the first render, so cached screens
+  // paint instantly on launch rather than blanking and popping in.
+  const cachedInitial = getCachedData<T>(url) ?? primeFromSnapshotSync<T>(url);
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
   const [loading, setLoading] = useState(enabled && !cachedInitial);
   const [error, setError] = useState<string | null>(null);
@@ -474,7 +494,10 @@ export function useApiData<T>(
 }
 
 export type HomePayload = {
-  songs: PlayerSong[];
+  // /api/home now returns only likedSongIds; the song list was dropped because
+  // the home screen never rendered it. Kept optional so older cached snapshots
+  // that still carry `songs` stay valid.
+  songs?: PlayerSong[];
   likedSongIds: string[];
 };
 

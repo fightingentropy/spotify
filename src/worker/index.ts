@@ -3330,12 +3330,14 @@ app.post("/api/register", async (c) => {
 app.get("/api/home", async (c) => {
   const db = c.get("db");
   const user = c.get("user");
-  const songs = await listSongs(db, user?.id ?? null);
+  // Home only needs the liked-song ids (to hydrate the likes store / heart
+  // states). Both the mobile app and the web app stopped rendering the full
+  // song list here, so we no longer ship it — that array was up to 5000 full
+  // song objects nobody displayed, plus the DB query + JSON + ETag hash to
+  // build it on every request. The full library still lives at /api/songs and
+  // the search projection at /api/search-index.
   const likedSongIds = await listLikedSongIds(db, user?.id ?? null);
-  return jsonCached(c, {
-    songs: songs.map(songToPlayerSong),
-    likedSongIds,
-  });
+  return jsonCached(c, { likedSongIds });
 });
 
 // Spotify's editorial "Top 50 - Global" playlist — globally trending tracks right

@@ -43,7 +43,7 @@ export default function HomeScreen() {
 
   const { data: homeData, loading, error } = useApiData<HomePayload>(
     withAccountScope("/api/home", scope),
-    { songs: [], likedSongIds: [] },
+    { likedSongIds: [] },
     { enabled: status !== "loading", keepPreviousData: true },
   );
   const mergeInitialLikes = useLikesStore((s) => s.mergeInitial);
@@ -141,7 +141,7 @@ export default function HomeScreen() {
     [currentDiscoverTrackId, importingId, toggle],
   );
 
-  if ((loading && homeData.songs.length === 0) || status === "loading") {
+  if ((loading && homeData.likedSongIds.length === 0) || status === "loading") {
     return (
       <Screen>
         <View className="px-4 pt-12">

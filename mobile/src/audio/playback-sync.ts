@@ -76,21 +76,30 @@ export async function publishPlaybackState(force: boolean): Promise<void> {
   }
 }
 
-// Restore queue/index/position on launch. Server ≥ local wins. Does NOT auto-play.
+function applyPlaybackSnapshot(snapshot: PlaybackStateSnapshot): void {
+  setPendingResumeSeek(snapshot.song.id, snapshot.currentTime);
+  const store = usePlayerStore.getState();
+  store.setQueue(snapshot.queue, snapshot.currentIndex);
+  store.pause(); // never auto-play on cold launch
+}
+
+// Restore queue/index/position on launch. Does NOT auto-play. The local snapshot
+// (synchronous MMKV) is applied IMMEDIATELY so the mini-player appears the
+// instant this runs, instead of waiting on a server round-trip. The server is
+// then reconciled in the background and only overrides if it's strictly newer
+// (e.g. you were playing on another device since this device last published).
 export async function restorePlaybackState(): Promise<void> {
   const scope = getOfflineAccountScope();
   const local = readLocalPlaybackState();
-  let chosen: PlaybackStateSnapshot | null = local && local.accountScope === scope ? local : null;
+  const localUsable = local && local.accountScope === scope && local.song ? local : null;
+  if (localUsable) applyPlaybackSnapshot(localUsable);
+
   try {
     const server = await fetchServerPlaybackState();
-    if (server && (!chosen || server.updatedAt >= chosen.updatedAt)) chosen = server;
+    if (server?.song && (!localUsable || server.updatedAt > localUsable.updatedAt)) {
+      applyPlaybackSnapshot(server);
+    }
   } catch {
-    // keep local
+    // offline / server error — the local snapshot already on screen stands.
   }
-  if (!chosen || !chosen.song) return;
-
-  setPendingResumeSeek(chosen.song.id, chosen.currentTime);
-  const store = usePlayerStore.getState();
-  store.setQueue(chosen.queue, chosen.currentIndex);
-  store.pause(); // never auto-play on cold launch
 }

@@ -498,7 +498,10 @@ export function useApiData<T>(
 }
 
 export type HomePayload = {
-  songs: PlayerSong[];
+  // /api/home now returns only likedSongIds — the song list was dropped because
+  // nothing renders it (kept optional for backward compatibility with old cached
+  // snapshots that still carry it).
+  songs?: PlayerSong[];
   likedSongIds: string[];
 };
 

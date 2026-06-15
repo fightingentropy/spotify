@@ -2895,15 +2895,15 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   if (pathname === "/api/home" && request.method === "GET") {
     const source = librarySourceForRequest(request);
     if (!source) {
-      return jsonCached(request, {
-        songs: [],
-        likedSongIds: [],
-      });
+      return jsonCached(request, { likedSongIds: [] });
     }
     const snapshot = await getLibrary(source);
     const songs = songsForRequest(snapshot.songs, request);
+    // The visible song list is still needed to scope liked ids to what the user
+    // can see, but it's no longer shipped in the response — the home screen
+    // (web + mobile) only reads likedSongIds. The full list lives at /api/songs
+    // and the search projection at /api/search-index.
     return jsonCached(request, {
-      songs,
       likedSongIds: await likedSongIdsForSongs(source, songs),
     });
   }

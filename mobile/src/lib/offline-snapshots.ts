@@ -14,7 +14,11 @@ export type OfflineApiSnapshot<T = unknown> = {
 
 const PREFIX = "snap:";
 
-export async function readOfflineApiSnapshot<T>(url: string): Promise<OfflineApiSnapshot<T> | undefined> {
+// MMKV is synchronous, so a snapshot can be read with zero async overhead. This
+// is what lets useApiData seed cached data into its initial render state (no
+// blank-then-pop-in flash on launch). The async wrapper below is kept for the
+// existing call sites that expect a Promise.
+export function readOfflineApiSnapshotSync<T>(url: string): OfflineApiSnapshot<T> | undefined {
   try {
     const raw = storage.getItem(PREFIX + url);
     if (!raw) return undefined;
@@ -24,6 +28,10 @@ export async function readOfflineApiSnapshot<T>(url: string): Promise<OfflineApi
   } catch {
     return undefined;
   }
+}
+
+export async function readOfflineApiSnapshot<T>(url: string): Promise<OfflineApiSnapshot<T> | undefined> {
+  return readOfflineApiSnapshotSync<T>(url);
 }
 
 export async function writeOfflineApiSnapshot<T>(
