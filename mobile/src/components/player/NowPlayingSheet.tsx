@@ -14,6 +14,7 @@ import { HeartButton } from "@/components/song/HeartButton";
 import { DownloadButton } from "@/components/song/DownloadButton";
 import { colors } from "@/theme";
 import { isRadioSong, isPodcastSong } from "@/lib/player-song";
+import { useArtworkColor } from "@/lib/useArtworkColor";
 import { formatPlaybackRate, nextPlaybackRate, usePlayerStore } from "@/store/player";
 import { useUiStore } from "@/store/ui";
 
@@ -38,6 +39,8 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
   const isRadio = isRadioSong(song);
   const isPodcast = isPodcastSong(song);
   const artSize = Math.min(width - 48, 380);
+  // Spotify-style: tint the background with a representative color from the cover.
+  const tint = useArtworkColor(song?.imageUrl ?? song?.networkImageUrl);
 
   // Swipe the artwork left/right to change track (horizontal only; a clear
   // horizontal swipe wins over the sheet's pan-down-to-close).
@@ -51,7 +54,12 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
     });
 
   return (
-    <Sheet visible={visible} onClose={onClose} heightPct={0.94}>
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      heightPct={0.94}
+      backgroundGradient={tint ? [tint, tint, colors.background] : undefined}
+    >
       <View style={{ flex: 1, paddingHorizontal: 24, paddingBottom: insets.bottom + 32 }}>
         {/* header */}
         <View className="flex-row items-center justify-between py-2">

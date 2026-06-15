@@ -9,6 +9,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { LinearGradient } from "expo-linear-gradient";
 import { colors, motion } from "@/theme";
 
 const DRAG_CLOSE_THRESHOLD = 120;
@@ -28,12 +29,15 @@ export function Sheet({
   onClose,
   heightPct = 0.94,
   zIndex = 100,
+  backgroundGradient,
   children,
 }: {
   visible: boolean;
   onClose: () => void;
   heightPct?: number;
   zIndex?: number;
+  // Optional album-art tint: colors fade top→bottom behind the panel content.
+  backgroundGradient?: readonly [string, string, ...string[]];
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -121,6 +125,9 @@ export function Sheet({
             panelStyle,
           ]}
         >
+          {backgroundGradient ? (
+            <LinearGradient colors={backgroundGradient} style={StyleSheet.absoluteFill} />
+          ) : null}
           {/* grab handle */}
           <View style={{ alignItems: "center", paddingTop: 10, paddingBottom: 4 }}>
             <View
