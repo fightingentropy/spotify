@@ -1,80 +1,113 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Switch, Text, View } from "react-native";
 import {
+  ArrowDownToLine,
   CheckCircle2,
+  Cloud,
+  Heart,
+  type LucideIcon,
   RefreshCw,
   ShieldCheck,
   Trash2,
   TriangleAlert,
 } from "lucide-react-native";
+import { FooterButton } from "@/components/SettingsControls";
 import { formatBytes, getDiskUsage, type DiskUsage } from "@/lib/disk-usage";
 import { useOfflineStore } from "@/store/offline";
 import { colors } from "@/theme";
 
-// Offline downloads management, ported from src/components/OfflineSettings.tsx
-// (web) to RN. Storage stats + verification card + Verify / Retry failed / Sync
-// now / Clear downloads, plus the auto-download-liked toggle. The web app's
-// diagnostics block and playback-cache controls are dropped — RN has no Cache
-// API / service worker, and the playback cache is the same on-disk files the
-// downloads total already accounts for.
+// Offline downloads management (RN port of src/components/OfflineSettings.tsx).
+// A compact storage summary, then verification / sync / failures as hairline-
+// separated rows with contextual actions: "Retry" appears only when a download
+// failed, "Sync now" only when mutations are pending. The header ↻ recomputes
+// storage + disk on demand; "Clear downloads" is a destructive footer button.
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <View className="flex-1 rounded-md p-3" style={{ backgroundColor: "rgba(0,0,0,0.2)", minWidth: 140 }}>
-      <Text className="text-xs" style={{ color: colors.muted }}>
-        {label}
-      </Text>
-      <Text className="mt-1 text-base font-semibold" style={{ color: colors.foreground }}>
-        {value}
-      </Text>
-      {sub ? (
-        <Text className="mt-0.5 text-xs" style={{ color: colors.dim }}>
-          {sub}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
+const AMBER = "#fbbf24";
 
-function ActionButton({
+function MiniButton({
   label,
-  Icon,
   onPress,
-  disabled,
   busy,
-  danger,
+  tone = "default",
 }: {
   label: string;
-  Icon: typeof RefreshCw;
   onPress: () => void;
-  disabled?: boolean;
   busy?: boolean;
-  danger?: boolean;
+  tone?: "default" | "warn";
 }) {
-  const bg = danger ? "rgba(239,68,68,0.15)" : colors.card;
-  const fg = danger ? "#fca5a5" : colors.foreground;
+  const fg = tone === "warn" ? AMBER : colors.foreground;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      disabled={disabled}
+      disabled={busy}
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
-        gap: 8,
-        height: 40,
+        gap: 6,
+        height: 32,
         paddingHorizontal: 14,
         borderRadius: 999,
-        backgroundColor: bg,
-        opacity: disabled ? 0.5 : pressed ? 0.8 : 1,
+        backgroundColor: colors.cardActive,
+        opacity: busy ? 0.5 : pressed ? 0.7 : 1,
       })}
     >
-      {busy ? <ActivityIndicator size="small" color={fg} /> : <Icon size={16} color={fg} />}
-      <Text className="text-sm font-medium" style={{ color: fg }}>
-        {label}
-      </Text>
+      {busy ? <ActivityIndicator size="small" color={fg} /> : null}
+      <Text style={{ color: fg, fontSize: 13, fontWeight: "600" }}>{label}</Text>
     </Pressable>
+  );
+}
+
+function Row({
+  icon: Icon,
+  iconColor,
+  busy,
+  title,
+  titleColor,
+  value,
+  right,
+  first,
+}: {
+  icon: LucideIcon;
+  iconColor?: string;
+  busy?: boolean;
+  title: string;
+  titleColor?: string;
+  value?: string;
+  right?: ReactNode;
+  first?: boolean;
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        minHeight: 56,
+        paddingVertical: 10,
+        borderTopWidth: first ? 0 : 1,
+        borderTopColor: colors.line,
+      }}
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={iconColor ?? colors.muted} style={{ width: 18 }} />
+      ) : (
+        <Icon size={18} color={iconColor ?? colors.muted} />
+      )}
+      <Text
+        numberOfLines={1}
+        style={{ flex: 1, color: titleColor ?? colors.foreground, fontSize: 15, fontWeight: "500" }}
+      >
+        {title}
+      </Text>
+      {value ? (
+        <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 14, marginRight: right ? 4 : 0 }}>
+          {value}
+        </Text>
+      ) : null}
+      {right}
+    </View>
   );
 }
 
@@ -104,8 +137,8 @@ export function OfflineSettings() {
     void hydrate();
   }, [hydrate]);
 
-  // Recompute the device free/total alongside the store's downloads total
-  // whenever records change (a download finished/was removed) or storage refreshes.
+  // Recompute device free/used alongside the store's downloads total whenever
+  // records change (a download finished/was removed) or storage refreshes.
   useEffect(() => {
     let cancelled = false;
     getDiskUsage()
@@ -140,7 +173,7 @@ export function OfflineSettings() {
           : verificationStatus === "failed"
             ? "Verification failed"
             : "Not checked yet";
-  const VerificationIcon =
+  const VerificationIcon: LucideIcon =
     verificationStatus === "ok"
       ? CheckCircle2
       : verificationStatus === "repair-needed" || verificationStatus === "failed"
@@ -150,13 +183,20 @@ export function OfflineSettings() {
     verificationStatus === "ok"
       ? colors.emerald
       : verificationStatus === "repair-needed" || verificationStatus === "failed"
-        ? "#fbbf24"
+        ? AMBER
         : colors.muted;
 
+  const syncHealthy = pendingMutations === 0 && syncStatus !== "auth-required" && syncStatus !== "failed";
   const syncSummary =
     pendingMutations === 0
       ? "Up to date"
-      : `${pendingMutations} pending${syncStatus === "auth-required" ? " · sign in required" : ""}`;
+      : `${pendingMutations} pending${syncStatus === "auth-required" ? " · sign in" : ""}`;
+  const showSyncAction = pendingMutations > 0 || syncStatus === "failed" || syncStatus === "auth-required";
+
+  const handleRefresh = () => {
+    void refreshStorage();
+    getDiskUsage().then(setDisk).catch(() => undefined);
+  };
 
   const handleClearDownloads = () => {
     Alert.alert(
@@ -170,97 +210,102 @@ export function OfflineSettings() {
     );
   };
 
+  const summary =
+    `${downloaded} ${downloaded === 1 ? "song" : "songs"} · ${formatBytes(usedByDownloads)}` +
+    (freeBytes == null ? "" : ` · ${formatBytes(freeBytes)} free`);
+
   return (
-    <View className="px-4">
+    <View style={{ paddingHorizontal: 16 }}>
       <View
-        className="rounded-lg p-4"
-        style={{ backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line }}
+        style={{
+          borderRadius: 16,
+          paddingHorizontal: 16,
+          paddingBottom: 8,
+          backgroundColor: colors.card,
+          borderWidth: 1,
+          borderColor: colors.line,
+        }}
       >
-        <Text className="text-base font-semibold" style={{ color: colors.foreground }}>
-          Downloads
-        </Text>
-        <Text className="mt-0.5 text-sm" style={{ color: colors.muted }}>
-          {downloaded} downloaded · {active} active · {failed} failed
-        </Text>
-
-        {/* Storage stats */}
-        <View className="mt-4 flex-row flex-wrap gap-3">
-          <StatCard label="Downloaded media" value={formatBytes(usedByDownloads)} />
-          <StatCard
-            label="Available"
-            value={freeBytes == null ? "Unknown" : `${formatBytes(freeBytes)} free`}
-          />
-          <StatCard label="Sync" value={syncSummary} />
-        </View>
-
-        {/* Verification card */}
-        <View
-          className="mt-3 rounded-md p-3"
-          style={{ backgroundColor: "rgba(0,0,0,0.2)" }}
-        >
-          <Text className="text-xs" style={{ color: colors.muted }}>
-            Download verification
-          </Text>
-          <View className="mt-1 flex-row items-center gap-2">
-            {verificationStatus === "checking" ? (
-              <ActivityIndicator size="small" color={verificationTint} />
-            ) : (
-              <VerificationIcon size={16} color={verificationTint} />
-            )}
-            <Text className="text-base font-semibold" style={{ color: colors.foreground }}>
-              {verificationLabel}
+        {/* Header: title + one-line summary + refresh */}
+        <View style={{ flexDirection: "row", alignItems: "center", paddingTop: 16, paddingBottom: 14 }}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "700" }}>Downloads</Text>
+            <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 13, marginTop: 3 }}>
+              {summary}
             </Text>
           </View>
-          {verificationCheckedAt ? (
-            <Text className="mt-1 text-xs" style={{ color: colors.dim }}>
-              {verifiedDownloads} ok · {missingDownloads} repaired/missing
-            </Text>
-          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh storage"
+            hitSlop={10}
+            onPress={handleRefresh}
+            style={({ pressed }) => ({ padding: 6, opacity: pressed ? 0.6 : 1 })}
+          >
+            <RefreshCw size={18} color={colors.muted} />
+          </Pressable>
         </View>
 
-        {syncError ? (
-          <Text className="mt-3 text-sm" style={{ color: "#fbbf24" }}>
-            {syncError}
-          </Text>
-        ) : null}
-        {verificationError ? (
-          <Text className="mt-3 text-sm" style={{ color: "#fbbf24" }}>
-            {verificationError}
-          </Text>
+        {/* Active downloads — only while something is downloading */}
+        {active > 0 ? (
+          <Row first icon={ArrowDownToLine} iconColor={colors.emerald} busy title={`Downloading ${active}…`} />
         ) : null}
 
-        {/* Actions */}
-        <View className="mt-4 flex-row flex-wrap gap-2">
-          <ActionButton label="Verify downloads" Icon={ShieldCheck} busy={verificationStatus === "checking"} disabled={verificationStatus === "checking"} onPress={() => void verifyDownloads()} />
-          <ActionButton label="Retry failed" Icon={RefreshCw} onPress={() => void retryFailedDownloads()} />
-          <ActionButton label="Sync now" Icon={RefreshCw} busy={syncStatus === "syncing"} onPress={() => void syncOfflineMutations()} />
-          <ActionButton
-            label="Refresh"
-            Icon={RefreshCw}
-            onPress={() => {
-              void refreshStorage();
-              getDiskUsage().then(setDisk).catch(() => undefined);
-            }}
+        {/* Verification */}
+        <Row
+          first={active === 0}
+          icon={VerificationIcon}
+          iconColor={verificationTint}
+          busy={verificationStatus === "checking"}
+          title={verificationLabel}
+          value={
+            verificationCheckedAt
+              ? `${verifiedDownloads} ok${missingDownloads > 0 ? ` · ${missingDownloads} missing` : ""}`
+              : undefined
+          }
+          right={<MiniButton label="Verify" busy={verificationStatus === "checking"} onPress={() => void verifyDownloads()} />}
+        />
+
+        {/* Sync */}
+        <Row
+          icon={syncHealthy ? Cloud : TriangleAlert}
+          iconColor={syncHealthy ? colors.muted : AMBER}
+          busy={syncStatus === "syncing"}
+          title="Sync"
+          value={syncSummary}
+          right={showSyncAction ? <MiniButton label="Sync now" busy={syncStatus === "syncing"} onPress={() => void syncOfflineMutations()} /> : undefined}
+        />
+
+        {/* Failed downloads → retry (only when present) */}
+        {failed > 0 ? (
+          <Row
+            icon={TriangleAlert}
+            iconColor={AMBER}
+            titleColor={AMBER}
+            title={`${failed} failed download${failed === 1 ? "" : "s"}`}
+            right={<MiniButton label="Retry" tone="warn" onPress={() => void retryFailedDownloads()} />}
           />
-          <ActionButton label="Clear downloads" Icon={Trash2} danger onPress={handleClearDownloads} />
-        </View>
+        ) : null}
 
         {/* Auto-download toggle */}
-        <View
-          className="mt-4 flex-row items-center justify-between rounded-md p-3"
-          style={{ backgroundColor: "rgba(0,0,0,0.2)" }}
-        >
-          <Text className="mr-4 flex-1 text-sm font-medium" style={{ color: colors.foreground }}>
-            Automatically download liked songs
-          </Text>
-          <Switch
-            value={autoDownloadLiked}
-            onValueChange={setAutoDownloadLiked}
-            trackColor={{ true: colors.emerald, false: "#3a3a3a" }}
-            thumbColor="#fff"
-          />
-        </View>
+        <Row
+          icon={Heart}
+          title="Auto-download liked songs"
+          right={
+            <Switch
+              value={autoDownloadLiked}
+              onValueChange={setAutoDownloadLiked}
+              trackColor={{ true: colors.emerald, false: "#3a3a3a" }}
+              thumbColor="#fff"
+            />
+          }
+        />
+
+        {/* Error lines (rare) */}
+        {syncError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{syncError}</Text> : null}
+        {verificationError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{verificationError}</Text> : null}
       </View>
+
+      <FooterButton icon={Trash2} label="Clear downloads" tone="danger" onPress={handleClearDownloads} />
     </View>
   );
 }

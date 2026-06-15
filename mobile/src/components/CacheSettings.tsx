@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import { CheckCircle2, Trash2 } from "lucide-react-native";
+import { FooterButton } from "@/components/SettingsControls";
 import { clearAppCache } from "@/lib/clear-cache";
 import { colors } from "@/theme";
 
 // "Clear cache" control. Drops the read-through API caches (in-memory + MMKV
-// snapshots) and the cover-art image caches so every screen re-pulls fresh from
-// the server. Non-destructive — downloads, the account session and user settings
-// are kept — so it gets neutral styling, unlike the red "Clear downloads".
+// snapshots) and cover-art image caches so every screen re-pulls fresh from the
+// server. Non-destructive — downloads, the account session and user settings are
+// kept — so the footer button is neutral, unlike the red "Clear downloads".
 
 export function CacheSettings() {
   const [busy, setBusy] = useState(false);
@@ -46,53 +47,30 @@ export function CacheSettings() {
     );
   };
 
-  const Icon = cleared ? CheckCircle2 : Trash2;
-  const tint = cleared ? colors.emerald : colors.foreground;
-
   return (
-    <View className="mt-6 px-4">
+    <View style={{ marginTop: 24, paddingHorizontal: 16 }}>
       <View
-        className="rounded-lg p-4"
-        style={{ backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line }}
+        style={{
+          borderRadius: 16,
+          padding: 16,
+          backgroundColor: colors.card,
+          borderWidth: 1,
+          borderColor: colors.line,
+        }}
       >
-        <Text className="text-base font-semibold" style={{ color: colors.foreground }}>
-          Cache
+        <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "700" }}>Cache</Text>
+        <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 4 }}>
+          Frees up space by clearing cached library data and images — they reload from the server next
+          time. Your downloads, account and settings are kept.
         </Text>
-        <Text className="mt-0.5 text-sm" style={{ color: colors.muted }}>
-          Clears cached library, images and other data so they reload fresh from the server.
-          Your downloads, account and settings are kept.
-        </Text>
-
-        <View className="mt-4 flex-row flex-wrap gap-2">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Clear cache"
-            disabled={busy}
-            onPress={handlePress}
-            style={({ pressed }) => ({
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-              height: 40,
-              paddingHorizontal: 14,
-              borderRadius: 999,
-              backgroundColor: colors.card,
-              borderWidth: 1,
-              borderColor: colors.line,
-              opacity: busy ? 0.5 : pressed ? 0.8 : 1,
-            })}
-          >
-            {busy ? (
-              <ActivityIndicator size="small" color={tint} />
-            ) : (
-              <Icon size={16} color={tint} />
-            )}
-            <Text className="text-sm font-medium" style={{ color: tint }}>
-              {cleared ? "Cache cleared" : "Clear cache"}
-            </Text>
-          </Pressable>
-        </View>
       </View>
+      <FooterButton
+        icon={cleared ? CheckCircle2 : Trash2}
+        label={cleared ? "Cache cleared" : "Clear cache"}
+        tone={cleared ? "success" : "default"}
+        busy={busy}
+        onPress={handlePress}
+      />
     </View>
   );
 }
