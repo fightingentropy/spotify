@@ -3,6 +3,7 @@ import { FlatList, TextInput, View, Text } from "react-native";
 import { Search as SearchIcon } from "lucide-react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { SongListItem } from "@/components/song/SongListItem";
+import { ProfileButton } from "@/components/profile/ProfileButton";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/States";
 import { type SearchIndexPayload, useApiData, withAccountScope } from "@/lib/api";
@@ -45,9 +46,12 @@ export default function SearchScreen() {
   return (
     <Screen>
       <View className="px-4 pb-2 pt-3">
-        <Text className="mb-3 text-3xl font-bold" style={{ color: colors.foreground }}>
-          Search
-        </Text>
+        <View className="mb-3 flex-row items-center gap-3">
+          <ProfileButton />
+          <Text className="text-3xl font-bold" style={{ color: colors.foreground }}>
+            Search
+          </Text>
+        </View>
         <View className="flex-row items-center gap-2 rounded-lg px-3" style={{ backgroundColor: "#242424" }}>
           <SearchIcon size={20} color={colors.muted} />
           <TextInput

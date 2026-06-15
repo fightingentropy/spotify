@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { EmailVerificationBanner } from "@/components/EmailVerificationBanner";
+import { ProfileButton } from "@/components/profile/ProfileButton";
 import { ScrollerTile } from "@/components/song/ScrollerTile";
 import { ErrorText } from "@/components/ui/States";
 import {
@@ -152,7 +153,10 @@ export default function HomeScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={{ paddingBottom: CONTENT_BOTTOM_INSET, paddingHorizontal: 16, paddingTop: 24 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: CONTENT_BOTTOM_INSET, paddingHorizontal: 16, paddingTop: 12 }}>
+        <View className="mb-5 flex-row items-center">
+          <ProfileButton />
+        </View>
         <EmailVerificationBanner />
         {error ? <View className="mb-4"><ErrorText>{error}</ErrorText></View> : null}
 

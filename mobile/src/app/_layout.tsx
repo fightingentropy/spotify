@@ -15,6 +15,7 @@ import { AudioBootstrap } from "@/components/AudioBootstrap";
 import { MiniPlayer } from "@/components/player/MiniPlayer";
 import { PlayerSheets } from "@/components/player/PlayerSheets";
 import { TabBar } from "@/components/nav/TabBar";
+import { ProfileMenu } from "@/components/profile/ProfileMenu";
 import { initOfflineSync } from "@/store/offline";
 import { colors } from "@/theme";
 
@@ -70,6 +71,9 @@ export default function RootLayout() {
             <Stack.Screen name="podcasts" options={{ ...headerOptions, title: "Podcasts" }} />
             <Stack.Screen name="upload" options={{ ...headerOptions, title: "Upload" }} />
             <Stack.Screen name="settings" options={{ ...headerOptions, title: "Settings" }} />
+            <Stack.Screen name="settings/playback" options={{ ...headerOptions, title: "Playback" }} />
+            <Stack.Screen name="settings/storage" options={{ ...headerOptions, title: "Data-saving and offline" }} />
+            <Stack.Screen name="settings/about" options={{ ...headerOptions, title: "About" }} />
             <Stack.Screen name="profile" options={{ ...headerOptions, title: "Profile" }} />
             <Stack.Screen name="listening-stats" options={{ ...headerOptions, title: "Listening stats" }} />
             <Stack.Screen name="playlist/[id]" options={{ ...headerOptions, title: "" }} />
@@ -77,6 +81,7 @@ export default function RootLayout() {
           <TabBar />
           <MiniPlayer />
           <PlayerSheets />
+          <ProfileMenu />
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
