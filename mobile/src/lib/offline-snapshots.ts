@@ -48,8 +48,21 @@ export async function writeOfflineApiSnapshot<T>(
 export async function removeOfflineApiSnapshots(
   match?: string | RegExp | ((url: string) => boolean),
 ): Promise<void> {
-  // MMKV has no prefix scan in the shim; we cannot enumerate keys here, so a
-  // targeted clear is a no-op for now and a full clear is handled by the caller
-  // wiping the MMKV instance. The full subsystem (task 5) maintains an index.
-  void match;
+  // Enumerate the MMKV keys and drop the snapshot entries. With no `match` this
+  // wipes every cached API snapshot (the "Clear cache" path); a match narrows it
+  // to specific URLs. Only `snap:`-prefixed keys are touched, so player/likes
+  // settings and other MMKV state are left intact.
+  try {
+    for (const key of storage.getAllKeys()) {
+      if (!key.startsWith(PREFIX)) continue;
+      if (!match) {
+        storage.removeItem(key);
+        continue;
+      }
+      const url = key.slice(PREFIX.length);
+      const hit =
+        typeof match === "function" ? match(url) : match instanceof RegExp ? match.test(url) : url.includes(match);
+      if (hit) storage.removeItem(key);
+    }
+  } catch {}
 }

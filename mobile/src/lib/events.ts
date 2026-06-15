@@ -29,3 +29,6 @@ export function emit(event: string, detail?: unknown): void {
 }
 
 export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
+// Fired after the API + snapshot caches are wiped, so every mounted useApiData
+// hook re-pulls fresh from the server instead of waiting for a remount.
+export const API_CACHE_CLEARED_EVENT = "spotify:api-cache-cleared";

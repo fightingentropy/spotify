@@ -18,4 +18,8 @@ export const storage = {
   removeItem(key: string): void {
     mmkv.delete(key);
   },
+  // MMKV exposes a synchronous key list; used to clear snapshot caches by prefix.
+  getAllKeys(): string[] {
+    return mmkv.getAllKeys();
+  },
 };

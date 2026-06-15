@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_AUTH_REQUIRED_EVENT, emit } from "@/lib/events";
+import { API_AUTH_REQUIRED_EVENT, API_CACHE_CLEARED_EVENT, emit, on } from "@/lib/events";
 import { apiFetch } from "@/lib/http";
 import {
   readOfflineApiSnapshot,
@@ -154,6 +154,17 @@ function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
     void writeOfflineApiSnapshot(url, data, entry.etag, entry.fetchedAt);
   }
   return data;
+}
+
+// Wipe every API cache layer (in-memory entries + ETags + persisted MMKV
+// snapshots) so the next fetch ignores the cached copy and pulls fresh. Emits
+// API_CACHE_CLEARED_EVENT, which mounted useApiData hooks listen for to re-fetch
+// immediately (no need to remount the screen or restart the app). Does NOT touch
+// offline downloads, auth, or user settings — only the read-through API cache.
+export async function clearApiDataCache(): Promise<void> {
+  apiCache.clear();
+  await removeOfflineApiSnapshots();
+  emit(API_CACHE_CLEARED_EVENT);
 }
 
 // In RN we assume connectivity; offline reads are served from the snapshot cache
@@ -489,6 +500,10 @@ export function useApiData<T>(
   useEffect(() => {
     return startLoad(false);
   }, [startLoad]);
+
+  // After "Clear cache" wipes the cache layers, re-pull fresh without waiting for
+  // a remount so already-mounted screens (Home stays mounted) update in place.
+  useEffect(() => on(API_CACHE_CLEARED_EVENT, () => startLoad(false)), [startLoad]);
 
   return { data, loading, error };
 }
