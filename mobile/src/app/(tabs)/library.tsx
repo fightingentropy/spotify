@@ -180,7 +180,7 @@ export default function LibraryScreen() {
 
     if (filter === "playlists") return [liked, ...playlists];
     if (filter === "podcasts") return shows;
-    return [liked, downloads, radio, podcastsShortcut, upload, events, ...playlists];
+    return [liked, downloads, radio, podcastsShortcut, events, upload, ...playlists];
   }, [filter, data.playlists, user, router]);
 
   const showPlaylistSkeleton = loading && data.playlists.length === 0 && filter !== "podcasts";
