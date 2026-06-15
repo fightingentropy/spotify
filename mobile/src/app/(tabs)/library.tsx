@@ -10,11 +10,11 @@ import { type LibraryPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { colors } from "@/theme";
 
-function IconSquare({ children, color }: { children: React.ReactNode; color: string }) {
+function IconSquare({ children, gradient }: { children: React.ReactNode; gradient: readonly [string, string] }) {
   return (
-    <View className="h-14 w-14 items-center justify-center rounded" style={{ backgroundColor: color }}>
+    <LinearGradient colors={gradient} style={{ width: 56, height: 56, alignItems: "center", justifyContent: "center", borderRadius: 4 }}>
       {children}
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -72,34 +72,34 @@ export default function LibraryScreen() {
 
         <Row
           left={
-            <LinearGradient colors={["#4c1d95", colors.emerald]} style={{ width: 56, height: 56, alignItems: "center", justifyContent: "center", borderRadius: 4 }}>
+            <IconSquare gradient={["#4c1d95", colors.emerald]}>
               <Heart size={26} color="#fff" fill="#fff" />
-            </LinearGradient>
+            </IconSquare>
           }
           title="Liked Songs"
           subtitle="Playlist"
           onPress={() => router.push("/liked")}
         />
         <Row
-          left={<IconSquare color="#1d4ed8"><ArrowDownToLine size={24} color="#fff" /></IconSquare>}
+          left={<IconSquare gradient={["#1e3a8a", "#3b82f6"]}><ArrowDownToLine size={24} color="#fff" /></IconSquare>}
           title="Downloads"
           subtitle="Available offline"
           onPress={() => router.push("/downloads")}
         />
         <Row
-          left={<IconSquare color="rgb(6,182,212)"><RadioTower size={24} color="#fff" /></IconSquare>}
+          left={<IconSquare gradient={["#0e7490", "#22d3ee"]}><RadioTower size={24} color="#fff" /></IconSquare>}
           title="Radio Stations"
           subtitle="Live streams"
           onPress={() => router.push("/radio")}
         />
         <Row
-          left={<IconSquare color="rgb(217,70,239)"><Podcast size={24} color="#fff" /></IconSquare>}
+          left={<IconSquare gradient={["#86198f", "#d946ef"]}><Podcast size={24} color="#fff" /></IconSquare>}
           title="Podcasts"
           subtitle="Shows & episodes"
           onPress={() => router.push("/podcasts")}
         />
         <Row
-          left={<IconSquare color="#374151"><Upload size={24} color="#fff" /></IconSquare>}
+          left={<IconSquare gradient={["#374151", "#6b7280"]}><Upload size={24} color="#fff" /></IconSquare>}
           title="Upload"
           subtitle="Add music from Spotify or a file"
           onPress={() => router.push("/upload")}
