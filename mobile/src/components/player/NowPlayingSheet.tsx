@@ -3,7 +3,7 @@ import { Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn } from "react-native-reanimated";
-import { ChevronDown, ListMusic, MicVocal, Moon, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react-native";
+import { ListMusic, MicVocal, Moon, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { MarqueeText } from "@/components/ui/MarqueeText";
@@ -61,13 +61,10 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
       backgroundGradient={tint ? [tint, tint, colors.background] : undefined}
     >
       <View style={{ flex: 1, paddingHorizontal: 24, paddingBottom: insets.bottom + 32 }}>
-        {/* header */}
+        {/* header — no close chevron; the grab handle + swipe-down (and the
+            backdrop tap) dismiss the sheet. Spacers keep the label centered. */}
         <View className="flex-row items-center justify-between py-2">
-          <PressableScale onPress={onClose} hitSlop={10} accessibilityLabel="Close now playing">
-            <View>
-              <ChevronDown size={28} color={colors.foreground} />
-            </View>
-          </PressableScale>
+          <View style={{ width: 28 }} />
           <Text className="text-xs font-semibold uppercase tracking-widest" style={{ color: colors.muted }}>
             {isRadio ? "Radio" : isPodcast ? "Podcast" : "Now Playing"}
           </Text>

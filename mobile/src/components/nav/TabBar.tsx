@@ -53,6 +53,14 @@ export function TabBar() {
             const isActive = active === tab.key;
             const onPress = () => {
               void selectionAsync();
+              // A tab tap should return to that tab's root. Sub-screens (a playlist,
+              // Liked, …) are PUSHED on the root stack on top of the tabs, so first pop
+              // the stack back to the tabs: dismissAll() dispatches POP_TO_TOP, which
+              // unwinds and unmounts them cleanly (like the header back button, but all
+              // the way). Using navigate() to "go back" here instead pushes a SECOND tabs
+              // instance and leaves the sub-screen mounted underneath — duplicates that
+              // never unmount. Then switch tab only if we're not already on it.
+              if (router.canDismiss()) router.dismissAll();
               if (!isActive) router.navigate(tab.path);
             };
             const tint = isActive ? "#fff" : colors.muted;
