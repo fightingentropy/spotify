@@ -545,7 +545,10 @@ export type LikedPayload = {
   likedSongIds: string[];
 };
 
-export type PlaylistPayload = {
+// A user-owned playlist backed by DB rows. `kind` is optional for backward
+// compatibility with offline snapshots cached before the discriminator existed.
+export type LibraryPlaylistPayload = {
+  kind?: "library";
   playlist: {
     id: string;
     name: string;
@@ -555,4 +558,33 @@ export type PlaylistPayload = {
   } | null;
   songs: PlayerSong[];
   likedSongIds: string[];
+};
+
+// A curated Spotify playlist streamed read-through (like Discover). Its tracks
+// aren't library songs — they carry staged status and play via on-demand
+// staging. `songs: []` keeps shared cache helpers that read `songs` happy.
+export type CuratedPlaylistPayload = {
+  kind: "curated";
+  playlist: {
+    id: string;
+    name: string;
+    imageUrl: string;
+    description: string;
+  };
+  tracks: DiscoverTrack[];
+  songs: PlayerSong[];
+  likedSongIds: string[];
+};
+
+export type PlaylistPayload = LibraryPlaylistPayload | CuratedPlaylistPayload;
+
+export type FeaturedPlaylist = {
+  id: string;
+  name: string;
+  description: string;
+  imageUrl: string;
+};
+
+export type FeaturedPlaylistsPayload = {
+  playlists: FeaturedPlaylist[];
 };

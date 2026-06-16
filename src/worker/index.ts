@@ -44,6 +44,7 @@ import {
   SpotifyPathfinderError,
   fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
   fetchSpotifyLikedTracks,
+  fetchSpotifyPlaylistMetadata,
   fetchSpotifyPlaylistTracks as fetchPathfinderPlaylistTracks,
   fetchSpotifyTrackMetadata,
   scrapeSpotifyTrackIdsFromHtml,
@@ -3425,11 +3426,15 @@ async function fillDiscoverStaging(
   await macMiniDiscoverFetch(env, "/api/discover/sync", "POST", { present: presentIds, stage }, 10_000).catch(() => {});
 }
 
-// Fetch + normalize the current "Top 50 - Global" chart (shared by the trending
-// endpoint and the cron fill).
-async function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingTrack[]> {
+// Fetch + normalize a Spotify playlist's tracks into the Discover shape. Shared
+// by the trending chart, the cron fill, and curated-playlist detail views.
+async function fetchDiscoverTracksForPlaylist(
+  env: CloudflareEnv,
+  playlistId: string,
+  limit: number,
+): Promise<DiscoverTrendingTrack[]> {
   try {
-    const { tracks } = await fetchPathfinderPlaylistTracks(TOP_50_GLOBAL_PLAYLIST_ID, envString(env, "SPOTIFY_SP_DC"), 50);
+    const { tracks } = await fetchPathfinderPlaylistTracks(playlistId, envString(env, "SPOTIFY_SP_DC"), limit);
     return tracks
       .filter((track) => track.id && track.name && track.artists.length > 0)
       .map((track) => ({
@@ -3444,6 +3449,77 @@ async function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTre
   } catch {
     return [];
   }
+}
+
+// The current "Top 50 - Global" chart (shared by the trending endpoint and the
+// cron fill).
+function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingTrack[]> {
+  return fetchDiscoverTracksForPlaylist(env, TOP_50_GLOBAL_PLAYLIST_ID, 50);
+}
+
+type DiscoverStagedTrack = DiscoverTrendingTrack & { staged: boolean; audioId?: string; audioUrl?: string };
+
+// Ask the Mac-mini which of these tracks are already staged (instantly playable
+// from .discover) and fold that status into each track. Best-effort: on any
+// failure (or when staging isn't configured) every track is reported unstaged,
+// which just means a tap materializes it on demand. Shared by the Discover row
+// and curated-playlist detail views.
+async function markDiscoverStaged(
+  env: CloudflareEnv,
+  tracks: DiscoverTrendingTrack[],
+): Promise<DiscoverStagedTrack[]> {
+  const staged = new Map<string, DiscoverStagingStatusEntry>();
+  if (isMacMiniMusicConfigured(env)) {
+    try {
+      const res = await macMiniDiscoverFetch(env, "/api/discover/staging", "GET", undefined, 4_000);
+      if (res.ok) {
+        const body = (await res.json()) as { entries?: DiscoverStagingStatusEntry[] };
+        for (const entry of body.entries ?? []) staged.set(entry.trackId, entry);
+      }
+    } catch {
+      // Staging status is best-effort; fall back to "not staged".
+    }
+  }
+  return tracks.map((track) => {
+    const ready = staged.get(track.id);
+    return ready
+      ? { ...track, staged: true, audioId: ready.id, audioUrl: ready.audioUrl }
+      : { ...track, staged: false };
+  });
+}
+
+type CuratedPlaylist = { id: string; name: string; description: string; imageUrl: string };
+
+// Curated playlists surfaced in the app (the Home "Featured playlists" row and
+// the Library Playlists section). These are public Spotify playlists streamed
+// read-through via the pathfinder — exactly like Discover, nothing is written
+// to the library. Array order is the display order; the first entry shows first.
+const CURATED_PLAYLISTS: CuratedPlaylist[] = [
+  {
+    id: "37i9dQZF1E8MlVyHRy0DWb",
+    name: "River Flows In You Radio",
+    description: "With Yiruma, Daniele Leoni, Benny Garner and more",
+    imageUrl: "",
+  },
+];
+const CURATED_PLAYLIST_BY_ID = new Map(CURATED_PLAYLISTS.map((playlist) => [playlist.id, playlist]));
+// Cap the read-through track count for a curated-playlist detail view.
+const CURATED_PLAYLIST_MAX_TRACKS = 100;
+
+// Enrich a curated entry with live Spotify metadata (name/cover/description),
+// bounded so a slow Spotify response can't stall the Home/Library load. Falls
+// back to the static entry on timeout or failure.
+async function curatedPlaylistCard(env: CloudflareEnv, playlist: CuratedPlaylist): Promise<CuratedPlaylist> {
+  const meta = await Promise.race([
+    fetchSpotifyPlaylistMetadata(playlist.id, envString(env, "SPOTIFY_SP_DC")),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 6_000)),
+  ]).catch(() => null);
+  return {
+    id: playlist.id,
+    name: meta?.name || playlist.name,
+    description: meta?.description || playlist.description,
+    imageUrl: meta?.imageUrl || playlist.imageUrl,
+  };
 }
 
 // Cron-driven background fill: stage a batch of not-yet-cached Top-50 tracks and
@@ -3483,26 +3559,20 @@ app.get("/api/discover/trending", async (c) => {
   // Mark which tracks are already staged (instantly playable from .discover).
   // The actual fill happens on the cron (runDiscoverFill); this endpoint only
   // reads status, so it stays fast.
-  const staged = new Map<string, DiscoverStagingStatusEntry>();
-  try {
-    const res = await macMiniDiscoverFetch(c.env, "/api/discover/staging", "GET", undefined, 4_000);
-    if (res.ok) {
-      const body = (await res.json()) as { entries?: DiscoverStagingStatusEntry[] };
-      for (const entry of body.entries ?? []) staged.set(entry.trackId, entry);
-    }
-  } catch {
-    // Staging status is best-effort; fall back to "not staged".
-  }
-
-  const tracks = discover.map((track) => {
-    const ready = staged.get(track.id);
-    return ready
-      ? { ...track, staged: true, audioId: ready.id, audioUrl: ready.audioUrl }
-      : { ...track, staged: false };
-  });
+  const tracks = await markDiscoverStaged(c.env, discover);
 
   // Short cache: a track's staged status changes as the cron fill completes.
   return jsonCached(c, { tracks }, { cacheControl: "private, max-age=30, stale-while-revalidate=300" });
+});
+
+// Curated playlists for the Home "Featured playlists" row and the Library
+// Playlists section. Cards only — opening one hits /api/playlist/:id, which
+// streams the tracks read-through (see the curated branch there).
+app.get("/api/playlists/featured", async (c) => {
+  const playlists = await Promise.all(CURATED_PLAYLISTS.map((playlist) => curatedPlaylistCard(c.env, playlist)));
+  return jsonCached(c, { playlists }, {
+    cacheControl: "public, max-age=1800, stale-while-revalidate=86400",
+  });
 });
 
 // Tap a not-yet-staged Discover track: resolve + materialize ONE track into the
@@ -3969,10 +4039,40 @@ app.get("/api/liked", async (c) => {
 });
 
 app.get("/api/playlist/:id", async (c) => {
+  const id = c.req.param("id");
+
+  // Curated playlists are public and streamed read-through (like Discover) —
+  // resolve them before the auth gate. They aren't backed by DB rows, so the
+  // payload carries Discover-shaped `tracks` (with staged status) instead of
+  // library songs; `songs: []` keeps older clients that only read `songs` happy.
+  const curated = CURATED_PLAYLIST_BY_ID.get(id);
+  if (curated) {
+    const [meta, base] = await Promise.all([
+      fetchSpotifyPlaylistMetadata(id, envString(c.env, "SPOTIFY_SP_DC")),
+      fetchDiscoverTracksForPlaylist(c.env, id, CURATED_PLAYLIST_MAX_TRACKS),
+    ]);
+    const tracks = await markDiscoverStaged(c.env, base);
+    return jsonCached(
+      c,
+      {
+        kind: "curated",
+        playlist: {
+          id,
+          name: meta?.name || curated.name,
+          imageUrl: meta?.imageUrl || curated.imageUrl || tracks[0]?.imageUrl || "",
+          description: meta?.description || curated.description,
+        },
+        tracks,
+        songs: [],
+        likedSongIds: [],
+      },
+      { cacheControl: "private, max-age=30, stale-while-revalidate=300" },
+    );
+  }
+
   const db = c.get("db");
   const user = c.get("user");
   if (!user) return jsonError("Unauthorized", 401);
-  const id = c.req.param("id");
   await ensureSongColumns(db);
   const playlists = await db<PlaylistRow>`
     SELECT "id", "name", "imageUrl", "userId", "createdAt"
@@ -3991,6 +4091,7 @@ app.get("/api/playlist/:id", async (c) => {
     ORDER BY ps."order" ASC
   `;
   return jsonCached(c, {
+    kind: "library",
     playlist,
     songs: songRows.map(songToPlayerSong),
     likedSongIds: await listLikedSongIds(db, user.id),

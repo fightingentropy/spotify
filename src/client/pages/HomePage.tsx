@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { Pause, Play } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import {
@@ -6,12 +7,14 @@ import {
   withAccountScope,
   type DiscoverPayload,
   type DiscoverTrack,
+  type FeaturedPlaylistsPayload,
   type HomePayload,
   type StatsHomePayload,
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
 import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
+import { useDiscoverPlayback } from "@/client/use-discover-playback";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
@@ -65,13 +68,23 @@ export default function HomePage() {
       keepPreviousData: true,
     },
   );
+  // Curated playlists, surfaced as cover cards. Also global — same for everyone.
+  const { data: featuredData } = useApiData<FeaturedPlaylistsPayload>(
+    "/api/playlists/featured",
+    { playlists: [] },
+    {
+      enabled: status !== "loading",
+      keepPreviousData: true,
+    },
+  );
 
   const setQueue = usePlayerStore((state) => state.setQueue);
   const play = usePlayerStore((state) => state.play);
   const pause = usePlayerStore((state) => state.pause);
   const currentSongId = usePlayerStore((state) => state.currentSong?.id ?? null);
-  const currentDiscoverTrackId = usePlayerStore((state) => state.currentSong?.discoverTrackId ?? null);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
+  // Discover tiles play through the shared staging hook (no library writes).
+  const discover = useDiscoverPlayback();
 
   // Subscribe to a stable signature of only the downloaded record ids rather
   // than the whole records map. resolveOfflinePlaybackSong only swaps in
@@ -179,87 +192,14 @@ export default function HomePage() {
     );
   };
 
-  const [importingId, setImportingId] = useState<string | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-
-  // Tapping a Discover tile plays it WITHOUT adding it to the library. If it's
-  // already staged in the .discover cache it plays instantly; otherwise it's
-  // materialized on demand (a short wait, like a download). Keeping it forever
-  // (like / add-to-playlist / download) promotes it — handled by those actions.
-  const handleDiscoverClick = useCallback(
-    async (track: DiscoverTrack) => {
-      // Instant path: already pre-downloaded — play straight from staging.
-      if (track.staged && track.audioUrl && track.audioId) {
-        const song = resolveHomeSong({
-          id: track.audioId,
-          title: track.title,
-          artist: track.artist,
-          album: track.album || undefined,
-          imageUrl: track.imageUrl,
-          audioUrl: track.audioUrl,
-          duration: track.durationMs ? Math.round(track.durationMs / 1000) : undefined,
-          source: "server",
-          staged: true,
-          discoverTrackId: track.id,
-        } as HomeSong);
-        requestImmediatePlayback(song);
-        setQueue([song], 0);
-        return;
-      }
-
-      // Not staged yet: materialize this one track on demand, then play it.
-      if (importingId) return;
-      setImportingId(track.id);
-      setImportError(null);
-      try {
-        const res = await fetch("/api/discover/stage", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            spotifyUrl: track.spotifyUrl,
-            region: "US",
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            durationMs: track.durationMs ?? undefined,
-            imageUrl: track.imageUrl,
-            qualityProfile: "max",
-          }),
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error || `Couldn't load this track (${res.status})`);
-        }
-        const song = resolveHomeSong((await res.json()) as HomeSong);
-        requestImmediatePlayback(song);
-        setQueue([song], 0);
-      } catch (error) {
-        setImportError(error instanceof Error ? error.message : "Couldn't load this track");
-      } finally {
-        setImportingId(null);
-      }
-    },
-    [importingId, resolveHomeSong, setQueue],
-  );
-
   const renderDiscoverTile = (track: DiscoverTrack) => {
-    const importing = importingId === track.id;
-    const active = currentDiscoverTrackId != null && currentDiscoverTrackId === track.id;
-    const activePlaying = active && isPlaying;
-    // Tapping the active tile toggles play/pause; tapping another tile plays it.
-    const onTap = () => {
-      if (active) {
-        if (isPlaying) pause();
-        else play();
-        return;
-      }
-      void handleDiscoverClick(track);
-    };
+    const importing = discover.importingId === track.id;
+    const active = discover.isActive(track);
+    const activePlaying = active && discover.isPlaying;
     return (
       <div
         key={track.id}
-        onClick={onTap}
+        onClick={() => discover.toggle(track)}
         className={cn(
           "wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation sm:w-40",
           active || importing ? "bg-white/[0.12]" : "hover:bg-white/[0.09]",
@@ -284,7 +224,7 @@ export default function HomePage() {
             aria-label={activePlaying ? `Pause ${track.title}` : `Play ${track.title}`}
             onClick={(event) => {
               event.stopPropagation();
-              onTap();
+              discover.toggle(track);
             }}
             disabled={importing}
             className={cn(
@@ -311,6 +251,29 @@ export default function HomePage() {
     );
   };
 
+  const renderFeaturedTile = (playlist: FeaturedPlaylistsPayload["playlists"][number]) => (
+    <Link
+      key={playlist.id}
+      to={`/playlist/${playlist.id}`}
+      className="wf-song-card group w-36 shrink-0 cursor-pointer rounded-md p-3 transition touch-manipulation hover:bg-white/[0.09] sm:w-40"
+    >
+      <div className="relative aspect-square overflow-hidden rounded-[5px] bg-white/[0.08] shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+        <CoverImage
+          src={playlist.imageUrl || undefined}
+          alt={playlist.name}
+          fill
+          sizes="160px"
+          className="wf-song-cover object-cover"
+          loading="lazy"
+        />
+      </div>
+      <div className="mt-3 min-w-0">
+        <div className="truncate text-[16px] font-medium leading-6 text-white">{playlist.name}</div>
+        <div className="truncate text-[14px] leading-5 text-white/[0.62]">{playlist.description || "Playlist"}</div>
+      </div>
+    </Link>
+  );
+
   if (loading || status === "loading") {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
@@ -333,13 +296,22 @@ export default function HomePage() {
         {discoverData.tracks.length > 0 ? (
           <section aria-label="Discover" className="mb-9 md:mb-10">
             <h2 className="mb-4 text-2xl font-bold">Discover</h2>
-            {importError ? (
+            {discover.importError ? (
               <div role="alert" className="mb-3 text-sm text-red-400">
-                {importError}
+                {discover.importError}
               </div>
             ) : null}
             <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
               {discoverData.tracks.map((track) => renderDiscoverTile(track))}
+            </div>
+          </section>
+        ) : null}
+
+        {featuredData.playlists.length > 0 ? (
+          <section aria-label="Featured playlists" className="mb-9 md:mb-10">
+            <h2 className="mb-4 text-2xl font-bold">Featured playlists</h2>
+            <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+              {featuredData.playlists.map((playlist) => renderFeaturedTile(playlist))}
             </div>
           </section>
         ) : null}

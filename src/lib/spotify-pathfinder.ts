@@ -461,6 +461,55 @@ async function fetchPaginatedTracks(options: {
   return tracks;
 }
 
+// Pull the largest cover-art source URL out of a playlistV2 `images` block.
+// Editorial/algorithmic playlists expose a single rendered cover here; regular
+// playlists expose a 4-up mosaic — we just take the widest source either way.
+function imageUrlFromPlaylistImages(playlistMeta: Record<string, unknown> | null): string {
+  const images = toObject(playlistMeta?.images);
+  const items = Array.isArray(images?.items) ? images.items : [];
+  for (const item of items) {
+    const sources = Array.isArray(toObject(item)?.sources) ? (toObject(item)?.sources as unknown[]) : [];
+    const ranked = sources
+      .map((source) => {
+        const object = toObject(source);
+        return { url: toStringValue(object?.url), width: toFiniteNumber(object?.width) ?? 0 };
+      })
+      .filter((source) => source.url)
+      .sort((left, right) => right.width - left.width);
+    if (ranked[0]?.url) return ranked[0].url;
+  }
+  return "";
+}
+
+export type SpotifyPlaylistMetadata = { name: string; imageUrl: string; description: string };
+
+// Fetch just a playlist's display metadata (name, cover image, description) —
+// without paging through its tracks. Used to render curated-playlist cards.
+// Returns null on any failure so callers can fall back to static defaults.
+export async function fetchSpotifyPlaylistMetadata(
+  playlistId: string,
+  spotifyCookie?: string,
+): Promise<SpotifyPlaylistMetadata | null> {
+  try {
+    const metadata = await pathfinderQuery(
+      "fetchPlaylistMetadata",
+      { uri: `spotify:playlist:${playlistId}`, offset: 0, limit: 1 },
+      PATHFINDER_QUERIES.fetchPlaylistMetadata,
+      spotifyCookie,
+    );
+    const playlistMeta = toObject(toObject(metadata.data)?.playlistV2);
+    const name = toStringValue(playlistMeta?.name);
+    if (!name) return null;
+    return {
+      name,
+      imageUrl: imageUrlFromPlaylistImages(playlistMeta),
+      description: toStringValue(playlistMeta?.description),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchSpotifyPlaylistTracks(
   playlistId: string,
   spotifyCookie?: string,

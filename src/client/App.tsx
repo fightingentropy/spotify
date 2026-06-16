@@ -9,6 +9,7 @@ import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
 import NowPlayingSidebar from "@/components/NowPlayingSidebar";
 import { PlayerBar } from "@/components/PlayerBar";
+import { DiscoverQueueStager } from "@/client/DiscoverQueueStager";
 import PwaRegister from "@/components/PwaRegister";
 import { SpotifyIcon } from "@/components/icons/SpotifyIcon";
 import HomePage from "@/client/pages/HomePage";
@@ -306,6 +307,7 @@ function Shell() {
         </div>
       </main>
       <PlayerBar />
+      <DiscoverQueueStager />
       <MobileNav />
     </>
   );
