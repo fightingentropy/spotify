@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Download, Heart, ListMusic, Podcast, RadioTower, Upload } from "lucide-react";
+import { Download, Heart, ListMusic, Podcast, RadioTower, Ticket, Upload } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData, withAccountScope, type FeaturedPlaylistsPayload, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
@@ -87,6 +87,16 @@ export default function LibraryPage() {
             <div>
               <div className="text-[15px] leading-snug">Podcasts</div>
               <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Huberman Lab and Modern Wisdom</div>
+            </div>
+          </Link>
+
+          <Link to="/events" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
+            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#7c3aed] to-[#4c1d95] text-white">
+              <Ticket size={24} />
+            </div>
+            <div>
+              <div className="text-[15px] leading-snug">Live Events</div>
+              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Concerts &amp; venues near you</div>
             </div>
           </Link>
 

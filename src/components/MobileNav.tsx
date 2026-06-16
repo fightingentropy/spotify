@@ -63,6 +63,7 @@ const tabs = [
       path.startsWith("/downloads") ||
       path.startsWith("/radio") ||
       path.startsWith("/podcasts") ||
+      path.startsWith("/events") ||
       path.startsWith("/playlist"),
   },
 ] as const;

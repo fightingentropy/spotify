@@ -1,14 +1,9 @@
-// Live Events (concerts) for the Spotify-style "Live Events" screen.
+// Live Events (concerts) for the "Live Events" page.
 //
-// This is SAMPLE data for now (artist photos via Deezer's keyless image CDN). To go
-// live, point the screen at a real feed — Ticketmaster Discovery API is the natural
-// fit (free dev key required), proxied through the worker so the key stays
-// server-side. Map each `_embedded.events[i]` → LiveEvent:
-//   artists  ← _embedded.attractions[].name (or event.name)
-//   venue    ← `${_embedded.venues[0].name}, ${_embedded.venues[0].city.name}`
-//   date     ← dates.start.localDate
-//   imageUrl ← images[] (pick a ~640w)
-//   genre    ← classifications[0].genre.name
+// Live data comes from the worker's /api/events route (a Ticketmaster Discovery
+// proxy, key kept server-side). When that key is unset the route returns no
+// sections, so the page falls back to the sample list below to stay populated.
+// This mirrors mobile/src/lib/live-events.ts — keep the two in sync.
 
 export type LiveEvent = {
   id: string;

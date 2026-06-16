@@ -3935,16 +3935,16 @@ app.get("/api/events", async (c) => {
   };
 
   const [forYou, popular] = await Promise.all([fetchEvents("sort=date,asc"), fetchEvents("sort=relevance,desc")]);
-  // Cap each row at 12 distinct acts. Popular excludes only acts *visible* in
-  // "Just for you" — not its hidden tail — so a top act buried deep in the
-  // date-sorted list (e.g. Harry Styles) can still headline Popular.
-  const forYouDedup = dedupeByArtist(forYou, new Set<string>()).slice(0, 12);
-  const seen = new Set(forYouDedup.map(artistKey));
-  const popularDedup = dedupeByArtist(popular, seen).slice(0, 12);
+  // Cap each row at 12 distinct acts. Popular leads and is the canonical list
+  // (first pick of acts); "Just for you" then excludes acts *visible* in Popular
+  // — not its hidden tail — so a trending act soon on the calendar still leads.
+  const popularDedup = dedupeByArtist(popular, new Set<string>()).slice(0, 12);
+  const seen = new Set(popularDedup.map(artistKey));
+  const forYouDedup = dedupeByArtist(forYou, seen).slice(0, 12);
 
   const sections: { key: string; eyebrow: string; title: string; events: LiveEventDto[] }[] = [];
-  if (forYouDedup.length) sections.push({ key: "for-you", eyebrow: "Concerts we think you’ll like", title: "Just for you", events: forYouDedup });
   if (popularDedup.length) sections.push({ key: "popular", eyebrow: "What’s trending right now", title: `Popular in ${city}`, events: popularDedup });
+  if (forYouDedup.length) sections.push({ key: "for-you", eyebrow: "Concerts we think you’ll like", title: "Just for you", events: forYouDedup });
 
   return jsonCached(c, { sections });
 });

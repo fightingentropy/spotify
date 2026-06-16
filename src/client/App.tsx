@@ -23,6 +23,7 @@ const loadLikedPage = () => import("@/client/pages/LikedPage");
 const loadDownloadedPage = () => import("@/client/pages/DownloadedPage");
 const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPodcastsPage = () => import("@/client/pages/PodcastsPage");
+const loadEventsPage = () => import("@/client/pages/EventsPage");
 const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
@@ -37,6 +38,7 @@ const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadDownloadedPage,
   loadRadioPage,
   loadPodcastsPage,
+  loadEventsPage,
   loadPlaylistPage,
   loadUploadPage,
   loadSettingsPage,
@@ -53,6 +55,7 @@ const LikedPage = lazy(loadLikedPage);
 const DownloadedPage = lazy(loadDownloadedPage);
 const RadioPage = lazy(loadRadioPage);
 const PodcastsPage = lazy(loadPodcastsPage);
+const EventsPage = lazy(loadEventsPage);
 const PlaylistPage = lazy(loadPlaylistPage);
 const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -288,6 +291,7 @@ function Shell() {
           <Route path="/downloads" element={lazyRoute(<DownloadedPage />, "Loading downloads...")} />
           <Route path="/radio" element={lazyRoute(<RadioPage />, "Loading radio stations...")} />
           <Route path="/podcasts" element={lazyRoute(<PodcastsPage />, "Loading podcasts...")} />
+          <Route path="/events" element={lazyRoute(<EventsPage />, "Loading events...")} />
           <Route path="/playlist/:id" element={lazyRoute(<PlaylistPage />, "Loading playlist...")} />
           <Route path="/upload" element={lazyRoute(<UploadPage />, "Loading upload...")} />
           <Route path="/settings" element={lazyRoute(<SettingsPage />, "Loading settings...")} />
