@@ -15,6 +15,7 @@ type UiState = {
   queueOpen: boolean;
   sleepTimerOpen: boolean;
   profileMenuOpen: boolean;
+  createMenuOpen: boolean;
   trackActions: TrackActionsTarget;
   openNowPlaying: () => void;
   closeNowPlaying: () => void;
@@ -24,6 +25,8 @@ type UiState = {
   closeSleepTimer: () => void;
   openProfileMenu: () => void;
   closeProfileMenu: () => void;
+  openCreateMenu: () => void;
+  closeCreateMenu: () => void;
   openTrackActions: (target: NonNullable<TrackActionsTarget>) => void;
   closeTrackActions: () => void;
 };
@@ -33,6 +36,7 @@ export const useUiStore = create<UiState>((set) => ({
   queueOpen: false,
   sleepTimerOpen: false,
   profileMenuOpen: false,
+  createMenuOpen: false,
   trackActions: null,
   openNowPlaying: () => set({ nowPlayingOpen: true }),
   closeNowPlaying: () => set({ nowPlayingOpen: false }),
@@ -42,6 +46,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeSleepTimer: () => set({ sleepTimerOpen: false }),
   openProfileMenu: () => set({ profileMenuOpen: true }),
   closeProfileMenu: () => set({ profileMenuOpen: false }),
+  openCreateMenu: () => set({ createMenuOpen: true }),
+  closeCreateMenu: () => set({ createMenuOpen: false }),
   openTrackActions: (target) => set({ trackActions: target }),
   closeTrackActions: () => set({ trackActions: null }),
 }));

@@ -36,3 +36,13 @@ export function LibraryTabIcon({ active, color, size = 24 }: Props) {
     </Svg>
   );
 }
+
+// "Create" is an action (it opens the create sheet), not a selectable tab, so it
+// renders the same + glyph regardless of `active`.
+export function CreateTabIcon({ color, size = 24 }: Props) {
+  return (
+    <Svg viewBox="0 0 24 24" width={size} height={size}>
+      <Path d="M12 4.5v15M4.5 12h15" fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round" />
+    </Svg>
+  );
+}

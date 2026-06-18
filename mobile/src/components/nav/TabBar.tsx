@@ -4,16 +4,19 @@ import { usePathname, useRouter, type Href } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { PressableScale } from "@/components/ui/PressableScale";
-import { HomeTabIcon, LibraryTabIcon, SearchTabIcon } from "@/components/icons/TabIcons";
+import { CreateTabIcon, HomeTabIcon, LibraryTabIcon, SearchTabIcon } from "@/components/icons/TabIcons";
 import { selectionAsync } from "@/lib/haptics";
+import { useUiStore } from "@/store/ui";
 import { colors, layout } from "@/theme";
 
-type TabKey = "index" | "search" | "library";
+type TabKey = "index" | "search" | "library" | "create";
 
 const TABS: { key: TabKey; label: string; path: Href; Icon: typeof HomeTabIcon }[] = [
   { key: "index", label: "Home", path: "/", Icon: HomeTabIcon },
   { key: "search", label: "Search", path: "/search", Icon: SearchTabIcon },
   { key: "library", label: "Your Library", path: "/library", Icon: LibraryTabIcon },
+  // Create opens the create-menu sheet instead of navigating (handled in onPress).
+  { key: "create", label: "Create", path: "/", Icon: CreateTabIcon },
 ];
 
 // Auth screens take over the whole screen — no tab bar there.
@@ -37,6 +40,7 @@ export function TabBar() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
   const router = useRouter();
+  const openCreateMenu = useUiStore((s) => s.openCreateMenu);
 
   if (HIDDEN_ON.has(pathname)) return null;
 
@@ -53,6 +57,12 @@ export function TabBar() {
             const isActive = active === tab.key;
             const onPress = () => {
               void selectionAsync();
+              // Create isn't a destination — it opens the create-menu sheet over
+              // whatever's on screen, leaving the active tab untouched.
+              if (tab.key === "create") {
+                openCreateMenu();
+                return;
+              }
               // A tab tap should return to that tab's root. Sub-screens (a playlist,
               // Liked, …) are PUSHED on the root stack on top of the tabs, so first pop
               // the stack back to the tabs: dismissAll() dispatches POP_TO_TOP, which

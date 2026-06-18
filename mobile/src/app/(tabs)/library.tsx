@@ -2,7 +2,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { ArrowDownToLine, ArrowDownUp, Heart, LayoutGrid, List as ListIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react-native";
+import { ArrowDownToLine, ArrowDownUp, Download, Heart, LayoutGrid, List as ListIcon, type LucideIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -104,6 +104,62 @@ function GridCell({ item, size }: { item: LibItem; size: number }) {
   );
 }
 
+// The "Add …" shortcuts pinned to the bottom of Your Library (Spotify parity): a
+// hollow chip + label, rendered as grid tiles (image) or list rows to match the
+// current view. Artists is a circle; the rest are rounded squares.
+type AddAction = { key: string; label: string; shape: "circle" | "square"; Icon: LucideIcon; onPress: () => void };
+
+function LibraryAddActions({ view, cellWidth, actions }: { view: ViewMode; cellWidth: number; actions: AddAction[] }) {
+  if (view === "grid") {
+    return (
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: GRID_GAP, paddingHorizontal: 16, paddingTop: 10 }}>
+        {actions.map((a) => (
+          <PressableScale key={a.key} scaleTo={0.97} onPress={a.onPress} style={{ width: cellWidth }}>
+            <View
+              style={{
+                width: cellWidth,
+                height: cellWidth,
+                borderRadius: a.shape === "circle" ? cellWidth / 2 : 6,
+                backgroundColor: colors.card,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <a.Icon size={Math.round(cellWidth * 0.34)} color={colors.iconIdle} />
+            </View>
+            <Text numberOfLines={2} className="mt-1.5 text-[13px] font-semibold leading-4" style={{ color: colors.foreground }}>
+              {a.label}
+            </Text>
+          </PressableScale>
+        ))}
+      </View>
+    );
+  }
+  return (
+    <View className="pt-1">
+      {actions.map((a) => (
+        <PressableScale key={a.key} scaleTo={1} onPress={a.onPress} className="flex-row items-center gap-3 px-4 py-2">
+          <View
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: a.shape === "circle" ? 28 : 6,
+              backgroundColor: colors.card,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <a.Icon size={24} color={colors.iconIdle} />
+          </View>
+          <Text className="text-base font-medium" style={{ color: colors.foreground }}>
+            {a.label}
+          </Text>
+        </PressableScale>
+      ))}
+    </View>
+  );
+}
+
 export default function LibraryScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -185,6 +241,13 @@ export default function LibraryScreen() {
 
   const showPlaylistSkeleton = loading && data.playlists.length === 0 && filter !== "podcasts";
 
+  const addActions: AddAction[] = [
+    { key: "add-artists", label: "Add artists", shape: "circle", Icon: Plus, onPress: () => router.push("/search") },
+    { key: "add-podcasts", label: "Add podcasts", shape: "square", Icon: Plus, onPress: () => router.push("/podcasts") },
+    { key: "add-events", label: "Add events & venues", shape: "square", Icon: Plus, onPress: () => router.push("/events") },
+    { key: "import", label: "Import your music", shape: "square", Icon: Download, onPress: () => router.push("/upload") },
+  ];
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ paddingBottom: CONTENT_BOTTOM_INSET, paddingTop: 12 }}>
@@ -257,6 +320,12 @@ export default function LibraryScreen() {
           <Text className="px-4 py-4 text-sm" style={{ color: colors.muted }}>
             No podcasts yet.
           </Text>
+        ) : null}
+
+        {filter === "all" ? (
+          <View className="mt-2">
+            <LibraryAddActions view={view} cellWidth={cellWidth} actions={addActions} />
+          </View>
         ) : null}
       </ScrollView>
     </Screen>
