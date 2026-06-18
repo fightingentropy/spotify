@@ -1,6 +1,8 @@
 import { create } from "zustand";
+import { getIsOnline } from "@/lib/connectivity";
 import { songKind } from "@/lib/player-song";
 import { storage } from "@/lib/storage";
+import { useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
 export type { PlayerSong } from "@/types/player";
@@ -50,6 +52,13 @@ type PlayerState = {
   // false when nothing else in the queue is playable, so the caller can stop
   // instead of churning. Reuses advanceToIndex's shuffle/history bookkeeping.
   skipToPlayable: (canPlay: (song: PlayerSong) => boolean) => boolean;
+  // Prune the live queue down to the songs satisfying `canPlay` (e.g. downloaded
+  // while offline), so subsequent advances can't surface an unplayable track.
+  // The currently-playing song keeps its exact identity when it survives, so the
+  // engine does NOT reload it — only the rest of the queue is swapped. No-op when
+  // every song already passes (nothing to prune) or none does (let the caller's
+  // advance stop cleanly rather than emptying the queue). Returns true if pruned.
+  retainPlayable: (canPlay: (song: PlayerSong) => boolean) => boolean;
   setVolume: (v: number) => void;
   toggleMute: () => void;
   toggleShuffle: () => void;
@@ -336,6 +345,17 @@ export function sleepTimerRemainingMinutes(endsAt: number, now = Date.now()): nu
   return Math.max(1, Math.ceil((endsAt - now) / 60_000));
 }
 
+// Offline, collapse the live queue to downloaded songs before an advance so
+// next()/previous() can only land on a track we can actually play — never a
+// flash through an un-streamable one. Online (the default) leaves the queue
+// untouched, and a fully-downloaded or fully-undownloaded queue is a no-op.
+// Hoisted so next()/previous() (defined in the store factory below) can call it.
+function pruneQueueWhenOffline(): void {
+  if (getIsOnline()) return;
+  const isDownloaded = useOfflineStore.getState().isDownloaded;
+  usePlayerStore.getState().retainPlayable((song) => isDownloaded(song.id));
+}
+
 export const usePlayerStore = create<PlayerState>((set, get) => ({
   queue: [],
   currentIndex: -1,
@@ -448,6 +468,64 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     get().advanceToIndex(target);
     return true;
   },
+  retainPlayable: (canPlay) => {
+    let pruned = false;
+    set((s) => {
+      const n = s.queue.length;
+      if (n === 0) return s;
+      const kept: number[] = [];
+      for (let i = 0; i < n; i += 1) {
+        if (canPlay(s.queue[i])) kept.push(i);
+      }
+      // Nothing to do if every song is already playable, or none is (emptying a
+      // live queue would be worse than letting the engine's reactive guard stop).
+      if (kept.length === n || kept.length === 0) return s;
+
+      const oldToNew = new Map<number, number>();
+      kept.forEach((oldIdx, newIdx) => oldToNew.set(oldIdx, newIdx));
+      const queue = kept.map((i) => s.queue[i]);
+
+      // Map the current song forward. If it survived the prune, keep the exact
+      // object so currentSong identity is unchanged → the engine does NOT reload
+      // it and the track keeps playing while the rest of the queue is swapped to
+      // downloads. If the current song itself can't play, move to the nearest
+      // kept song at/after it (wrapping) — a single deliberate hop to a playable
+      // track, never a flash through an unplayable one.
+      let currentIndex: number;
+      let currentSong: PlayerSong | null;
+      const mappedCurrent = oldToNew.get(s.currentIndex);
+      if (mappedCurrent !== undefined) {
+        currentIndex = mappedCurrent;
+        currentSong = s.currentSong;
+      } else {
+        const forward = kept.find((i) => i > s.currentIndex);
+        currentIndex = oldToNew.get(forward ?? kept[0]) as number;
+        currentSong = queue[currentIndex];
+      }
+
+      const remap = (indices: number[]): number[] =>
+        indices.reduce<number[]>((acc, i) => {
+          const mapped = oldToNew.get(i);
+          if (mapped !== undefined) acc.push(mapped);
+          return acc;
+        }, []);
+
+      pruned = true;
+      return {
+        ...s,
+        queue,
+        currentIndex,
+        currentSong,
+        // Keep back/forward navigation working across the smaller queue; rebuild
+        // the shuffle pool fresh so shuffle keeps cycling the downloaded subset
+        // instead of risking an empty pool that would stop playback early.
+        playHistory: remap(s.playHistory),
+        playFuture: remap(s.playFuture),
+        shuffleRemaining: s.shuffle ? createShuffleRemaining(queue.length, currentIndex) : [],
+      };
+    });
+    return pruned;
+  },
   replaceSong: (song) =>
     set((s) => {
       // Preserve the original queue array reference when nothing actually
@@ -538,7 +616,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
   toggle: () => set((s) => ({ isPlaying: !s.isPlaying })),
-  next: () =>
+  next: () => {
+    pruneQueueWhenOffline();
     set((s) => {
       if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
       if (s.shuffle) {
@@ -588,8 +667,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
       const idx = s.currentIndex + 1;
       return { ...s, currentIndex: idx, currentSong: s.queue[idx], isPlaying: true };
-    }),
-  previous: () =>
+    });
+  },
+  previous: () => {
+    pruneQueueWhenOffline();
     set((s) => {
       if (s.queue.length === 0) return s;
       if (s.shuffle) {
@@ -615,7 +696,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
       const idx = s.currentIndex - 1;
       return { ...s, currentIndex: idx, currentSong: s.queue[idx], isPlaying: true };
-    }),
+    });
+  },
   setVolume: (v) => {
     const volume = Math.max(0, Math.min(1, v));
     writeStoredVolume(volume);
