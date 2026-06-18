@@ -2,7 +2,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { ArrowDownUp, Download, Heart, LayoutGrid, List as ListIcon, type LucideIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react-native";
+import { ArrowDownUp, Download, Heart, LayoutGrid, List as ListIcon, type LucideIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket } from "lucide-react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -11,6 +11,8 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { type LibraryPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { PODCAST_SHOWS } from "@/lib/podcasts";
+import { useLibraryPinsStore } from "@/store/library-pins";
+import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 type Filter = "all" | "playlists" | "podcasts";
@@ -24,6 +26,9 @@ type LibItem = {
   title: string;
   subtitle: string;
   pinned?: boolean;
+  // Whether long-pressing the row offers Pin/Unpin (content items, not the
+  // navigation shortcuts like Radio / Upload / Live Events).
+  pinnable?: boolean;
   onPress: () => void;
 };
 
@@ -78,9 +83,15 @@ function SubtitleLine({ pinned, subtitle, small }: { pinned?: boolean; subtitle:
   );
 }
 
-function ListRow({ item }: { item: LibItem }) {
+function ListRow({ item, onLongPress }: { item: LibItem; onLongPress?: () => void }) {
   return (
-    <PressableScale scaleTo={1} onPress={item.onPress} className="flex-row items-center gap-3 px-4 py-2">
+    <PressableScale
+      scaleTo={1}
+      onPress={item.onPress}
+      onLongPress={onLongPress}
+      delayLongPress={300}
+      className="flex-row items-center gap-3 px-4 py-2"
+    >
       {item.cover(56)}
       <View className="min-w-0 flex-1">
         <Text numberOfLines={1} className="text-base font-medium" style={{ color: colors.foreground }}>
@@ -92,9 +103,9 @@ function ListRow({ item }: { item: LibItem }) {
   );
 }
 
-function GridCell({ item, size }: { item: LibItem; size: number }) {
+function GridCell({ item, size, onLongPress }: { item: LibItem; size: number; onLongPress?: () => void }) {
   return (
-    <PressableScale scaleTo={0.97} onPress={item.onPress} style={{ width: size }}>
+    <PressableScale scaleTo={0.97} onPress={item.onPress} onLongPress={onLongPress} delayLongPress={300} style={{ width: size }}>
       {item.cover(size)}
       <Text numberOfLines={2} className="mt-1.5 text-[13px] font-semibold leading-4" style={{ color: colors.foreground }}>
         {item.title}
@@ -171,6 +182,8 @@ export default function LibraryScreen() {
   );
   const [filter, setFilter] = useState<Filter>("all");
   const [view, setView] = useState<ViewMode>("list");
+  const pinnedKeys = useLibraryPinsStore((s) => s.pinned);
+  const openLibraryActions = useUiStore((s) => s.openLibraryActions);
 
   const cellWidth = Math.floor((width - 32 - GRID_GAP * 2) / 3);
 
@@ -181,7 +194,7 @@ export default function LibraryScreen() {
       cover: gradientCover(["#4c1d95", colors.emerald], (s) => <Heart size={s} color="#fff" fill="#fff" />),
       title: "Liked Songs",
       subtitle: `Playlist • ${owner}`,
-      pinned: true,
+      pinnable: true,
       onPress: () => router.push("/liked"),
     };
     const radio: LibItem = {
@@ -198,13 +211,6 @@ export default function LibraryScreen() {
       subtitle: "Shows & episodes",
       onPress: () => router.push("/podcasts"),
     };
-    const upload: LibItem = {
-      key: "upload",
-      cover: gradientCover(["#374151", "#6b7280"], (s) => <Upload size={s} color="#fff" />),
-      title: "Upload",
-      subtitle: "Add music from Spotify or a file",
-      onPress: () => router.push("/upload"),
-    };
     const events: LibItem = {
       key: "events",
       cover: gradientCover(["#7c3aed", "#4c1d95"], (s) => <Ticket size={s} color="#fff" />),
@@ -217,6 +223,7 @@ export default function LibraryScreen() {
       cover: imageCover(pl.imageUrl),
       title: pl.name,
       subtitle: `Playlist • ${owner}`,
+      pinnable: true,
       onPress: () => router.push(`/playlist/${pl.id}`),
     }));
     const shows: LibItem[] = PODCAST_SHOWS.map((show) => ({
@@ -224,13 +231,30 @@ export default function LibraryScreen() {
       cover: imageCover(show.imageUrl),
       title: show.title,
       subtitle: `Podcast • ${show.author}`,
+      pinnable: true,
       onPress: () => router.push(`/podcasts/${show.id}`),
     }));
 
     if (filter === "playlists") return [liked, ...playlists];
     if (filter === "podcasts") return shows;
-    return [liked, radio, podcastsShortcut, events, upload, ...playlists];
+    return [liked, radio, podcastsShortcut, events, ...playlists];
   }, [filter, data.playlists, user, router]);
+
+  // Pinned items float to the top in pin order (newest first); everything else
+  // keeps its natural order. `pinned` drives the green pin indicator on the row.
+  const ordered = useMemo(() => {
+    const rank = new Map(pinnedKeys.map((k, i) => [k, i] as const));
+    const pinnedItems = items
+      .filter((it) => rank.has(it.key))
+      .sort((a, b) => (rank.get(a.key) ?? 0) - (rank.get(b.key) ?? 0));
+    const rest = items.filter((it) => !rank.has(it.key));
+    return [...pinnedItems, ...rest].map((it) => ({ ...it, pinned: rank.has(it.key) }));
+  }, [items, pinnedKeys]);
+
+  const handleLongPress = (item: LibItem) => {
+    if (!item.pinnable) return;
+    openLibraryActions({ key: item.key, title: item.title, subtitle: item.subtitle, cover: item.cover });
+  };
 
   const showPlaylistSkeleton = loading && data.playlists.length === 0 && filter !== "podcasts";
 
@@ -287,12 +311,12 @@ export default function LibraryScreen() {
 
         {view === "grid" ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: GRID_GAP, paddingHorizontal: 16, paddingTop: 10 }}>
-            {items.map((item) => (
-              <GridCell key={item.key} item={item} size={cellWidth} />
+            {ordered.map((item) => (
+              <GridCell key={item.key} item={item} size={cellWidth} onLongPress={() => handleLongPress(item)} />
             ))}
           </View>
         ) : (
-          items.map((item) => <ListRow key={item.key} item={item} />)
+          ordered.map((item) => <ListRow key={item.key} item={item} onLongPress={() => handleLongPress(item)} />)
         )}
 
         {showPlaylistSkeleton && view === "list" ? (

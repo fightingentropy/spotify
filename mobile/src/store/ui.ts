@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { create } from "zustand";
 import type { PlayerSong } from "@/types/player";
 
@@ -10,6 +11,15 @@ export type TrackActionsTarget = {
   showLike: boolean;
 } | null;
 
+// Long-press actions for a Your Library row (pin / unpin). `cover` is the same
+// size-aware render fn LibraryScreen builds, reused for the sheet's header art.
+export type LibraryActionsTarget = {
+  key: string;
+  title: string;
+  subtitle: string;
+  cover: (size: number) => ReactNode;
+} | null;
+
 type UiState = {
   nowPlayingOpen: boolean;
   queueOpen: boolean;
@@ -17,6 +27,7 @@ type UiState = {
   profileMenuOpen: boolean;
   createMenuOpen: boolean;
   trackActions: TrackActionsTarget;
+  libraryActions: LibraryActionsTarget;
   openNowPlaying: () => void;
   closeNowPlaying: () => void;
   openQueue: () => void;
@@ -29,6 +40,8 @@ type UiState = {
   closeCreateMenu: () => void;
   openTrackActions: (target: NonNullable<TrackActionsTarget>) => void;
   closeTrackActions: () => void;
+  openLibraryActions: (target: NonNullable<LibraryActionsTarget>) => void;
+  closeLibraryActions: () => void;
 };
 
 export const useUiStore = create<UiState>((set) => ({
@@ -38,6 +51,7 @@ export const useUiStore = create<UiState>((set) => ({
   profileMenuOpen: false,
   createMenuOpen: false,
   trackActions: null,
+  libraryActions: null,
   openNowPlaying: () => set({ nowPlayingOpen: true }),
   closeNowPlaying: () => set({ nowPlayingOpen: false }),
   openQueue: () => set({ queueOpen: true }),
@@ -50,4 +64,6 @@ export const useUiStore = create<UiState>((set) => ({
   closeCreateMenu: () => set({ createMenuOpen: false }),
   openTrackActions: (target) => set({ trackActions: target }),
   closeTrackActions: () => set({ trackActions: null }),
+  openLibraryActions: (target) => set({ libraryActions: target }),
+  closeLibraryActions: () => set({ libraryActions: null }),
 }));
