@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { StyleSheet, useWindowDimensions, View } from "react-native";
+import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -100,15 +100,21 @@ export function Sheet({
   if (!mounted) return null;
 
   return (
-    <View style={[StyleSheet.absoluteFill, { zIndex, elevation: zIndex, justifyContent: "flex-end" }]}>
-      {/* backdrop: tap to close */}
+    // Safety net: the overlay only swallows touches while actually open. The moment
+    // `visible` is false we set pointerEvents="none" so the (now transparent,
+    // off-screen) layer lets every touch through to the app underneath — even if the
+    // exit animation is interrupted and the `finished`-gated unmount below never
+    // fires. Without this, an interrupted close left an invisible full-screen layer
+    // that froze every control (you could still hear audio but couldn't tap anything).
+    <View
+      pointerEvents={visible ? "auto" : "none"}
+      style={[StyleSheet.absoluteFill, { zIndex, elevation: zIndex, justifyContent: "flex-end" }]}
+    >
+      {/* backdrop: tap to close. A real Pressable (not raw onTouchEnd, which fired for
+          any stray touch ending here — including the tail of the gesture that opened
+          the sheet, dismissing it the instant it appeared). */}
       <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: colors.backdrop }, backdropStyle]}>
-        <View
-          style={{ flex: 1 }}
-          onTouchEnd={onClose}
-          accessibilityRole="button"
-          accessibilityLabel="Close"
-        />
+        <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
       </Animated.View>
 
       {/* panel */}
