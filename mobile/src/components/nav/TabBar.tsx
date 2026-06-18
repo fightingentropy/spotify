@@ -7,6 +7,7 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { CreateTabIcon, HomeTabIcon, LibraryTabIcon, SearchTabIcon } from "@/components/icons/TabIcons";
 import { selectionAsync } from "@/lib/haptics";
 import { useUiStore } from "@/store/ui";
+import { usePrefsStore } from "@/store/prefs";
 import { colors, layout } from "@/theme";
 
 type TabKey = "index" | "search" | "library" | "create";
@@ -41,10 +42,13 @@ export function TabBar() {
   const pathname = usePathname();
   const router = useRouter();
   const openCreateMenu = useUiStore((s) => s.openCreateMenu);
+  const showCreateTab = usePrefsStore((s) => s.showCreateTab);
 
   if (HIDDEN_ON.has(pathname)) return null;
 
   const active = activeTab(pathname);
+  // Create can be hidden from Settings; when off, the other tabs spread evenly.
+  const tabs = showCreateTab ? TABS : TABS.filter((tab) => tab.key !== "create");
 
   return (
     <View style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
@@ -53,7 +57,7 @@ export function TabBar() {
         style={{ paddingBottom: insets.bottom }}
       >
         <BlurView intensity={24} tint="dark" style={{ height: layout.mobileNavHeight, flexDirection: "row" }}>
-          {TABS.map((tab) => {
+          {tabs.map((tab) => {
             const isActive = active === tab.key;
             const onPress = () => {
               void selectionAsync();

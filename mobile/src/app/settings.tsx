@@ -1,10 +1,11 @@
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Switch, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
-import { ArrowDownToLine, ChevronRight, Info, Languages, User, Volume2 } from "lucide-react-native";
+import { ArrowDownToLine, ChevronRight, Info, Languages, Plus, User, Volume2 } from "lucide-react-native";
 import { Screen } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { useAuth } from "@/lib/auth";
+import { usePrefsStore } from "@/store/prefs";
 import { colors } from "@/theme";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
@@ -37,9 +38,41 @@ function SettingsRow({
   );
 }
 
+// Same row layout, but trailing Switch instead of a chevron (no navigation).
+function SettingsToggleRow({
+  Icon,
+  title,
+  subtitle,
+  value,
+  onValueChange,
+}: {
+  Icon: typeof User;
+  title: string;
+  subtitle: string;
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+}) {
+  return (
+    <View className="flex-row items-center gap-4 px-4 py-3.5">
+      <Icon size={24} color={colors.foreground} />
+      <View className="min-w-0 flex-1">
+        <Text className="text-[17px] font-semibold" style={{ color: colors.foreground }}>
+          {title}
+        </Text>
+        <Text numberOfLines={1} className="mt-0.5 text-[13px]" style={{ color: colors.muted }}>
+          {subtitle}
+        </Text>
+      </View>
+      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.emerald, false: "#3a3a3a" }} thumbColor="#fff" />
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const { user, signOut } = useAuth();
+  const showCreateTab = usePrefsStore((s) => s.showCreateTab);
+  const setShowCreateTab = usePrefsStore((s) => s.setShowCreateTab);
 
   return (
     <Screen topInset={false}>
@@ -64,6 +97,14 @@ export default function SettingsScreen() {
           onPress={() => router.push("/settings/storage")}
         />
         <SettingsRow Icon={Info} title="About" subtitle={`Version ${APP_VERSION}`} onPress={() => router.push("/settings/about")} />
+
+        <SettingsToggleRow
+          Icon={Plus}
+          title="Create button"
+          subtitle="Show the + in the bottom navigation bar"
+          value={showCreateTab}
+          onValueChange={setShowCreateTab}
+        />
 
         <View className="mt-10 items-center">
           <PressableScale

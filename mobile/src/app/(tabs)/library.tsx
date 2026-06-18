@@ -2,7 +2,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { ArrowDownToLine, ArrowDownUp, Download, Heart, LayoutGrid, List as ListIcon, type LucideIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react-native";
+import { ArrowDownUp, Download, Heart, LayoutGrid, List as ListIcon, type LucideIcon, Music, Pin, Plus, Podcast, RadioTower, Search, Ticket, Upload } from "lucide-react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -184,13 +184,6 @@ export default function LibraryScreen() {
       pinned: true,
       onPress: () => router.push("/liked"),
     };
-    const downloads: LibItem = {
-      key: "downloads",
-      cover: gradientCover(["#1e3a8a", "#3b82f6"], (s) => <ArrowDownToLine size={s} color="#fff" />),
-      title: "Downloads",
-      subtitle: "Available offline",
-      onPress: () => router.push("/downloads"),
-    };
     const radio: LibItem = {
       key: "radio",
       cover: gradientCover(["#0e7490", "#22d3ee"], (s) => <RadioTower size={s} color="#fff" />),
@@ -236,7 +229,7 @@ export default function LibraryScreen() {
 
     if (filter === "playlists") return [liked, ...playlists];
     if (filter === "podcasts") return shows;
-    return [liked, downloads, radio, podcastsShortcut, events, upload, ...playlists];
+    return [liked, radio, podcastsShortcut, events, upload, ...playlists];
   }, [filter, data.playlists, user, router]);
 
   const showPlaylistSkeleton = loading && data.playlists.length === 0 && filter !== "podcasts";
