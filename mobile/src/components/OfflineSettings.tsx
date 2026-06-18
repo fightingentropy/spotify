@@ -169,6 +169,12 @@ export function OfflineSettings() {
     };
   }, [records]);
   const activeProgress = downloadingKey ? progressMap[downloadingKey] ?? 0 : undefined;
+  // Overall batch progress for the "Downloading N songs…" row: completed songs
+  // (plus the in-flight song's byte fraction) over the total being downloaded.
+  // The per-song byte fraction alone read ~0% because each small audio file
+  // flips 0→100 almost instantly — this reflects the real "243 of 1349 done".
+  const totalBatch = downloaded + active;
+  const overallProgress = totalBatch > 0 ? (downloaded + (activeProgress ?? 0)) / totalBatch : 0;
 
   const freeBytes = disk?.free;
   const usedByDownloads = disk?.usedByDownloads ?? storageBytes;
@@ -253,9 +259,9 @@ export function OfflineSettings() {
             first
             icon={ArrowDownToLine}
             iconColor={colors.emerald}
-            leading={<DownloadProgressRing size={18} strokeWidth={2} progress={activeProgress} />}
+            leading={<DownloadProgressRing size={18} strokeWidth={2} progress={overallProgress} />}
             title={`Downloading ${active} ${active === 1 ? "song" : "songs"}…`}
-            value={activeProgress != null ? `${Math.round(activeProgress * 100)}%` : undefined}
+            value={`${Math.round(overallProgress * 100)}%`}
           />
         ) : null}
 
