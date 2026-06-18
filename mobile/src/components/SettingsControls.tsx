@@ -31,13 +31,17 @@ export function FooterButton({
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
-        gap: 16,
+        gap: 12,
         paddingHorizontal: 16,
         minHeight: 52,
         opacity: disabled || busy ? 0.5 : pressed ? 0.6 : 1,
       })}
     >
-      {busy ? <ActivityIndicator size="small" color={fg} /> : <Icon size={22} color={fg} />}
+      {busy ? (
+        <ActivityIndicator size="small" color={fg} style={{ width: 18 }} />
+      ) : (
+        <Icon size={18} color={fg} />
+      )}
       <Text style={{ color: fg, fontSize: 16, fontWeight: "600" }}>{label}</Text>
     </Pressable>
   );
