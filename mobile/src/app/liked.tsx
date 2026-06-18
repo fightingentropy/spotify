@@ -1,8 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import { ArrowDownCircle, Heart, Play, Shuffle } from "lucide-react-native";
+import { Heart, Play, Shuffle } from "lucide-react-native";
+import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { EmptyState, ErrorText, SignedOutPrompt } from "@/components/ui/States";
@@ -10,7 +11,6 @@ import { type LikedPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
-import { useOfflineStore } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
 
@@ -27,18 +27,11 @@ export default function LikedScreen() {
     mergeInitialLikes(data.likedSongIds);
   }, [mergeInitialLikes, data.likedSongIds]);
 
-  const queueDownloads = useOfflineStore((s) => s.queueDownloads);
-  const isDownloaded = useOfflineStore((s) => s.isDownloaded);
-  const records = useOfflineStore((s) => s.records); // subscribe so the download icon re-renders as files land
   const shuffle = usePlayerStore((s) => s.shuffle);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
 
   const songs = data.songs;
   const count = songs.length;
-  const allDownloaded = useMemo(
-    () => count > 0 && songs.every((s) => isDownloaded(s.id)),
-    [songs, count, isDownloaded, records],
-  );
 
   if (status === "unauthenticated") {
     return (
@@ -88,21 +81,7 @@ export default function LikedScreen() {
         style={{ backgroundColor: colors.background }}
       >
         <View className="flex-row items-center" style={{ gap: 22 }}>
-          {count > 0 ? (
-            <PressableScale
-              onPress={() => void queueDownloads(songs, "liked")}
-              hitSlop={8}
-              accessibilityLabel={allDownloaded ? "Downloaded" : "Download all"}
-            >
-              <View>
-                <ArrowDownCircle
-                  size={30}
-                  color={allDownloaded ? "#000" : colors.iconIdle}
-                  fill={allDownloaded ? colors.emerald : "transparent"}
-                />
-              </View>
-            </PressableScale>
-          ) : null}
+          {count > 0 ? <BatchDownloadButton songs={songs} scope="liked" size={30} /> : null}
           <PressableScale onPress={toggleShuffle} hitSlop={8} accessibilityLabel="Toggle shuffle">
             <View>
               <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />

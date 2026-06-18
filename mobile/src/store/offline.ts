@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import { create } from "zustand";
@@ -184,6 +185,10 @@ type OfflineState = {
   verificationError: string | null;
   // Bytes occupied by ready downloads (refreshed by verifyDownloads/refreshStorage).
   storageBytes: number;
+  // Live download fraction (0..1) per record key, only while status is
+  // "downloading". Ephemeral + high-frequency — never written to SQLite. Drives
+  // the Spotify-style fill ring on the download buttons.
+  progress: Record<string, number>;
   setAutoDownloadLiked: (enabled: boolean) => void;
   queueDownloads: (songs: PlayerSong[], scope: DownloadScope) => Promise<void>;
   unpinScope: (songId: string, scope: DownloadScope) => Promise<void>;
@@ -232,8 +237,30 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     void dbUpsertRow(recordToRow(record)).catch(() => {});
   };
 
+  // Live progress (0..1) for the fill ring. Throttled to ~2% steps (plus a
+  // guaranteed emit at 1.0) so a multi-MB download triggers ~50 re-renders, not
+  // thousands. Kept in a plain closure map so the throttle survives re-renders.
+  const lastEmit: Record<string, number> = {};
+  const setProgress = (key: string, frac: number) => {
+    const clamped = frac < 0 ? 0 : frac > 1 ? 1 : frac;
+    const prev = lastEmit[key];
+    if (clamped !== 1 && prev !== undefined && Math.abs(clamped - prev) < 0.02) return;
+    lastEmit[key] = clamped;
+    set((s) => ({ progress: { ...s.progress, [key]: clamped } }));
+  };
+  const clearProgress = (key: string) => {
+    delete lastEmit[key];
+    set((s) => {
+      if (!(key in s.progress)) return {} as Partial<OfflineState>;
+      const next = { ...s.progress };
+      delete next[key];
+      return { progress: next };
+    });
+  };
+
   const removeRecord = async (record: OfflineDownloadRecord) => {
     const key = keyFor(record.accountScope, record.songId);
+    clearProgress(key);
     set((s) => {
       const next = { ...s.records };
       delete next[key];
@@ -265,13 +292,29 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           (r) => r.accountScope === accountScope && r.status === "queued",
         );
         if (!queued) break;
+        const progressKey = keyFor(accountScope, queued.songId);
         persist({ ...queued, status: "downloading", updatedAt: Date.now() });
+        setProgress(progressKey, 0);
         try {
           const dir = `${OFFLINE_DIR}${safeName(queued.songId)}/`;
           await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
           const audioExt = extFromUrl(queued.song.audioUrl, ".audio");
           const audioPath = `${dir}audio${audioExt}`;
-          await FileSystem.downloadAsync(toAbsoluteApiUrl(queued.song.audioUrl), audioPath);
+          // Audio is ~all the bytes (cover/lyrics are tiny), so its byte stream
+          // drives the fill ring. createDownloadResumable gives us the progress
+          // callback that downloadAsync lacks.
+          const resumable = FileSystem.createDownloadResumable(
+            toAbsoluteApiUrl(queued.song.audioUrl),
+            audioPath,
+            {},
+            ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+              if (totalBytesExpectedToWrite > 0) {
+                setProgress(progressKey, totalBytesWritten / totalBytesExpectedToWrite);
+              }
+            },
+          );
+          await resumable.downloadAsync();
+          setProgress(progressKey, 1);
 
           let coverPath: string | undefined;
           if (queued.song.imageUrl) {
@@ -293,9 +336,11 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
 
           // The record may have gained/lost scopes while downloading; re-read.
           const latest = get().records[keyFor(accountScope, queued.songId)];
+          clearProgress(progressKey);
           if (!latest) continue; // unpinned mid-download
           persist({ ...latest, status: "ready", audioPath, coverPath, lyricsPath, updatedAt: Date.now(), error: undefined });
         } catch (e) {
+          clearProgress(progressKey);
           const latest = get().records[keyFor(accountScope, queued.songId)];
           if (latest) persist({ ...latest, status: "error", updatedAt: Date.now(), error: e instanceof Error ? e.message : "Download failed" });
         }
@@ -320,6 +365,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
   return {
     autoDownloadLiked: storage.getItem(AUTO_DOWNLOAD_KEY) === "1",
     records: {},
+    progress: {},
     hydrated: false,
     syncStatus: "idle",
     pendingMutations: countPendingMutations(),
@@ -344,8 +390,18 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         const key = keyFor(accountScope, song.id);
         const existing = get().records[key];
         if (existing) {
-          if (!existing.scopes.includes(scope)) {
-            persist({ ...existing, scopes: [...existing.scopes, scope], updatedAt: Date.now() });
+          const addScope = !existing.scopes.includes(scope);
+          // A previously-failed download should retry when re-tapped, not sit
+          // stuck on "error" (matches the per-song button + "Download all").
+          const requeue = existing.status === "error";
+          if (addScope || requeue) {
+            persist({
+              ...existing,
+              scopes: addScope ? [...existing.scopes, scope] : existing.scopes,
+              status: requeue ? "queued" : existing.status,
+              error: requeue ? undefined : existing.error,
+              updatedAt: Date.now(),
+            });
           }
           continue;
         }
@@ -526,9 +582,21 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
 
     clearDownloads: async () => {
       const records = Object.values(get().records).filter((r) => r.accountScope === accountScope);
-      for (const record of records) {
-        await removeRecord(record);
-      }
+      // Drop everything from memory in ONE update first: the pump's next lookup
+      // then finds nothing queued and stops immediately (no race with a large
+      // in-flight queue). DB rows + files are torn down in the background so the
+      // UI resets instantly rather than awaiting hundreds of file deletes.
+      const keys = records.map((r) => keyFor(r.accountScope, r.songId));
+      set((s) => {
+        const nextRecords = { ...s.records };
+        const nextProgress = { ...s.progress };
+        for (const key of keys) {
+          delete nextRecords[key];
+          delete nextProgress[key];
+        }
+        return { records: nextRecords, progress: nextProgress };
+      });
+      for (const key of keys) delete lastEmit[key];
       set({
         verificationStatus: "idle",
         verificationCheckedAt: null,
@@ -536,6 +604,15 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         missingDownloads: 0,
         verificationError: null,
       });
+      void (async () => {
+        for (const record of records) {
+          await dbDeleteRow(keyFor(record.accountScope, record.songId)).catch(() => {});
+          await FileSystem.deleteAsync(`${OFFLINE_DIR}${safeName(record.songId)}/`, { idempotent: true }).catch(
+            () => {},
+          );
+        }
+        void refreshStorage();
+      })();
       void refreshStorage();
     },
 
@@ -592,6 +669,9 @@ export function initOfflineSync(): () => void {
     previous = next;
     if (cameToForeground) {
       void useOfflineStore.getState().syncOfflineMutations();
+      // Resume any downloads iOS suspended while we were backgrounded. An empty
+      // batch is a no-op that still kicks the serial pump for queued rows.
+      void useOfflineStore.getState().queueDownloads([], "home");
     }
   });
   return () => subscription.remove();
@@ -610,6 +690,49 @@ export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong {
     networkImageUrl: song.networkImageUrl ?? song.imageUrl,
     lyricsUrl: record.lyricsPath ?? song.lyricsUrl,
   };
+}
+
+export type BatchDownloadState = {
+  total: number;
+  ready: number;
+  active: number; // queued + downloading
+  failed: number;
+  progress: number; // 0..1 across the whole batch
+  status: "idle" | "downloading" | "ready" | "error";
+};
+
+// Aggregate download state for a set of songs (a playlist / Liked Songs) —
+// drives the fill ring on the "Download all" controls. Recomputes only when the
+// records or live progress change (songs ref is stable per screen).
+export function useBatchDownload(songs: PlayerSong[]): BatchDownloadState {
+  const records = useOfflineStore((s) => s.records);
+  const progress = useOfflineStore((s) => s.progress);
+  return useMemo(() => {
+    const total = songs.length;
+    let ready = 0;
+    let active = 0;
+    let failed = 0;
+    let sum = 0;
+    for (const song of songs) {
+      const key = keyFor(accountScope, song.id);
+      const rec = records[key];
+      if (!rec) continue;
+      if (rec.status === "ready") {
+        ready += 1;
+        sum += 1;
+      } else if (rec.status === "downloading") {
+        active += 1;
+        sum += progress[key] ?? 0;
+      } else if (rec.status === "queued") {
+        active += 1;
+      } else if (rec.status === "error") {
+        failed += 1;
+      }
+    }
+    const status: BatchDownloadState["status"] =
+      total > 0 && ready === total ? "ready" : active > 0 ? "downloading" : failed > 0 ? "error" : "idle";
+    return { total, ready, active, failed, progress: total > 0 ? sum / total : 0, status };
+  }, [records, progress, songs]);
 }
 
 // Enabling auto-download backfills existing likes (the web behavior).

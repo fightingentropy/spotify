@@ -1,15 +1,17 @@
 import { CheckCircle2, CircleArrowDown, RefreshCw } from "lucide-react-native";
-import { ActivityIndicator, type StyleProp, View, type ViewStyle } from "react-native";
+import { type StyleProp, View, type ViewStyle } from "react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
+import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { colors } from "@/theme";
 import { isRadioSong } from "@/lib/player-song";
 import { type DownloadScope, getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
-// The download affordance is deliberately NOT lucide `Download` (that glyph is
-// only the Library "Downloads" row). Idle = CircleArrowDown, in-flight =
-// spinner, ready = filled emerald check, error = RefreshCw. The actual download
-// pump is built in task 5; this drives the offline store's scope pin/unpin.
+// Per-song download affordance. Idle = CircleArrowDown; queued = indeterminate
+// ring (waiting in the serial pump); downloading = determinate fill ring with a
+// centre stop square (tap cancels); ready = filled emerald check; error =
+// RefreshCw (tap retries). Deliberately NOT lucide `Download` (that glyph is
+// only the Library "Downloads" row).
 export function DownloadButton({
   song,
   scope,
@@ -21,24 +23,50 @@ export function DownloadButton({
   size?: number;
   style?: StyleProp<ViewStyle>;
 }) {
-  const record = useOfflineStore((s) => s.records[keyFor(getOfflineAccountScope(), song.id)]);
+  const key = keyFor(getOfflineAccountScope(), song.id);
+  const record = useOfflineStore((s) => s.records[key]);
+  const progress = useOfflineStore((s) => s.progress[key]);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
   const unpinScope = useOfflineStore((s) => s.unpinScope);
   if (isRadioSong(song)) return null;
 
   const status = record?.status;
   const songScope: DownloadScope = scope ?? `song:${song.id}`;
+  const active = status === "downloading" || status === "queued";
 
   const onPress = () => {
-    if (status === "ready") void unpinScope(song.id, songScope);
+    // ready / in-flight → unpin (remove or cancel); idle / error → (re)queue.
+    if (status === "ready" || active) void unpinScope(song.id, songScope);
     else void queueDownloads([song], songScope);
   };
 
+  // Emerald stop square inside the ring → reads as "downloading, tap to cancel".
+  const stopSquare = (
+    <View
+      style={{
+        width: Math.round(size * 0.26),
+        height: Math.round(size * 0.26),
+        borderRadius: 1.5,
+        backgroundColor: colors.emerald,
+      }}
+    />
+  );
+
   return (
-    <PressableScale accessibilityRole="button" accessibilityLabel="Download" hitSlop={8} onPress={onPress} style={style}>
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={active ? "Cancel download" : status === "ready" ? "Remove download" : "Download"}
+      hitSlop={8}
+      onPress={onPress}
+      style={style}
+    >
       <View style={{ width: size + 4, height: size + 4, alignItems: "center", justifyContent: "center" }}>
-        {status === "downloading" || status === "queued" ? (
-          <ActivityIndicator size="small" color={colors.emerald} />
+        {status === "downloading" ? (
+          <DownloadProgressRing size={size} progress={progress ?? 0}>
+            {stopSquare}
+          </DownloadProgressRing>
+        ) : status === "queued" ? (
+          <DownloadProgressRing size={size}>{stopSquare}</DownloadProgressRing>
         ) : status === "ready" ? (
           // dark check inside the filled emerald badge (emeraldDarkCheck)
           <CheckCircle2 size={size} color={colors.emeraldDarkCheck} fill={colors.emerald} />

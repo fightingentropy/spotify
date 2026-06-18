@@ -11,6 +11,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react-native";
+import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { FooterButton } from "@/components/SettingsControls";
 import { formatBytes, getDiskUsage, type DiskUsage } from "@/lib/disk-usage";
 import { useOfflineStore } from "@/store/offline";
@@ -63,6 +64,7 @@ function Row({
   icon: Icon,
   iconColor,
   busy,
+  leading,
   title,
   titleColor,
   value,
@@ -72,6 +74,7 @@ function Row({
   icon: LucideIcon;
   iconColor?: string;
   busy?: boolean;
+  leading?: ReactNode;
   title: string;
   titleColor?: string;
   value?: string;
@@ -90,7 +93,9 @@ function Row({
         borderTopColor: colors.line,
       }}
     >
-      {busy ? (
+      {leading ? (
+        <View style={{ width: 18, alignItems: "center" }}>{leading}</View>
+      ) : busy ? (
         <ActivityIndicator size="small" color={iconColor ?? colors.muted} style={{ width: 18 }} />
       ) : (
         <Icon size={18} color={iconColor ?? colors.muted} />
@@ -113,6 +118,7 @@ function Row({
 
 export function OfflineSettings() {
   const records = useOfflineStore((s) => s.records);
+  const progressMap = useOfflineStore((s) => s.progress);
   const hydrate = useOfflineStore((s) => s.hydrate);
   const refreshStorage = useOfflineStore((s) => s.refreshStorage);
   const storageBytes = useOfflineStore((s) => s.storageBytes);
@@ -151,14 +157,18 @@ export function OfflineSettings() {
     };
   }, [records, storageBytes]);
 
-  const { downloaded, active, failed } = useMemo(() => {
-    const list = Object.values(records);
+  const { downloaded, active, failed, downloadingKey } = useMemo(() => {
+    const entries = Object.entries(records);
+    const list = entries.map(([, r]) => r);
     return {
       downloaded: list.filter((r) => r.status === "ready").length,
       active: list.filter((r) => r.status === "queued" || r.status === "downloading").length,
       failed: list.filter((r) => r.status === "error").length,
+      // The serial pump runs one download at a time; surface its live fraction.
+      downloadingKey: entries.find(([, r]) => r.status === "downloading")?.[0],
     };
   }, [records]);
+  const activeProgress = downloadingKey ? progressMap[downloadingKey] ?? 0 : undefined;
 
   const freeBytes = disk?.free;
   const usedByDownloads = disk?.usedByDownloads ?? storageBytes;
@@ -239,7 +249,14 @@ export function OfflineSettings() {
       <View style={{ paddingHorizontal: 16 }}>
         {/* Active downloads — only while something is downloading */}
         {active > 0 ? (
-          <Row first icon={ArrowDownToLine} iconColor={colors.emerald} busy title={`Downloading ${active}…`} />
+          <Row
+            first
+            icon={ArrowDownToLine}
+            iconColor={colors.emerald}
+            leading={<DownloadProgressRing size={18} strokeWidth={2} progress={activeProgress} />}
+            title={`Downloading ${active} ${active === 1 ? "song" : "songs"}…`}
+            value={activeProgress != null ? `${Math.round(activeProgress * 100)}%` : undefined}
+          />
         ) : null}
 
         {/* Verification */}

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { ArrowDownToLine } from "lucide-react-native";
+import { ArrowDownToLine, CheckCircle2 } from "lucide-react-native";
+import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { SongGrid } from "@/components/song/SongGrid";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -9,7 +10,7 @@ import { EmptyState, ErrorText } from "@/components/ui/States";
 import { type PlaylistPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useLikesStore } from "@/store/likes";
-import { useOfflineStore } from "@/store/offline";
+import { useBatchDownload, useOfflineStore } from "@/store/offline";
 import { colors } from "@/theme";
 
 export default function PlaylistScreen() {
@@ -25,6 +26,8 @@ export default function PlaylistScreen() {
     mergeInitialLikes(data.likedSongIds);
   }, [mergeInitialLikes, data.likedSongIds]);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
+  const unpinScope = useOfflineStore((s) => s.unpinScope);
+  const agg = useBatchDownload(data.songs);
 
   const name = data.playlist?.name ?? "Playlist";
 
@@ -47,12 +50,30 @@ export default function PlaylistScreen() {
       </View>
       {data.songs.length > 0 ? (
         <PressableScale
-          onPress={() => void queueDownloads(data.songs, `playlist:${id}`)}
+          onPress={() => {
+            if (agg.status === "downloading") {
+              for (const s of data.songs) void unpinScope(s.id, `playlist:${id}`);
+            } else if (agg.status !== "ready") {
+              void queueDownloads(data.songs, `playlist:${id}`);
+            }
+          }}
           className="mt-4 flex-row items-center gap-1.5 self-start rounded-full px-4 py-2"
           style={{ borderWidth: 1, borderColor: colors.line }}
         >
-          <ArrowDownToLine size={16} color={colors.emerald} />
-          <Text className="text-sm font-medium" style={{ color: colors.emerald }}>Download playlist</Text>
+          {agg.status === "downloading" ? (
+            <DownloadProgressRing size={16} strokeWidth={2} progress={agg.progress} />
+          ) : agg.status === "ready" ? (
+            <CheckCircle2 size={16} color={colors.emerald} />
+          ) : (
+            <ArrowDownToLine size={16} color={colors.emerald} />
+          )}
+          <Text className="text-sm font-medium" style={{ color: colors.emerald }}>
+            {agg.status === "downloading"
+              ? `Downloading ${Math.round(agg.progress * 100)}%`
+              : agg.status === "ready"
+                ? "Downloaded"
+                : "Download playlist"}
+          </Text>
         </PressableScale>
       ) : null}
       {error ? <View className="mt-2"><ErrorText>{error}</ErrorText></View> : null}
