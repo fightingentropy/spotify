@@ -11,7 +11,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react-native";
-import { FooterButton, GlassCard } from "@/components/SettingsControls";
+import { FooterButton } from "@/components/SettingsControls";
 import { formatBytes, getDiskUsage, type DiskUsage } from "@/lib/disk-usage";
 import { useOfflineStore } from "@/store/offline";
 import { colors } from "@/theme";
@@ -215,28 +215,28 @@ export function OfflineSettings() {
     (freeBytes == null ? "" : ` · ${formatBytes(freeBytes)} free`);
 
   return (
-    <View style={{ paddingHorizontal: 16 }}>
-      <GlassCard>
-        <View style={{ paddingHorizontal: 18, paddingBottom: 12 }}>
-          {/* Header: title + one-line summary + refresh */}
-        <View style={{ flexDirection: "row", alignItems: "center", paddingTop: 16, paddingBottom: 14 }}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "700" }}>Downloads</Text>
-            <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 13, marginTop: 3 }}>
-              {summary}
-            </Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Refresh storage"
-            hitSlop={10}
-            onPress={handleRefresh}
-            style={({ pressed }) => ({ padding: 6, opacity: pressed ? 0.6 : 1 })}
-          >
-            <RefreshCw size={18} color={colors.muted} />
-          </Pressable>
+    <View>
+      {/* Header: title + one-line summary + refresh */}
+      <View style={{ flexDirection: "row", alignItems: "flex-start", paddingHorizontal: 16, paddingBottom: 10 }}>
+        <View style={{ flex: 1, paddingRight: 12 }}>
+          <Text style={{ color: colors.foreground, fontSize: 20, fontWeight: "700" }}>Downloads</Text>
+          <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 13, marginTop: 3 }}>
+            {summary}
+          </Text>
         </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh storage"
+          hitSlop={10}
+          onPress={handleRefresh}
+          style={({ pressed }) => ({ padding: 6, opacity: pressed ? 0.6 : 1 })}
+        >
+          <RefreshCw size={18} color={colors.muted} />
+        </Pressable>
+      </View>
 
+      {/* Status rows — flat, hairline-separated, like the rest of Settings */}
+      <View style={{ paddingHorizontal: 16 }}>
         {/* Active downloads — only while something is downloading */}
         {active > 0 ? (
           <Row first icon={ArrowDownToLine} iconColor={colors.emerald} busy title={`Downloading ${active}…`} />
@@ -293,12 +293,14 @@ export function OfflineSettings() {
         />
 
         {/* Error lines (rare) */}
-          {syncError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{syncError}</Text> : null}
-          {verificationError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{verificationError}</Text> : null}
-        </View>
-      </GlassCard>
+        {syncError ? <Text style={{ color: AMBER, fontSize: 13, paddingTop: 4 }}>{syncError}</Text> : null}
+        {verificationError ? <Text style={{ color: AMBER, fontSize: 13, paddingTop: 4 }}>{verificationError}</Text> : null}
+      </View>
 
-      <FooterButton icon={Trash2} label="Clear downloads" tone="danger" onPress={handleClearDownloads} />
+      {/* Clear downloads — flat destructive action, set apart from the rows above */}
+      <View style={{ marginTop: 8 }}>
+        <FooterButton icon={Trash2} label="Clear downloads" tone="danger" onPress={handleClearDownloads} />
+      </View>
     </View>
   );
 }

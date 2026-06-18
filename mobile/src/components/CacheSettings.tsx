@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { CheckCircle2, Trash2 } from "lucide-react-native";
-import { FooterButton, GlassCard } from "@/components/SettingsControls";
+import { FooterButton } from "@/components/SettingsControls";
 import { clearAppCache } from "@/lib/clear-cache";
 import { colors } from "@/theme";
 
@@ -48,16 +48,14 @@ export function CacheSettings() {
   };
 
   return (
-    <View style={{ marginTop: 30, paddingHorizontal: 16 }}>
-      <GlassCard>
-        <View style={{ padding: 18 }}>
-          <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "700" }}>Cache</Text>
-          <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 4 }}>
-            Frees up space by clearing cached library data and images — they reload from the server
-            next time. Your downloads, account and settings are kept.
-          </Text>
-        </View>
-      </GlassCard>
+    <View style={{ marginTop: 34 }}>
+      <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
+        <Text style={{ color: colors.foreground, fontSize: 20, fontWeight: "700" }}>Cache</Text>
+        <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 4 }}>
+          Frees up space by clearing cached library data and images — they reload from the server
+          next time. Your downloads, account and settings are kept.
+        </Text>
+      </View>
       <FooterButton
         icon={cleared ? CheckCircle2 : Trash2}
         label={cleared ? "Cache cleared" : "Clear cache"}
