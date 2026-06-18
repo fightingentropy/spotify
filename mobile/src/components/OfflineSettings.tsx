@@ -312,11 +312,9 @@ export function OfflineSettings() {
         {/* Error lines (rare) */}
         {syncError ? <Text style={{ color: AMBER, fontSize: 13, paddingTop: 4 }}>{syncError}</Text> : null}
         {verificationError ? <Text style={{ color: AMBER, fontSize: 13, paddingTop: 4 }}>{verificationError}</Text> : null}
-      </View>
 
-      {/* Clear downloads — flat destructive action, set apart from the rows above */}
-      <View style={{ marginTop: 8 }}>
-        <FooterButton icon={Trash2} label="Clear downloads" tone="danger" onPress={handleClearDownloads} />
+        {/* Clear downloads — destructive action as the final row in the list */}
+        <FooterButton divider icon={Trash2} label="Clear downloads" tone="danger" onPress={handleClearDownloads} />
       </View>
     </View>
   );

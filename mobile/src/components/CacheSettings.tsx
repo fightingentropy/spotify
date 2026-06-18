@@ -56,13 +56,16 @@ export function CacheSettings() {
           next time. Your downloads, account and settings are kept.
         </Text>
       </View>
-      <FooterButton
-        icon={cleared ? CheckCircle2 : Trash2}
-        label={cleared ? "Cache cleared" : "Clear cache"}
-        tone={cleared ? "success" : "default"}
-        busy={busy}
-        onPress={handlePress}
-      />
+      <View style={{ paddingHorizontal: 16 }}>
+        <FooterButton
+          divider
+          icon={cleared ? CheckCircle2 : Trash2}
+          label={cleared ? "Cache cleared" : "Clear cache"}
+          tone={cleared ? "success" : "default"}
+          busy={busy}
+          onPress={handlePress}
+        />
+      </View>
     </View>
   );
 }
