@@ -12,11 +12,11 @@ import { type LibraryPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { PODCAST_SHOWS } from "@/lib/podcasts";
 import { useLibraryPinsStore } from "@/store/library-pins";
+import { useLibraryViewStore, type LibraryViewMode } from "@/store/library-view";
 import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 type Filter = "all" | "playlists" | "podcasts";
-type ViewMode = "list" | "grid";
 
 // `cover` is size-aware so the same item renders small (56) in the list and large
 // (a grid cell) in the grid — Spotify shows both layouts.
@@ -120,7 +120,7 @@ function GridCell({ item, size, onLongPress }: { item: LibItem; size: number; on
 // current view. Artists is a circle; the rest are rounded squares.
 type AddAction = { key: string; label: string; shape: "circle" | "square"; Icon: LucideIcon; onPress: () => void };
 
-function LibraryAddActions({ view, cellWidth, actions }: { view: ViewMode; cellWidth: number; actions: AddAction[] }) {
+function LibraryAddActions({ view, cellWidth, actions }: { view: LibraryViewMode; cellWidth: number; actions: AddAction[] }) {
   if (view === "grid") {
     return (
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: GRID_GAP, paddingHorizontal: 16, paddingTop: 10 }}>
@@ -181,7 +181,8 @@ export default function LibraryScreen() {
     { enabled: status !== "loading", keepPreviousData: true },
   );
   const [filter, setFilter] = useState<Filter>("all");
-  const [view, setView] = useState<ViewMode>("list");
+  const view = useLibraryViewStore((s) => s.view);
+  const toggleView = useLibraryViewStore((s) => s.toggleView);
   const pinnedKeys = useLibraryPinsStore((s) => s.pinned);
   const openLibraryActions = useUiStore((s) => s.openLibraryActions);
 
@@ -304,7 +305,7 @@ export default function LibraryScreen() {
               Recents
             </Text>
           </View>
-          <PressableScale onPress={() => setView((v) => (v === "grid" ? "list" : "grid"))} hitSlop={8} accessibilityLabel="Toggle layout">
+          <PressableScale onPress={toggleView} hitSlop={8} accessibilityLabel="Toggle layout">
             <View>{view === "grid" ? <ListIcon size={22} color={colors.iconIdle} /> : <LayoutGrid size={20} color={colors.iconIdle} />}</View>
           </PressableScale>
         </View>
