@@ -9,7 +9,7 @@ export default function StorageSettingsScreen() {
       {/* Each section owns its own title card (the nav bar already reads
           "Data-saving and offline"), so no extra screen heading here. Bottom
           inset clears the mini-player + tab bar so "Clear cache" isn't hidden. */}
-      <ScrollView contentContainerStyle={{ paddingTop: 8, paddingBottom: CONTENT_BOTTOM_INSET }}>
+      <ScrollView contentContainerStyle={{ paddingTop: 14, paddingBottom: CONTENT_BOTTOM_INSET }}>
         <OfflineSettings />
         <CacheSettings />
       </ScrollView>

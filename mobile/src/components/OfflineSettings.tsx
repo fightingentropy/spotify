@@ -11,7 +11,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react-native";
-import { FooterButton } from "@/components/SettingsControls";
+import { FooterButton, GlassCard } from "@/components/SettingsControls";
 import { formatBytes, getDiskUsage, type DiskUsage } from "@/lib/disk-usage";
 import { useOfflineStore } from "@/store/offline";
 import { colors } from "@/theme";
@@ -216,17 +216,9 @@ export function OfflineSettings() {
 
   return (
     <View style={{ paddingHorizontal: 16 }}>
-      <View
-        style={{
-          borderRadius: 16,
-          paddingHorizontal: 16,
-          paddingBottom: 8,
-          backgroundColor: colors.card,
-          borderWidth: 1,
-          borderColor: colors.line,
-        }}
-      >
-        {/* Header: title + one-line summary + refresh */}
+      <GlassCard>
+        <View style={{ paddingHorizontal: 18, paddingBottom: 12 }}>
+          {/* Header: title + one-line summary + refresh */}
         <View style={{ flexDirection: "row", alignItems: "center", paddingTop: 16, paddingBottom: 14 }}>
           <View style={{ flex: 1, paddingRight: 12 }}>
             <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "700" }}>Downloads</Text>
@@ -301,9 +293,10 @@ export function OfflineSettings() {
         />
 
         {/* Error lines (rare) */}
-        {syncError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{syncError}</Text> : null}
-        {verificationError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{verificationError}</Text> : null}
-      </View>
+          {syncError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{syncError}</Text> : null}
+          {verificationError ? <Text style={{ color: AMBER, fontSize: 13, paddingBottom: 12 }}>{verificationError}</Text> : null}
+        </View>
+      </GlassCard>
 
       <FooterButton icon={Trash2} label="Clear downloads" tone="danger" onPress={handleClearDownloads} />
     </View>
