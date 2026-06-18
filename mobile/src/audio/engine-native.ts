@@ -19,7 +19,7 @@ import {
   readEpisodeProgress,
   writeEpisodeProgressGuarded,
 } from "@/lib/podcast-progress";
-import { resolveOfflinePlaybackSong } from "@/store/offline";
+import { resolveOfflinePlaybackSong, useOfflineStore } from "@/store/offline";
 import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
 import { lockScreenArtwork } from "@/audio/track";
 import { isOwnHandledSong, MAX_CONSECUTIVE_AUDIO_ERRORS, refreshCurrentSong } from "@/audio/refresh";
@@ -57,6 +57,18 @@ let prefetchFromFuture = false;
 // error circuit-breaker
 let consecutiveErrors = 0;
 let erroredKeyRetry: string | null = null;
+// Set once repeated load failures reveal we're effectively offline for streaming.
+// While set, auto-advance stays on the downloaded subset so playback doesn't flash
+// through un-streamable tracks. Cleared when a streamed (non-downloaded) track
+// actually plays, or when the user starts a brand-new queue.
+let offlinePlayback = false;
+
+// Jump to the next downloaded song in the queue (skipping un-streamable ones).
+// Returns false when nothing in the queue is downloaded.
+function skipToDownloaded(): boolean {
+  const isDownloaded = useOfflineStore.getState().isDownloaded;
+  return usePlayerStore.getState().skipToPlayable((song) => isDownloaded(song.id));
+}
 
 // throttles
 let lastPodcastWriteMs = 0;
@@ -366,6 +378,13 @@ async function onEnded(e: EndedEvent): Promise<void> {
     return;
   }
   flushPlayListen(currentListen);
+  // Once offline playback is detected, keep auto-advance on the downloaded subset
+  // so transitions don't flash through tracks we can't stream. If the downloads
+  // are exhausted, stop cleanly rather than churning.
+  if (offlinePlayback) {
+    if (!skipToDownloaded()) s.pause();
+    return;
+  }
   s.next(); // store advances → subscription hard-loads the next track
 }
 
@@ -411,6 +430,15 @@ async function onError(e: ErrorEvent): Promise<void> {
     return;
   }
   erroredKeyRetry = null;
+  // A single failure is usually one bad/transient track — just try the next one.
+  // Two+ in a row means we're effectively offline: stop churning through random
+  // (under shuffle) un-streamable tracks and jump straight to a downloaded song.
+  // If nothing is downloaded, fall through to a normal skip (the circuit-breaker
+  // above then ends it at a clean pause instead of looping).
+  if (consecutiveErrors >= 2) {
+    offlinePlayback = true;
+    if (skipToDownloaded()) return;
+  }
   s.next(); // skip
 }
 
@@ -418,6 +446,10 @@ function onPlaying(e: PlayingEvent): void {
   if (e.deck === activeDeck) {
     consecutiveErrors = 0;
     erroredKeyRetry = null;
+    // A non-downloaded track actually playing means streaming works again →
+    // resume normal full-queue auto-advance.
+    const song = usePlayerStore.getState().currentSong;
+    if (song && !useOfflineStore.getState().isDownloaded(song.id)) offlinePlayback = false;
   }
 }
 
@@ -467,6 +499,9 @@ function subscribeToStore(): void {
     }
     if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume();
     if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong);
+    // A brand-new queue (user started a different list) re-evaluates offline
+    // inference from scratch.
+    if (state.queue !== prev.queue) offlinePlayback = false;
     prev = state;
   });
 }

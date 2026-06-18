@@ -45,6 +45,11 @@ type PlayerState = {
   toggle: () => void;
   next: () => void;
   previous: () => void;
+  // Advance to the nearest queue item satisfying `canPlay`, skipping over the
+  // ones that can't play right now (e.g. not-downloaded while offline). Returns
+  // false when nothing else in the queue is playable, so the caller can stop
+  // instead of churning. Reuses advanceToIndex's shuffle/history bookkeeping.
+  skipToPlayable: (canPlay: (song: PlayerSong) => boolean) => boolean;
   setVolume: (v: number) => void;
   toggleMute: () => void;
   toggleShuffle: () => void;
@@ -411,6 +416,38 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         isPlaying: nextPlaying,
       };
     }),
+  skipToPlayable: (canPlay) => {
+    const s = get();
+    const n = s.queue.length;
+    if (n === 0) return false;
+    let target: number | undefined;
+    if (s.shuffle) {
+      // Prefer not-yet-played picks so shuffle doesn't repeat itself; fall back
+      // to any playable index other than the current (failed) one.
+      const fresh = validShuffleRemaining(n, s.currentIndex, s.shuffleRemaining).filter(
+        (i) => i !== s.currentIndex && canPlay(s.queue[i]),
+      );
+      const pool =
+        fresh.length > 0
+          ? fresh
+          : s.queue.reduce<number[]>((acc, song, i) => {
+              if (i !== s.currentIndex && canPlay(song)) acc.push(i);
+              return acc;
+            }, []);
+      if (pool.length > 0) target = pool[Math.floor(Math.random() * pool.length)];
+    } else {
+      for (let step = 1; step < n; step++) {
+        const i = (s.currentIndex + step) % n;
+        if (canPlay(s.queue[i])) {
+          target = i;
+          break;
+        }
+      }
+    }
+    if (target === undefined) return false;
+    get().advanceToIndex(target);
+    return true;
+  },
   replaceSong: (song) =>
     set((s) => {
       // Preserve the original queue array reference when nothing actually
