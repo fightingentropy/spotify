@@ -1,10 +1,172 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Activity, CheckCircle2, Database, HardDrive, RefreshCw, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
+import {
+  Activity,
+  ArrowDownToLine,
+  Boxes,
+  Camera,
+  CheckCircle2,
+  Cloud,
+  Cog,
+  Database,
+  HardDrive,
+  Heart,
+  Loader2,
+  type LucideIcon,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { readOfflineDiagnostics, type OfflineDiagnostics } from "@/client/offline-diagnostics";
 import { formatBytes, readDownloadedBytesTotal, useOfflineStore } from "@/client/offline";
 import type { LikedPayload } from "@/client/api";
+
+// Flat, hairline-separated settings rows — a web port of the mobile Downloads
+// screen (mobile/src/components/OfflineSettings.tsx). Actions live inline on the
+// rows they relate to (Verify on the verification row, Retry only when a
+// download failed) instead of a free-floating button bar.
+
+const AMBER = "#fbbf24";
+const MUTED = "#b3b3b3";
+
+function MiniButton({
+  label,
+  onClick,
+  busy,
+  tone = "default",
+}: {
+  label: string;
+  onClick: () => void;
+  busy?: boolean;
+  tone?: "default" | "warn";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white/[0.12] px-3.5 text-[13px] font-semibold transition hover:bg-white/[0.16] disabled:cursor-wait disabled:opacity-50"
+      style={{ color: tone === "warn" ? AMBER : "#ededed" }}
+    >
+      {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+      {label}
+    </button>
+  );
+}
+
+function Row({
+  icon: Icon,
+  iconColor,
+  busy,
+  leading,
+  title,
+  titleColor,
+  value,
+  valueSub,
+  right,
+  first,
+}: {
+  icon: LucideIcon;
+  iconColor?: string;
+  busy?: boolean;
+  leading?: ReactNode;
+  title: string;
+  titleColor?: string;
+  value?: string;
+  valueSub?: string;
+  right?: ReactNode;
+  first?: boolean;
+}) {
+  return (
+    <div
+      className={`flex min-h-[56px] items-center gap-3 py-2.5 ${first ? "" : "border-t border-white/10"}`}
+    >
+      <div className="flex w-[18px] shrink-0 justify-center">
+        {leading ? (
+          leading
+        ) : busy ? (
+          <Loader2 size={18} className="animate-spin" style={{ color: iconColor ?? MUTED }} />
+        ) : (
+          <Icon size={18} style={{ color: iconColor ?? MUTED }} />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[15px] font-medium" style={{ color: titleColor ?? "#ededed" }}>
+          {title}
+        </div>
+        {valueSub ? <div className="mt-0.5 truncate text-xs text-white/50">{valueSub}</div> : null}
+      </div>
+      {value ? (
+        <span className="shrink-0 text-[14px]" style={{ color: MUTED }}>
+          {value}
+        </span>
+      ) : null}
+      {right}
+    </div>
+  );
+}
+
+function FooterButton({
+  icon: Icon,
+  label,
+  tone = "default",
+  busy,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  tone?: "default" | "danger";
+  busy?: boolean;
+  onClick: () => void;
+}) {
+  const fg = tone === "danger" ? "#f8717a" : "#ededed";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className="flex min-h-[56px] w-full items-center gap-3 border-t border-white/10 py-2.5 text-left transition hover:opacity-80 disabled:cursor-wait disabled:opacity-50"
+    >
+      <div className="flex w-[18px] shrink-0 justify-center">
+        {busy ? (
+          <Loader2 size={18} className="animate-spin" style={{ color: fg }} />
+        ) : (
+          <Icon size={18} style={{ color: fg }} />
+        )}
+      </div>
+      <span className="text-[15px] font-semibold" style={{ color: fg }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative h-[24px] w-[42px] shrink-0 rounded-full transition-colors ${checked ? "bg-emerald-500" : "bg-white/20"}`}
+    >
+      <span
+        className={`absolute left-[2px] top-[2px] h-[20px] w-[20px] rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[18px]" : "translate-x-0"}`}
+      />
+    </button>
+  );
+}
 
 export default function OfflineSettings() {
   const hydrate = useOfflineStore((state) => state.hydrate);
@@ -68,6 +230,11 @@ export default function OfflineSettings() {
   const downloaded = downloads.filter((record) => record.status === "downloaded").length;
   const failed = downloads.filter((record) => record.status === "failed").length;
   const active = downloads.filter((record) => record.status === "queued" || record.status === "downloading").length;
+  // Overall batch progress for the "Downloading N songs…" row: completed songs
+  // plus the in-flight song's byte fraction, over the total in this batch.
+  const activeProgress = downloads.find((record) => record.status === "downloading")?.progress ?? 0;
+  const totalBatch = downloaded + active;
+  const overallProgress = totalBatch > 0 ? Math.round(((downloaded + activeProgress) / totalBatch) * 100) : 0;
   const inMemoryDownloadedBytes = downloads.reduce(
     (total, record) => total + (record.status === "downloaded" ? record.size : 0),
     0,
@@ -96,6 +263,18 @@ export default function OfflineSettings() {
         ? TriangleAlert
         : ShieldCheck;
   const VerificationIcon = verificationIcon;
+  const verificationTint =
+    verificationStatus === "ok"
+      ? "#10b981"
+      : verificationStatus === "repair-needed" || verificationStatus === "failed"
+        ? AMBER
+        : MUTED;
+  const syncHealthy = pendingMutations === 0 && syncStatus !== "auth-required" && syncStatus !== "failed";
+  const syncSummary =
+    pendingMutations === 0
+      ? "Up to date"
+      : `${pendingMutations} pending${syncStatus === "auth-required" ? " · sign in" : ""}`;
+  const showSyncAction = pendingMutations > 0 || syncStatus === "failed" || syncStatus === "auth-required";
   const handleClearPlaybackCache = () => {
     if (!window.confirm("Clear cached playback media?")) return;
     void clearPlaybackCache();
@@ -132,219 +311,218 @@ export default function OfflineSettings() {
   const mediaEntries = mediaCaches.reduce((total, cache) => total + cache.entries, 0);
   const mediaKnownBytes = mediaCaches.reduce((total, cache) => total + (cache.estimatedBytes ?? 0), 0);
 
+  const storageModeLabel = nativeStorage
+    ? "Native app files"
+    : persistentStorage == null
+      ? "Not reported"
+      : persistentStorage
+        ? "Persistent"
+        : "Best effort";
+  const summary =
+    `${downloaded} downloaded · ${active} active · ${failed} failed`;
+
   return (
-    <section className="rounded-lg border border-white/[0.12] bg-white/[0.04] p-4">
-      <div className="mb-4 flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-500/15 text-emerald-300">
-          <Database size={19} />
-        </div>
-        <div>
-          <h2 className="text-lg font-semibold">Offline</h2>
-          <div className="text-sm text-white/[0.62]">
-            {downloaded} downloaded · {active} active · {failed} failed
+    <section className="overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 sm:px-5">
+      {/* Header: title + one-line summary + refresh */}
+      <div className="flex items-start gap-3 pt-4 pb-2.5">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-xl font-bold">Offline</h2>
+          <div className="mt-0.5 truncate text-[13px]" style={{ color: MUTED }}>
+            {summary}
           </div>
         </div>
-      </div>
-
-      <dl className="grid gap-3 text-sm sm:grid-cols-2">
-        <div className="rounded-md bg-black/20 p-3">
-          <dt className="text-white/[0.55]">Storage used</dt>
-          <dd className="mt-1 font-medium">
-            {formatBytes(storageUsage)}
-            {usedPercent == null ? "" : ` · ${usedPercent}%`}
-          </dd>
-        </div>
-        <div className="rounded-md bg-black/20 p-3">
-          <dt className="text-white/[0.55]">Available</dt>
-          <dd className="mt-1 font-medium">
-            {freeBytes == null ? "Unknown" : `${formatBytes(freeBytes)} free`}
-          </dd>
-        </div>
-        <div className="rounded-md bg-black/20 p-3">
-          <dt className="text-white/[0.55]">Downloaded media</dt>
-          <dd className="mt-1 font-medium">{formatBytes(displayedDownloadedBytes)}</dd>
-        </div>
-        <div className="rounded-md bg-black/20 p-3">
-          <dt className="text-white/[0.55]">Storage mode</dt>
-          <dd className="mt-1 font-medium">
-            {nativeStorage
-              ? "Native app files"
-              : persistentStorage == null
-                ? "Not reported"
-                : persistentStorage
-                  ? "Persistent"
-                  : "Best effort"}
-          </dd>
-        </div>
-        <div className="rounded-md bg-black/20 p-3">
-          <dt className="text-white/[0.55]">Sync</dt>
-          <dd className="mt-1 font-medium">
-            {pendingMutations === 0 ? "Up to date" : `${pendingMutations} pending`}
-            {syncStatus === "auth-required" ? " · sign in required" : ""}
-          </dd>
-        </div>
-        <div className="rounded-md bg-black/20 p-3">
-          <dt className="flex items-center gap-2 text-white/[0.55]">
-            <HardDrive size={14} />
-            Download verification
-          </dt>
-          <dd className="mt-1 flex items-center gap-2 font-medium">
-            <VerificationIcon size={15} />
-            {verificationLabel}
-          </dd>
-          {verificationCheckedAt ? (
-            <dd className="mt-1 text-xs text-white/[0.5]">
-              {verifiedDownloads} ok · {missingDownloads} repaired/missing
-            </dd>
-          ) : null}
-        </div>
-      </dl>
-
-      {syncError ? <div className="mt-3 text-sm text-amber-300">{syncError}</div> : null}
-      {verificationError ? <div className="mt-3 text-sm text-amber-300">{verificationError}</div> : null}
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => void retryFailedDownloads()}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white"
-        >
-          <RefreshCw size={16} />
-          Retry failed
-        </button>
-        <button
-          type="button"
-          onClick={() => void verifyDownloads()}
-          disabled={verificationStatus === "checking"}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white disabled:cursor-wait disabled:opacity-60"
-        >
-          <ShieldCheck size={16} />
-          Verify downloads
-        </button>
-        <button
-          type="button"
-          onClick={() => void syncMutations()}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white"
-        >
-          <RefreshCw size={16} />
-          Sync now
-        </button>
         <button
           type="button"
           onClick={() => {
             void refreshStorage();
             void refreshDiagnostics();
           }}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white"
+          aria-label="Refresh storage"
+          title="Refresh storage"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full transition hover:bg-white/[0.08]"
         >
-          <RefreshCw size={16} />
-          Refresh
-        </button>
-        <button
-          type="button"
-          onClick={handleClearPlaybackCache}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-white/[0.08] px-3 text-sm font-medium text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white"
-        >
-          <Trash2 size={16} />
-          Clear playback cache
-        </button>
-        <button
-          type="button"
-          onClick={handleClearDownloads}
-          className="inline-flex h-10 items-center gap-2 rounded-full bg-red-500/15 px-3 text-sm font-medium text-red-200 transition hover:bg-red-500/20"
-        >
-          <Trash2 size={16} />
-          Clear downloads
+          <RefreshCw size={18} style={{ color: MUTED }} />
         </button>
       </div>
 
-      <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-md bg-black/20 p-3 text-sm">
-        <input
-          type="checkbox"
-          checked={autoDownloadLiked}
-          onChange={(event) => void handleAutoDownloadLikedChange(event.target.checked)}
-          className="h-4 w-4 accent-emerald-500"
+      {/* Storage details */}
+      <Row
+        first
+        icon={HardDrive}
+        title="Storage used"
+        value={`${formatBytes(storageUsage)}${usedPercent == null ? "" : ` · ${usedPercent}%`}`}
+      />
+      <Row
+        icon={Database}
+        title="Available"
+        value={freeBytes == null ? "Unknown" : `${formatBytes(freeBytes)} free`}
+      />
+      <Row icon={ArrowDownToLine} title="Downloaded media" value={formatBytes(displayedDownloadedBytes)} />
+      <Row icon={Cog} title="Storage mode" value={storageModeLabel} />
+
+      {/* Active downloads — only while something is downloading */}
+      {active > 0 ? (
+        <Row
+          icon={ArrowDownToLine}
+          iconColor="#10b981"
+          busy
+          title={`Downloading ${active} ${active === 1 ? "song" : "songs"}…`}
+          value={`${overallProgress}%`}
         />
-        <span className="font-medium text-white/[0.86]">Automatically download liked songs</span>
-      </label>
+      ) : null}
 
-      <div className="mt-5 border-t border-white/[0.1] pt-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white/[0.86]">
-            <Activity size={16} />
-            Diagnostics
-          </div>
-          <button
-            type="button"
-            onClick={() => void refreshDiagnostics()}
-            disabled={diagnosticsLoading}
-            className="grid h-9 w-9 place-items-center rounded-full bg-white/[0.08] text-white/[0.78] transition hover:bg-white/[0.12] hover:text-white disabled:cursor-wait disabled:opacity-60"
-            aria-label="Refresh offline diagnostics"
-            title="Refresh offline diagnostics"
-          >
-            <RefreshCw size={15} className={diagnosticsLoading ? "animate-spin" : undefined} />
-          </button>
+      {/* Verification */}
+      <Row
+        icon={VerificationIcon}
+        iconColor={verificationTint}
+        busy={verificationStatus === "checking"}
+        title={verificationLabel}
+        value={
+          verificationCheckedAt
+            ? `${verifiedDownloads} ok${missingDownloads > 0 ? ` · ${missingDownloads} missing` : ""}`
+            : undefined
+        }
+        right={
+          <MiniButton
+            label="Verify"
+            busy={verificationStatus === "checking"}
+            onClick={() => void verifyDownloads()}
+          />
+        }
+      />
+
+      {/* Sync */}
+      <Row
+        icon={syncHealthy ? Cloud : TriangleAlert}
+        iconColor={syncHealthy ? MUTED : AMBER}
+        busy={syncStatus === "syncing"}
+        title="Sync"
+        value={syncSummary}
+        right={
+          showSyncAction ? (
+            <MiniButton label="Sync now" busy={syncStatus === "syncing"} onClick={() => void syncMutations()} />
+          ) : undefined
+        }
+      />
+
+      {/* Failed downloads → retry (only when present) */}
+      {failed > 0 ? (
+        <Row
+          icon={TriangleAlert}
+          iconColor={AMBER}
+          titleColor={AMBER}
+          title={`${failed} failed download${failed === 1 ? "" : "s"}`}
+          right={<MiniButton label="Retry" tone="warn" onClick={() => void retryFailedDownloads()} />}
+        />
+      ) : null}
+
+      {/* Auto-download toggle */}
+      <Row
+        icon={Heart}
+        title="Automatically download liked songs"
+        right={
+          <Toggle
+            checked={autoDownloadLiked}
+            onChange={(next) => void handleAutoDownloadLikedChange(next)}
+            label="Automatically download liked songs"
+          />
+        }
+      />
+
+      {/* Error lines (rare) */}
+      {syncError ? (
+        <div className="pt-1 pb-1 text-[13px]" style={{ color: AMBER }}>
+          {syncError}
         </div>
-        <dl className="grid gap-3 text-sm sm:grid-cols-2">
-          <div className="rounded-md bg-black/20 p-3">
-            <dt className="text-white/[0.55]">App shell</dt>
-            <dd className="mt-1 font-medium">
-              {diagnostics
-                ? `${shellEntries} cached ${shellEntries === 1 ? "asset" : "assets"}`
-                : "Checking"}
-            </dd>
-          </div>
-          <div className="rounded-md bg-black/20 p-3">
-            <dt className="text-white/[0.55]">Service worker</dt>
-            <dd className="mt-1 font-medium">
-              {diagnostics?.serviceWorker.controlled
-                ? "Controlling"
-                : diagnostics?.serviceWorker.supported
-                  ? diagnostics.serviceWorker.registrationState ?? "Registered"
-                  : "Unavailable"}
-            </dd>
-          </div>
-          <div className="rounded-md bg-black/20 p-3">
-            <dt className="text-white/[0.55]">API snapshots</dt>
-            <dd className="mt-1 font-medium">
-              {diagnostics?.indexedDb.apiSnapshots == null
-                ? "Unknown"
-                : diagnostics.indexedDb.apiSnapshots}
-              {runtimeEntries > 0 ? ` · ${runtimeEntries} SW` : ""}
-            </dd>
-          </div>
-          <div className="rounded-md bg-black/20 p-3">
-            <dt className="text-white/[0.55]">Media cache</dt>
-            <dd className="mt-1 font-medium">
-              {mediaEntries} {mediaEntries === 1 ? "entry" : "entries"}
-              {mediaKnownBytes > 0 ? ` · ${formatBytes(mediaKnownBytes)}` : ""}
-            </dd>
-          </div>
-          <div className="rounded-md bg-black/20 p-3">
-            <dt className="text-white/[0.55]">Offline database</dt>
-            <dd className="mt-1 font-medium">
-              {diagnostics?.indexedDb.error
-                ? "Needs attention"
-                : diagnostics?.indexedDb.available
-                  ? `${diagnostics.indexedDb.downloads ?? 0} downloads · ${diagnostics.indexedDb.mutations ?? 0} mutations`
-                  : "Unavailable"}
-            </dd>
-          </div>
-          <div className="rounded-md bg-black/20 p-3">
-            <dt className="text-white/[0.55]">Playback sync</dt>
-            <dd className="mt-1 font-medium">
-              {diagnostics?.playbackState.pendingSync
-                ? "Pending"
-                : diagnostics?.playbackState.saved
-                  ? "Saved"
-                  : "Empty"}
-            </dd>
-          </div>
-        </dl>
-        {diagnostics?.indexedDb.error ? (
-          <div className="mt-3 text-sm text-amber-300">{diagnostics.indexedDb.error}</div>
-        ) : null}
+      ) : null}
+      {verificationError ? (
+        <div className="pt-1 pb-1 text-[13px]" style={{ color: AMBER }}>
+          {verificationError}
+        </div>
+      ) : null}
+
+      {/* Destructive / cache actions */}
+      <FooterButton icon={Trash2} label="Clear playback cache" onClick={handleClearPlaybackCache} />
+      <FooterButton icon={Trash2} label="Clear downloads" tone="danger" onClick={handleClearDownloads} />
+
+      {/* Diagnostics */}
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-4 pb-1">
+        <div className="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wide" style={{ color: MUTED }}>
+          <Activity size={15} />
+          Diagnostics
+        </div>
+        <button
+          type="button"
+          onClick={() => void refreshDiagnostics()}
+          disabled={diagnosticsLoading}
+          className="grid h-9 w-9 place-items-center rounded-full transition hover:bg-white/[0.08] disabled:cursor-wait disabled:opacity-60"
+          aria-label="Refresh offline diagnostics"
+          title="Refresh offline diagnostics"
+        >
+          <RefreshCw size={15} className={diagnosticsLoading ? "animate-spin" : undefined} style={{ color: MUTED }} />
+        </button>
       </div>
+
+      <Row
+        first
+        icon={Boxes}
+        title="App shell"
+        value={diagnostics ? `${shellEntries} ${shellEntries === 1 ? "asset" : "assets"}` : "Checking"}
+      />
+      <Row
+        icon={Cog}
+        title="Service worker"
+        value={
+          diagnostics?.serviceWorker.controlled
+            ? "Controlling"
+            : diagnostics?.serviceWorker.supported
+              ? diagnostics.serviceWorker.registrationState ?? "Registered"
+              : "Unavailable"
+        }
+      />
+      <Row
+        icon={Camera}
+        title="API snapshots"
+        value={`${
+          diagnostics?.indexedDb.apiSnapshots == null ? "—" : diagnostics.indexedDb.apiSnapshots
+        }${runtimeEntries > 0 ? ` · ${runtimeEntries} SW` : ""}`}
+      />
+      <Row
+        icon={HardDrive}
+        title="Media cache"
+        value={`${mediaEntries} ${mediaEntries === 1 ? "entry" : "entries"}${
+          mediaKnownBytes > 0 ? ` · ${formatBytes(mediaKnownBytes)}` : ""
+        }`}
+      />
+      <Row
+        icon={Database}
+        title="Offline database"
+        value={
+          diagnostics?.indexedDb.error
+            ? "Needs attention"
+            : diagnostics?.indexedDb.available
+              ? `${diagnostics.indexedDb.downloads ?? 0} downloads · ${diagnostics.indexedDb.mutations ?? 0} mutations`
+              : "Unavailable"
+        }
+      />
+      <Row
+        icon={Cloud}
+        title="Playback sync"
+        value={
+          diagnostics?.playbackState.pendingSync
+            ? "Pending"
+            : diagnostics?.playbackState.saved
+              ? "Saved"
+              : "Empty"
+        }
+      />
+      {diagnostics?.indexedDb.error ? (
+        <div className="pt-1 pb-4 text-[13px]" style={{ color: AMBER }}>
+          {diagnostics.indexedDb.error}
+        </div>
+      ) : (
+        <div className="pb-4" />
+      )}
     </section>
   );
 }
