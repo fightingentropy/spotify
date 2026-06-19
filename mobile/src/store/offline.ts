@@ -362,6 +362,31 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
             // HTML. Guard it so we never mark a garbage file "ready".
             throw new Error(`Download failed with HTTP ${result.status}`);
           }
+          // Write-time integrity check — confirm the bytes actually landed before
+          // we trust this as a download. expo resolves on any *completed* HTTP
+          // response, so without this a 0-byte or truncated file could be marked
+          // "ready". Require a non-empty file; for a full (non-resumed, 200)
+          // response that advertised a Content-Length, also require the on-disk
+          // size to reach it, catching a short/truncated transfer. Resumed 206s
+          // report only the remaining length, so the length match is skipped there
+          // (the size>0 floor still applies). A failure throws into the catch below
+          // → re-queued while offline, "error" while online — never a bad "ready".
+          const info = await FileSystem.getInfoAsync(audioPath);
+          if (!info.exists || info.isDirectory || info.size <= 0) {
+            throw new Error("Downloaded audio file is missing or empty");
+          }
+          const expectedBytes = Number(
+            result.headers?.["Content-Length"] ?? result.headers?.["content-length"],
+          );
+          if (
+            !resumeData &&
+            result.status === 200 &&
+            Number.isFinite(expectedBytes) &&
+            expectedBytes > 0 &&
+            info.size < expectedBytes
+          ) {
+            throw new Error(`Downloaded audio is truncated (${info.size}/${expectedBytes} bytes)`);
+          }
           setProgress(key, 1);
 
           let coverPath: string | undefined;
@@ -537,17 +562,6 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         set({ hydrated: true });
       }
       void refreshStorage();
-      // Quiet launch verify (web parity: ~12s after hydrate, one-shot). Sweeps
-      // ready downloads for missing/empty files and re-queues repairs WITHOUT
-      // touching verificationStatus — this runs unprompted, so it must never
-      // flash a "checking" card on launch. The explicit Verify button is the
-      // user-facing path that drives the status state machine.
-      if (!quietVerifyScheduled) {
-        quietVerifyScheduled = true;
-        setTimeout(() => {
-          void quietVerifyDownloads();
-        }, 12_000);
-      }
     },
 
     verifyDownloads: async () => {
@@ -716,40 +730,6 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     pauseActiveDownload,
   };
 });
-
-// Quiet startup integrity sweep. Re-queues ready downloads whose audio file is
-// missing/empty without touching the user-facing verificationStatus state.
-// Module-scoped (not a store action) so it can run unprompted from hydrate().
-let quietVerifyScheduled = false;
-let quietVerifyStarted = false;
-async function quietVerifyDownloads(): Promise<void> {
-  if (quietVerifyStarted) return;
-  quietVerifyStarted = true;
-  try {
-    const rows = await readAllDownloadedRecords(accountScope);
-    let repaired = 0;
-    for (const row of rows) {
-      const result = await verifyOrRepairRecord(row);
-      if (result.ok) continue;
-      repaired += 1;
-      const current = useOfflineStore.getState().records[row.key];
-      if (current) {
-        useOfflineStore.setState((s) => ({
-          records: {
-            ...s.records,
-            [row.key]: { ...current, status: "queued", audioPath: undefined, updatedAt: Date.now() },
-          },
-        }));
-      }
-    }
-    // The repaired rows are now "queued"; kick the serial pump. queueDownloads
-    // with an empty batch is a no-op that always calls runPump() at the end,
-    // which picks up every queued row regardless of how it got there.
-    if (repaired > 0) void useOfflineStore.getState().queueDownloads([], "home");
-  } catch {
-    // Best-effort; the manual Verify button remains the explicit path.
-  }
-}
 
 // Reclaim space left behind by interrupted downloads — two sources expo never
 // cleans on its own:
