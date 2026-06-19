@@ -437,6 +437,10 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
         const records: Record<string, OfflineDownloadRecord> = {};
         for (const row of rows) records[row.key] = rowToRecord(row);
         set({ records, hydrated: true });
+        // Reclaim interrupted-download debris (orphaned NSURLSession partials +
+        // stale offline-media folders) before resuming, so the purge can't race
+        // a freshly-resumed download's partial.
+        await purgeOrphanedDownloadArtifacts();
         // resume any interrupted downloads
         if (Object.values(records).some((r) => r.status === "queued" || r.status === "downloading")) {
           void runPump();
@@ -652,6 +656,67 @@ async function quietVerifyDownloads(): Promise<void> {
   } catch {
     // Best-effort; the manual Verify button remains the explicit path.
   }
+}
+
+// Reclaim space left behind by interrupted downloads — two sources expo never
+// cleans on its own:
+//   1. NSURLSession partial-download temp files. createDownloadResumable()
+//      streams into <container>/Library/Caches/com.apple.nsurlsessiond/Downloads/
+//      <bundle>/ as CFNetworkDownload_*.tmp; when a download is interrupted
+//      (offline, app killed, cancelled) the partial is orphaned and never
+//      removed, so repeated attempts pile up indefinitely. At launch nothing is
+//      in flight, so every file under there is dead weight.
+//   2. offline-media song folders with no backing "ready" record (orphans from
+//      deletes / reinstalls / a move that never completed).
+// All best-effort and self-contained — cleanup must never break launch. Runs
+// once from hydrate(), BEFORE resuming downloads so it can't delete a partial a
+// just-resumed download is actively writing.
+let purgeStarted = false;
+async function purgeOrphanedDownloadArtifacts(): Promise<void> {
+  if (purgeStarted) return;
+  purgeStarted = true;
+  const doc = FileSystem.documentDirectory;
+
+  if (doc) {
+    try {
+      const containerRoot = doc.replace(/Documents\/?$/, "");
+      const downloadsRoot = `${containerRoot}Library/Caches/com.apple.nsurlsessiond/Downloads/`;
+      const info = await FileSystem.getInfoAsync(downloadsRoot);
+      if (info.exists) {
+        // Each app container has its own NSURLSession scratch, so everything
+        // under Downloads/ belongs to this app.
+        const subdirs = await FileSystem.readDirectoryAsync(downloadsRoot);
+        for (const sub of subdirs) {
+          const subPath = `${downloadsRoot}${sub}/`;
+          const files = await FileSystem.readDirectoryAsync(subPath).catch(() => [] as string[]);
+          await Promise.all(
+            files.map((f) => FileSystem.deleteAsync(`${subPath}${f}`, { idempotent: true }).catch(() => {})),
+          );
+        }
+      }
+    } catch {}
+  }
+
+  try {
+    const info = await FileSystem.getInfoAsync(OFFLINE_DIR);
+    if (info.exists) {
+      const folders = await FileSystem.readDirectoryAsync(OFFLINE_DIR);
+      if (folders.length > 0) {
+        const readyFolders = new Set(
+          Object.values(useOfflineStore.getState().records)
+            .filter((r) => r.status === "ready")
+            .map((r) => safeName(r.songId)),
+        );
+        await Promise.all(
+          folders
+            .filter((folder) => !readyFolders.has(folder))
+            .map((folder) =>
+              FileSystem.deleteAsync(`${OFFLINE_DIR}${folder}`, { idempotent: true }).catch(() => {}),
+            ),
+        );
+      }
+    }
+  } catch {}
 }
 
 // Subscribe to RN AppState 'active' transitions and drain the mutation outbox on
