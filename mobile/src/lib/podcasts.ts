@@ -12,6 +12,10 @@ export type PodcastShow = {
   websiteUrl: string;
   imageUrl: string;
   accent: [string, string, string];
+  // True for shows the user added by RSS URL. These resolve media directly from
+  // the feed (native has no CORS) instead of through the /api/podcast-media proxy,
+  // which only knows the built-in PODCAST_SHOWS.
+  userAdded?: boolean;
 };
 
 export type PodcastEpisode = PlayerSong & {
@@ -119,12 +123,30 @@ function stableId(showId: string, seed: string): string {
   return `podcast:${showId}:${key || "episode"}`;
 }
 
+// Built-in shows relay media through the SSRF-guarded /api/podcast-media proxy
+// (the Worker validates every URL against the known feed). User-added shows have
+// no server-side feed entry, so they reference the raw feed URLs directly — fine
+// on native, which has no CORS and streams https audio via AVPlayer.
+function resolveMediaUrl(show: PodcastShow, url: string): string {
+  return show.userAdded ? url : podcastMediaProxyUrl(show.id, url);
+}
+
 // Regex feed parse (no DOMParser in RN). Returns episodes with proxied media URLs.
+//
+// Streams items with a stateful exec() loop and stops at `limit`, so it only scans
+// the prefix of the document holding the first `limit` items — NOT the whole feed.
+// This matters: big shows ship 17MB / 2,900-item feeds, and `.match(/…/g)` over all
+// of that (plus splitting on every "<item") hard-hangs Hermes, which has no regex
+// JIT. Bounding the scan keeps a giant feed as cheap as a small one.
 export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50): PodcastEpisode[] {
-  const channelImage = attr(xmlText.split("<item")[0] ?? "", "itunes:image", "href") || show.imageUrl;
-  const items = xmlText.match(/<item\b[\s\S]*?<\/item>/gi) ?? [];
+  const firstItem = xmlText.indexOf("<item");
+  const channelPart = firstItem === -1 ? xmlText : xmlText.slice(0, firstItem);
+  const channelImage = attr(channelPart, "itunes:image", "href") || show.imageUrl;
   const episodes: PodcastEpisode[] = [];
-  for (const block of items) {
+  const itemRe = /<item\b[\s\S]*?<\/item>/gi;
+  let match: RegExpExecArray | null;
+  while (episodes.length < limit && (match = itemRe.exec(xmlText)) !== null) {
+    const block = match[0];
     const audioUrl = attr(block, "enclosure", "url");
     if (!audioUrl) continue;
     const title = tag(block, "title") || "Untitled episode";
@@ -135,8 +157,8 @@ export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50)
       title,
       artist: show.title,
       album: "Podcasts",
-      imageUrl: podcastMediaProxyUrl(show.id, itemImage),
-      audioUrl: podcastMediaProxyUrl(show.id, audioUrl),
+      imageUrl: resolveMediaUrl(show, itemImage),
+      audioUrl: resolveMediaUrl(show, audioUrl),
       duration: parseDuration(tag(block, "itunes:duration")),
       source: "podcast",
       podcastId: show.id,
@@ -144,7 +166,64 @@ export function parsePodcastFeed(xmlText: string, show: PodcastShow, limit = 50)
       description: tag(block, "description").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(),
       publishedAt: tag(block, "pubDate") || undefined,
     });
-    if (episodes.length >= limit) break;
   }
   return episodes;
+}
+
+// Stable, URL-safe id for a user feed (djb2 hash, base36). Same URL → same id, so
+// re-adding a feed updates the existing show instead of duplicating it.
+function hashFeedUrl(value: string): number {
+  let h = 5381;
+  for (let i = 0; i < value.length; i++) h = (((h << 5) + h) ^ value.charCodeAt(i)) >>> 0;
+  return h >>> 0;
+}
+
+export function userPodcastId(feedUrl: string): string {
+  return `user-${hashFeedUrl(feedUrl.trim().toLowerCase()).toString(36)}`;
+}
+
+// Auto-assigned gradient accents for user shows (built-in shows hand-pick theirs).
+const USER_PODCAST_ACCENTS: [string, string, string][] = [
+  ["#1ed760", "#06b6d4", "#f97316"],
+  ["#f97316", "#facc15", "#7c3aed"],
+  ["#fb7185", "#f97316", "#22c55e"],
+  ["#0ea5e9", "#a3e635", "#f97316"],
+  ["#8b5cf6", "#ec4899", "#f59e0b"],
+  ["#14b8a6", "#6366f1", "#f43f5e"],
+];
+
+// Pull the channel-level <image>/<url> when there's no <itunes:image href>.
+function rssChannelImage(channel: string): string {
+  const block = channel.match(/<image\b[^>]*>([\s\S]*?)<\/image>/i)?.[1] ?? "";
+  return tag(block, "url");
+}
+
+// Build a PodcastShow from a fetched feed so a user feed displays like the built-in
+// shows. Returns null when the document has no usable <channel><title>.
+export function buildUserPodcastShow(feedUrl: string, xmlText: string): PodcastShow | null {
+  const channel = xmlText.split(/<item\b/i)[0] ?? xmlText;
+  const title = tag(channel, "title");
+  if (!title) return null;
+  const description = (tag(channel, "description") || tag(channel, "itunes:summary"))
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const author = tag(channel, "itunes:author") || tag(channel, "managingEditor") || "Podcast";
+  const subtitle =
+    tag(channel, "itunes:subtitle") ||
+    (description.length > 80 ? `${description.slice(0, 77).trimEnd()}…` : description) ||
+    author;
+  const url = feedUrl.trim();
+  return {
+    id: userPodcastId(url),
+    title,
+    author,
+    subtitle,
+    description,
+    feedUrl: url,
+    websiteUrl: tag(channel, "link"),
+    imageUrl: attr(channel, "itunes:image", "href") || rssChannelImage(channel),
+    accent: USER_PODCAST_ACCENTS[hashFeedUrl(url) % USER_PODCAST_ACCENTS.length],
+    userAdded: true,
+  };
 }

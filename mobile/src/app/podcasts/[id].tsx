@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Text, View } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Pause, Play } from "lucide-react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
@@ -9,6 +9,7 @@ import { EmptyState, ErrorText } from "@/components/ui/States";
 import { CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { apiFetch } from "@/lib/http";
 import { parsePodcastFeed, PODCAST_SHOWS, type PodcastEpisode } from "@/lib/podcasts";
+import { useUserPodcastsStore } from "@/store/user-podcasts";
 import { formatTime } from "@/lib/format";
 import { isEpisodeFinished, readEpisodeProgress } from "@/lib/podcast-progress";
 import { playSongs } from "@/audio/actions";
@@ -17,7 +18,10 @@ import { colors } from "@/theme";
 
 export default function PodcastShowScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const show = PODCAST_SHOWS.find((s) => s.id === id);
+  const router = useRouter();
+  const userShow = useUserPodcastsStore((s) => s.shows.find((sh) => sh.id === id));
+  const removeShow = useUserPodcastsStore((s) => s.removeShow);
+  const show = PODCAST_SHOWS.find((s) => s.id === id) ?? userShow;
   const [episodes, setEpisodes] = useState<PodcastEpisode[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
@@ -31,7 +35,11 @@ export default function PodcastShowScreen() {
     setError(null);
     (async () => {
       try {
-        const res = await apiFetch(`/api/podcast-feeds/${encodeURIComponent(show.id)}`);
+        // User-added feeds are fetched directly (native has no CORS); built-in
+        // shows go through the SSRF-guarded Worker proxy keyed by show id.
+        const res = show.userAdded
+          ? await fetch(show.feedUrl, { headers: { accept: "application/rss+xml, application/xml, text/xml, */*" } })
+          : await apiFetch(`/api/podcast-feeds/${encodeURIComponent(show.id)}`);
         if (!res.ok) throw new Error(`Could not load episodes (${res.status})`);
         const xml = await res.text();
         const parsed = parsePodcastFeed(xml, show);
@@ -131,6 +139,21 @@ export default function PodcastShowScreen() {
                 <Text className="mt-3 text-[13px] leading-5" style={{ color: colors.muted }}>
                   {show.description}
                 </Text>
+              ) : null}
+              {show.userAdded ? (
+                <PressableScale
+                  scaleTo={1}
+                  onPress={() => {
+                    removeShow(show.id);
+                    router.back();
+                  }}
+                  className="mt-4 self-start rounded-full px-4 py-2"
+                  style={{ borderWidth: 1, borderColor: colors.line }}
+                >
+                  <Text className="text-[13px] font-semibold" style={{ color: colors.foreground }}>
+                    Remove from your podcasts
+                  </Text>
+                </PressableScale>
               ) : null}
             </View>
           }

@@ -14,6 +14,7 @@ import { PODCAST_SHOWS } from "@/lib/podcasts";
 import { useLibraryPinsStore } from "@/store/library-pins";
 import { useLibraryViewStore } from "@/store/library-view";
 import { librarySortLabel, useLibrarySortStore } from "@/store/library-sort";
+import { useUserPodcastsStore } from "@/store/user-podcasts";
 import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
@@ -186,6 +187,7 @@ export default function LibraryScreen() {
   const view = useLibraryViewStore((s) => s.view);
   const toggleView = useLibraryViewStore((s) => s.toggleView);
   const sort = useLibrarySortStore((s) => s.sort);
+  const userShows = useUserPodcastsStore((s) => s.shows);
   const pinnedKeys = useLibraryPinsStore((s) => s.pinned);
   const openLibraryActions = useUiStore((s) => s.openLibraryActions);
   const openLibrarySort = useUiStore((s) => s.openLibrarySort);
@@ -235,7 +237,7 @@ export default function LibraryScreen() {
         onPress: () => router.push(`/playlist/${pl.id}`),
       };
     });
-    const shows: LibItem[] = PODCAST_SHOWS.map((show) => ({
+    const shows: LibItem[] = [...userShows, ...PODCAST_SHOWS].map((show) => ({
       key: `pod-${show.id}`,
       cover: imageCover(show.imageUrl),
       title: show.title,
@@ -247,7 +249,7 @@ export default function LibraryScreen() {
     if (filter === "playlists") return [liked, ...playlists];
     if (filter === "podcasts") return shows;
     return [liked, radio, podcastsShortcut, events, ...playlists];
-  }, [filter, data.playlists, user, router]);
+  }, [filter, data.playlists, userShows, user, router]);
 
   // Pinned items float to the top in pin order (newest first); the rest follow the
   // chosen sort. `pinned` drives the green pin indicator on the row.
@@ -277,7 +279,7 @@ export default function LibraryScreen() {
 
   const addActions: AddAction[] = [
     { key: "add-artists", label: "Add artists", shape: "circle", Icon: Plus, onPress: () => router.push("/search") },
-    { key: "add-podcasts", label: "Add podcasts", shape: "square", Icon: Plus, onPress: () => router.push("/podcasts") },
+    { key: "add-podcasts", label: "Add podcasts", shape: "square", Icon: Plus, onPress: () => router.push("/podcasts/add") },
     { key: "add-events", label: "Add events & venues", shape: "square", Icon: Plus, onPress: () => router.push("/events") },
     { key: "import", label: "Import your music", shape: "square", Icon: Download, onPress: () => router.push("/upload") },
   ];
