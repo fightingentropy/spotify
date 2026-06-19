@@ -9,6 +9,7 @@ import AudioEngine, {
   type TimeEvent,
 } from "../../modules/audio-engine";
 import { toAbsoluteApiUrl } from "@/lib/config";
+import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { createPlayListen, flushPlayListen, type PlayListenEntry } from "@/lib/play-events";
 import {
@@ -142,6 +143,29 @@ function computeNext(s: StoreState): NextTrack | null {
 
 // --- track loading (hard cut: user skip / select / initial) -----------------
 async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<void> {
+  // Unstaged Discover placeholder (empty audioUrl): there's nothing to load yet.
+  // Stop the previous track, surface this one's metadata on the lock screen, and
+  // idle until the stager swaps in the real source — which re-enters hardLoad with
+  // a playable URL. Loading toAbsoluteApiUrl("") would point a deck at the API
+  // origin and error.
+  if (song && isUnstagedDiscoverSong(song)) {
+    await abortCrossfade();
+    flushPlayListen(currentListen);
+    currentListen = null;
+    loadSeq += 1; // supersede any in-flight prepare/prefetch from the prior track
+    await AudioEngine.releaseDeck("A");
+    await AudioEngine.releaseDeck("B");
+    deckSong.A = deckSong.B = null;
+    deckKey.A = deckKey.B = null;
+    resetAudioProgress(song.duration ?? 0);
+    setNowPlayingFor(song);
+    // Explicitly mark the lock screen as paused/at-zero — setNowPlaying alone
+    // leaves the system playbackState stale (it would keep showing the prior
+    // track as "playing" with a frozen 0:00 while we idle waiting for the stager).
+    void AudioEngine.updateNowPlaying({ position: 0, rate: 0, playing: false });
+    return;
+  }
+
   const resolved = song ? resolveOfflinePlaybackSong(song) : null;
   const key = resolved ? trackKey(resolved) : null;
 
@@ -283,7 +307,10 @@ function maybeCrossfade(e: TimeEvent, s: StoreState, song: PlayerSong): void {
   const fade = Math.min(s.crossfadeSeconds, Math.max(0.1, e.duration - 0.1));
 
   const next = computeNext(s);
-  if (!next || !crossfadeEligible(next.song)) return; // next is podcast/radio/none → hard-cut on ended
+  // next is podcast/radio/none, or an unstaged Discover placeholder → hard-cut on
+  // ended (the stager replaces a placeholder with a real source before then for a
+  // linear prefetch; a still-unstaged one just falls back to the ended path).
+  if (!next || !crossfadeEligible(next.song) || isUnstagedDiscoverSong(next.song)) return;
 
   // 1) Prefetch the upcoming track onto the idle deck ~8s before the fade window.
   if (prefetchIndex !== next.index && remaining <= fade + PREFETCH_LEAD_S) {

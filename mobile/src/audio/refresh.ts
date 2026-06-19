@@ -3,7 +3,6 @@
 // before the player wedges on a 403. Extracted verbatim from the original
 // engine.ts so engine-rntp and engine-native share one implementation.
 
-import { toAbsoluteApiUrl } from "@/lib/config";
 import { apiFetch } from "@/lib/http";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { usePlayerStore } from "@/store/player";
@@ -28,6 +27,10 @@ const refreshFailures: Record<string, number> = {};
 // Refetch the current song to catch expired signed URLs (fire-and-forget).
 export async function refreshCurrentSong(song: PlayerSong): Promise<void> {
   if (isOwnHandledSong(song) || isPodcastSong(song)) return;
+  // Discover tracks stream from the ephemeral .discover staging cache, not the
+  // signed-library-URL system — their id isn't in /api/songs, so a refresh would
+  // 404 and spuriously skip the track mid-play. The Discover stager owns re-staging.
+  if (song.discoverTrackId) return;
   try {
     const response = await apiFetch(`/api/songs/${encodeURIComponent(song.id)}`, { cache: "no-store" });
     // 401/403 (auth-forbidden) or 404 (gone) → we can't get a fresh signed URL.

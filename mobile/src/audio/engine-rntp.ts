@@ -1,5 +1,6 @@
 import TrackPlayer, { Event, State } from "react-native-track-player";
 import { toAbsoluteApiUrl } from "@/lib/config";
+import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
 import { isPodcastSong } from "@/lib/player-song";
 import {
   createPlayListen,
@@ -56,6 +57,19 @@ function trackKey(song: PlayerSong): string {
 
 // --- track loading ----------------------------------------------------------
 async function loadCurrentSong(song: PlayerSong | null, isPlaying: boolean): Promise<void> {
+  // Unstaged Discover placeholder (empty audioUrl): nothing to load yet — stop
+  // playback and idle until the stager swaps in the real source, which re-enters
+  // this with a playable URL. Adding a track with an empty url would error.
+  if (song && isUnstagedDiscoverSong(song)) {
+    flushPlayListen(currentListen);
+    currentListen = null;
+    lastLoadedKey = null;
+    loadSeq += 1; // supersede any in-flight load from the prior track
+    await TrackPlayer.reset();
+    resetAudioProgress(song.duration ?? 0);
+    return;
+  }
+
   // Swap in the downloaded file:// copy if this song is available offline.
   const resolved = song ? resolveOfflinePlaybackSong(song) : null;
   const key = resolved ? trackKey(resolved) : null;

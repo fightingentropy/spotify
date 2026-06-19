@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { startDiscoverQueueStager } from "@/audio/discover-stager";
 import * as nativeEngine from "@/audio/engine-native";
 import * as rntpEngine from "@/audio/engine-rntp";
 
@@ -16,6 +17,9 @@ export { startSleepTimerWatchdog } from "@/audio/sleep";
 const isIOS = Platform.OS === "ios";
 
 export async function initAudio(): Promise<void> {
+  // Backend-agnostic: drives just-in-time staging for Discover queue placeholders
+  // via a store subscription, so it must be live before any track loads.
+  startDiscoverQueueStager();
   if (isIOS) {
     await nativeEngine.initNativeAudio();
     return;

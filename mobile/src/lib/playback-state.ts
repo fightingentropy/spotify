@@ -28,6 +28,13 @@ export type PlaybackStateSnapshot = {
 export function isPersistablePlayerSong(song: PlayerSong | null | undefined): song is PlayerSong {
   if (!song) return false;
   if (isRadioSong(song)) return false;
+  // Discover tracks play from the ephemeral .discover staging cache: staging URLs
+  // are rebuilt by a cron and the id isn't a library id. Persisting one means a
+  // relaunch tries to resume a stale/missing source and jumps off the song — so we
+  // never write Discover playback to the resume snapshot. buildSnapshot returns
+  // null while one is current, leaving the last REAL-library song as what the phone
+  // resumes. Covers both placeholders ("discover:" id) and staged copies.
+  if (song.discoverTrackId || song.id.startsWith("discover:")) return false;
   if (song.id.startsWith("browser-local:") || song.id.startsWith("picked-file:")) return false;
   return true;
 }

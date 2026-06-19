@@ -26,6 +26,13 @@ type PlayerState = {
   // playback, so it can show Pause / resume instead of rebuilding the queue on
   // every press. null when the queue wasn't started from a tracked context.
   queueContextKey: string | null;
+  // Monotonic id bumped ONLY when a brand-new queue/song is started (setQueue /
+  // setSong) — never by in-place edits (replaceStagedSong, add/playNext/remove) or
+  // navigation (next/previous/advanceToIndex). Lets subscribers (the Discover
+  // stager) distinguish "the user started a fresh queue" — at which point transient
+  // per-queue state must reset — from an in-place swap, deterministically and
+  // without fingerprint heuristics.
+  queueToken: number;
   isPlaying: boolean;
   volume: number; // 0..1
   isMuted: boolean;
@@ -381,6 +388,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playFuture: [],
   shuffleRemaining: [],
   queueContextKey: null,
+  queueToken: 0,
   isPlaying: false,
   volume: readStoredVolume(),
   isMuted: readStoredMuted(),
@@ -414,6 +422,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playFuture: [],
       shuffleRemaining: get().shuffle ? createShuffleRemaining(queue.length, start) : [],
       queueContextKey: currentSong != null ? (options?.contextKey ?? null) : null,
+      queueToken: get().queueToken + 1,
       isPlaying: currentSong != null,
     }));
     return currentSong;
@@ -427,6 +436,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playFuture: [],
       shuffleRemaining: [],
       queueContextKey: null,
+      queueToken: get().queueToken + 1,
     }),
   advanceToIndex: (index, options) =>
     set((s) => {

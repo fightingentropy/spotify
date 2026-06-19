@@ -95,23 +95,38 @@ function applyPlaybackSnapshot(snapshot: PlaybackStateSnapshot): void {
   store.pause(); // never auto-play on cold launch
 }
 
-// Restore queue/index/position on launch. Does NOT auto-play. The local snapshot
-// (synchronous MMKV) is applied IMMEDIATELY so the mini-player appears the
-// instant this runs, instead of waiting on a server round-trip. The server is
-// then reconciled in the background and only overrides if it's strictly newer
-// (e.g. you were playing on another device since this device last published).
-export async function restorePlaybackState(): Promise<void> {
-  const scope = getOfflineAccountScope();
+// Restore queue/index/position on launch. Does NOT auto-play; the synchronous MMKV
+// local snapshot is applied immediately so the mini-player appears at once.
+//
+// Phone-authoritative: this device resumes exactly what IT last played. When a
+// usable local snapshot exists we apply it and STOP — we never reconcile against
+// (or get overridden by) the server. The old behavior awaited a server fetch and
+// swapped to whatever was strictly-newer there; because that resolved after launch
+// — and compared against the stale captured local, with no "user took control"
+// check — it could load a different song out from under you, including one you'd
+// just tapped while the fetch was in flight. We still publish TO the server (so the
+// web's now-playing view stays current), we just don't let it dictate this device.
+export async function restorePlaybackState(scope: string = getOfflineAccountScope()): Promise<void> {
+  // The caller passes the resolved account scope explicitly: this runs from
+  // AudioBootstrap's effect, which fires BEFORE AuthProvider's effect sets the
+  // offline module's scope, so getOfflineAccountScope() would still read its
+  // "anonymous" default and reject this device's own (user-scoped) snapshot —
+  // sending every cold launch down the server fallback and defeating the
+  // phone-authoritative guarantee.
   const local = readLocalPlaybackState();
   const localUsable = local && local.accountScope === scope && local.song ? local : null;
-  if (localUsable) applyPlaybackSnapshot(localUsable);
+  if (localUsable) {
+    applyPlaybackSnapshot(localUsable);
+    return;
+  }
 
+  // No usable local snapshot (fresh install / cleared storage): fall back to the
+  // server ONCE — but only if the user hasn't already taken control since launch,
+  // so a slow fetch can't clobber a song they started while it was in flight.
   try {
     const server = await fetchServerPlaybackState();
-    if (server?.song && (!localUsable || server.updatedAt > localUsable.updatedAt)) {
-      applyPlaybackSnapshot(server);
-    }
+    if (server?.song && !isPlaybackEngaged()) applyPlaybackSnapshot(server);
   } catch {
-    // offline / server error — the local snapshot already on screen stands.
+    // offline / server error — nothing to restore.
   }
 }

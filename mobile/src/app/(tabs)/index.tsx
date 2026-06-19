@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { EmailVerificationBanner } from "@/components/EmailVerificationBanner";
@@ -14,8 +14,8 @@ import {
   withAccountScope,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { apiFetch } from "@/lib/http";
 import { playSongs } from "@/audio/actions";
+import { discoverTrackToPlayerSong } from "@/lib/discover-queue";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { colors } from "@/theme";
@@ -64,6 +64,9 @@ export default function HomeScreen() {
 
   const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
   const currentDiscoverTrackId = usePlayerStore((s) => s.currentSong?.discoverTrackId ?? null);
+  // The active Discover track is still "loading" while it's an un-staged
+  // placeholder (no real src yet) — the stager is materializing it in the background.
+  const currentSongHasAudio = usePlayerStore((s) => Boolean(s.currentSong?.audioUrl));
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const toggle = usePlayerStore((s) => s.toggle);
 
@@ -80,65 +83,22 @@ export default function HomeScreen() {
     playSongs(songs, index);
   };
 
-  const [importingId, setImportingId] = useState<string | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-
   const handleDiscover = useCallback(
-    async (track: DiscoverTrack) => {
-      // Already current → toggle.
+    (track: DiscoverTrack) => {
+      // Already the current Discover track → toggle play/pause.
       if (currentDiscoverTrackId && currentDiscoverTrackId === track.id) {
         toggle();
         return;
       }
-      // Instant path: already staged in the .discover cache.
-      if (track.staged && track.audioUrl && track.audioId) {
-        const song: PlayerSong = {
-          id: track.audioId,
-          title: track.title,
-          artist: track.artist,
-          album: track.album || undefined,
-          imageUrl: track.imageUrl,
-          audioUrl: track.audioUrl,
-          duration: track.durationMs ? Math.round(track.durationMs / 1000) : undefined,
-          source: "server",
-          staged: true,
-          discoverTrackId: track.id,
-        };
-        playSongs([song], 0);
-        return;
-      }
-      // Not staged: materialize on demand, then play.
-      if (importingId) return;
-      setImportingId(track.id);
-      setImportError(null);
-      try {
-        const res = await apiFetch("/api/discover/stage", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            spotifyUrl: track.spotifyUrl,
-            region: "US",
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            durationMs: track.durationMs ?? undefined,
-            imageUrl: track.imageUrl,
-            qualityProfile: "max",
-          }),
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error || `Couldn't load this track (${res.status})`);
-        }
-        const song = (await res.json()) as PlayerSong;
-        playSongs([song], 0);
-      } catch (e) {
-        setImportError(e instanceof Error ? e.message : "Couldn't load this track");
-      } finally {
-        setImportingId(null);
-      }
+      // Queue the WHOLE Discover row, starting at the tapped track, so there's a
+      // real "up next". Already-staged tracks play instantly; the rest enter as
+      // placeholders and the DiscoverQueueStager materializes each on demand as it
+      // becomes current (and prefetches one ahead). Nothing is added to the library.
+      const tracks = discoverData.tracks;
+      const index = tracks.findIndex((t) => t.id === track.id);
+      playSongs(tracks.map(discoverTrackToPlayerSong), index >= 0 ? index : 0);
     },
-    [currentDiscoverTrackId, importingId, toggle],
+    [currentDiscoverTrackId, discoverData.tracks, toggle],
   );
 
   if ((loading && homeData.likedSongIds.length === 0) || status === "loading") {
@@ -163,7 +123,6 @@ export default function HomeScreen() {
         {discoverData.tracks.length > 0 ? (
           <View className="mb-9">
             <SectionTitle>Discover</SectionTitle>
-            {importError ? <View className="mb-3"><ErrorText>{importError}</ErrorText></View> : null}
             <HScroller>
               {discoverData.tracks.map((track) => {
                 const active = currentDiscoverTrackId === track.id;
@@ -176,8 +135,8 @@ export default function HomeScreen() {
                     subtitle={undefined}
                     active={active}
                     isPlaying={active && isPlaying}
-                    loading={importingId === track.id}
-                    onPress={() => void handleDiscover(track)}
+                    loading={active && isPlaying && !currentSongHasAudio}
+                    onPress={() => handleDiscover(track)}
                   />
                 );
               })}
