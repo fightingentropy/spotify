@@ -318,6 +318,27 @@ function PlayerBar(): React.ReactElement | null {
     }
   }, [currentSong, currentSongId, currentSongIsPodcast, currentSongIsRadio, likesHydrated, likePending, toggleLike, songIsLiked, navigate]);
 
+  // Global transport shortcut: ⌘/Ctrl + → skips to the next track, ⌘/Ctrl + ←
+  // to the previous one (mirrors the prev/next buttons below). We ignore the
+  // combo while a text field is focused — so ⌘← / ⌘→ still moves the caret in
+  // the search box — and only swallow it when a song is loaded, otherwise the
+  // browser's back/forward history navigation is left intact. Reads the current
+  // song from the store at fire time to avoid re-binding the listener per track.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (!usePlayerStore.getState().currentSong) return;
+      event.preventDefault();
+      if (event.key === "ArrowRight") next();
+      else previous();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [next, previous]);
+
   // Dual audio elements for real crossfade
   const audioARef = useRef<HTMLAudioElement | null>(null);
   const audioBRef = useRef<HTMLAudioElement | null>(null);
