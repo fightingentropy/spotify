@@ -17,6 +17,7 @@ export type PlaybackStateSnapshot = {
   accountScope: string;
   queue: PlayerSong[];
   currentIndex: number;
+  queueContextKey: string | null;
   song: PlayerSong;
   currentTime: number;
   isPlaying: boolean;
@@ -121,6 +122,7 @@ export function coercePlaybackState(value: unknown, fallbackUpdatedAt = 0): Play
     accountScope: toStringValue(payload.accountScope) || "anonymous",
     queue: queueWithSong,
     currentIndex,
+    queueContextKey: toStringValue(payload.queueContextKey) || null,
     song,
     currentTime: Math.max(0, toNumberValue(payload.currentTime) ?? 0),
     isPlaying: payload.isPlaying === true,

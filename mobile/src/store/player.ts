@@ -54,17 +54,14 @@ type PlayerState = {
   next: () => void;
   previous: () => void;
   // Advance to the nearest queue item satisfying `canPlay`, skipping over the
-  // ones that can't play right now (e.g. not-downloaded while offline). Returns
-  // false when nothing else in the queue is playable, so the caller can stop
-  // instead of churning. Reuses advanceToIndex's shuffle/history bookkeeping.
-  skipToPlayable: (canPlay: (song: PlayerSong) => boolean) => boolean;
-  // Prune the live queue down to the songs satisfying `canPlay` (e.g. downloaded
-  // while offline), so subsequent advances can't surface an unplayable track.
-  // The currently-playing song keeps its exact identity when it survives, so the
-  // engine does NOT reload it — only the rest of the queue is swapped. No-op when
-  // every song already passes (nothing to prune) or none does (let the caller's
-  // advance stop cleanly rather than emptying the queue). Returns true if pruned.
-  retainPlayable: (canPlay: (song: PlayerSong) => boolean) => boolean;
+  // ones that can't play right now (e.g. not-downloaded while offline). `direction`
+  // is +1 (forward, the default — for next()) or -1 (backward — for previous()).
+  // Returns false when nothing else in the queue is playable, so the caller can
+  // stop instead of churning. NON-DESTRUCTIVE: the queue array is left intact (only
+  // the current index moves), so the un-downloaded tracks stay in "up next" and
+  // cross-device resume can still persist/restore the full queue. Reuses
+  // advanceToIndex's shuffle/history bookkeeping.
+  skipToPlayable: (canPlay: (song: PlayerSong) => boolean, direction?: 1 | -1) => boolean;
   setVolume: (v: number) => void;
   toggleMute: () => void;
   toggleShuffle: () => void;
@@ -353,15 +350,19 @@ export function sleepTimerRemainingMinutes(endsAt: number, now = Date.now()): nu
   return Math.max(1, Math.ceil((endsAt - now) / 60_000));
 }
 
-// Offline, collapse the live queue to downloaded songs before an advance so
-// next()/previous() can only land on a track we can actually play — never a
-// flash through an un-streamable one. Online (the default) leaves the queue
-// untouched, and a fully-downloaded or fully-undownloaded queue is a no-op.
+// Offline, a manual skip should hop to the nearest DOWNLOADED track in the given
+// direction (forward for next(), backward for previous()) instead of flashing
+// through an un-streamable one — WITHOUT mutating the queue. Returns true when it
+// handled the advance, so the caller skips its normal (online) logic. Online, or
+// when nothing in the queue is downloaded, returns false and the normal advance
+// runs (the engine's reactive guard then stops a dead queue cleanly). Leaving the
+// queue intact here is what lets cross-device resume persist/restore it in full —
+// a destructive prune would shrink the saved queue to just the downloaded subset.
 // Hoisted so next()/previous() (defined in the store factory below) can call it.
-function pruneQueueWhenOffline(): void {
-  if (getIsOnline()) return;
+function skipDownloadedOffline(direction: 1 | -1): boolean {
+  if (getIsOnline()) return false;
   const isDownloaded = useOfflineStore.getState().isDownloaded;
-  usePlayerStore.getState().retainPlayable((song) => isDownloaded(song.id));
+  return usePlayerStore.getState().skipToPlayable((song) => isDownloaded(song.id), direction);
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -447,7 +448,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         isPlaying: nextPlaying,
       };
     }),
-  skipToPlayable: (canPlay) => {
+  skipToPlayable: (canPlay, direction = 1) => {
     const s = get();
     const n = s.queue.length;
     if (n === 0) return false;
@@ -468,7 +469,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (pool.length > 0) target = pool[Math.floor(Math.random() * pool.length)];
     } else {
       for (let step = 1; step < n; step++) {
-        const i = (s.currentIndex + step) % n;
+        const i = (((s.currentIndex + direction * step) % n) + n) % n;
         if (canPlay(s.queue[i])) {
           target = i;
           break;
@@ -478,64 +479,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (target === undefined) return false;
     get().advanceToIndex(target);
     return true;
-  },
-  retainPlayable: (canPlay) => {
-    let pruned = false;
-    set((s) => {
-      const n = s.queue.length;
-      if (n === 0) return s;
-      const kept: number[] = [];
-      for (let i = 0; i < n; i += 1) {
-        if (canPlay(s.queue[i])) kept.push(i);
-      }
-      // Nothing to do if every song is already playable, or none is (emptying a
-      // live queue would be worse than letting the engine's reactive guard stop).
-      if (kept.length === n || kept.length === 0) return s;
-
-      const oldToNew = new Map<number, number>();
-      kept.forEach((oldIdx, newIdx) => oldToNew.set(oldIdx, newIdx));
-      const queue = kept.map((i) => s.queue[i]);
-
-      // Map the current song forward. If it survived the prune, keep the exact
-      // object so currentSong identity is unchanged → the engine does NOT reload
-      // it and the track keeps playing while the rest of the queue is swapped to
-      // downloads. If the current song itself can't play, move to the nearest
-      // kept song at/after it (wrapping) — a single deliberate hop to a playable
-      // track, never a flash through an unplayable one.
-      let currentIndex: number;
-      let currentSong: PlayerSong | null;
-      const mappedCurrent = oldToNew.get(s.currentIndex);
-      if (mappedCurrent !== undefined) {
-        currentIndex = mappedCurrent;
-        currentSong = s.currentSong;
-      } else {
-        const forward = kept.find((i) => i > s.currentIndex);
-        currentIndex = oldToNew.get(forward ?? kept[0]) as number;
-        currentSong = queue[currentIndex];
-      }
-
-      const remap = (indices: number[]): number[] =>
-        indices.reduce<number[]>((acc, i) => {
-          const mapped = oldToNew.get(i);
-          if (mapped !== undefined) acc.push(mapped);
-          return acc;
-        }, []);
-
-      pruned = true;
-      return {
-        ...s,
-        queue,
-        currentIndex,
-        currentSong,
-        // Keep back/forward navigation working across the smaller queue; rebuild
-        // the shuffle pool fresh so shuffle keeps cycling the downloaded subset
-        // instead of risking an empty pool that would stop playback early.
-        playHistory: remap(s.playHistory),
-        playFuture: remap(s.playFuture),
-        shuffleRemaining: s.shuffle ? createShuffleRemaining(queue.length, currentIndex) : [],
-      };
-    });
-    return pruned;
   },
   replaceSong: (song) =>
     set((s) => {
@@ -635,7 +578,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   next: () => {
     markPlaybackEngaged();
-    pruneQueueWhenOffline();
+    if (skipDownloadedOffline(1)) return;
     set((s) => {
       if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
       if (s.shuffle) {
@@ -689,7 +632,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   previous: () => {
     markPlaybackEngaged();
-    pruneQueueWhenOffline();
+    if (skipDownloadedOffline(-1)) return;
     set((s) => {
       if (s.queue.length === 0) return s;
       if (s.shuffle) {

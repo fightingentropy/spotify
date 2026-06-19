@@ -56,6 +56,7 @@ function buildSnapshot(): PlaybackStateSnapshot | null {
     accountScope: getOfflineAccountScope(),
     queue: queue.length ? queue : [song],
     currentIndex,
+    queueContextKey: s.queueContextKey,
     song,
     currentTime: lastPosition,
     isPlaying: s.isPlaying,
@@ -90,7 +91,7 @@ function applyPlaybackSnapshot(snapshot: PlaybackStateSnapshot): void {
   // updatedAt (no Date.now() restamp), so last-write-wins stays meaningful.
   writeLocalPlaybackState(snapshot);
   const store = usePlayerStore.getState();
-  store.setQueue(snapshot.queue, snapshot.currentIndex);
+  store.setQueue(snapshot.queue, snapshot.currentIndex, { contextKey: snapshot.queueContextKey ?? undefined });
   store.pause(); // never auto-play on cold launch
 }
 
