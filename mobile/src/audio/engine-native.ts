@@ -500,8 +500,17 @@ function subscribeToStore(): void {
     if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume();
     if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong);
     // A brand-new queue (user started a different list) re-evaluates offline
-    // inference from scratch.
-    if (state.queue !== prev.queue) offlinePlayback = false;
+    // inference from scratch, and is persisted IMMEDIATELY rather than only at the
+    // end of the async track load (hardLoad) — otherwise starting a queue from a
+    // collection's Play button and quitting right away loses it: a relaunch then
+    // restores the PREVIOUS queue and the "started from Liked Songs" context tag
+    // never sticks, so that collection's big Play button can't resume it. Gated on
+    // "engaged" inside publishPlaybackState, so a cold-launch restore's own
+    // setQueue can't publish over newer cross-device state.
+    if (state.queue !== prev.queue) {
+      offlinePlayback = false;
+      void publishPlaybackState(true);
+    }
     prev = state;
   });
 }

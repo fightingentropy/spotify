@@ -220,6 +220,10 @@ function subscribeToStore(): void {
     }
     if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume();
     if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong);
+    // Persist a newly-started/edited queue immediately (not just at the end of the
+    // async track load) so quitting right after starting a list from a Play button
+    // doesn't lose it; gated on "engaged" so a cold-launch restore can't publish.
+    if (state.queue !== prev.queue) void publishPlaybackState(true);
     prev = state;
   });
 }
