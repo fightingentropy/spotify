@@ -26,6 +26,7 @@ type UiState = {
   sleepTimerOpen: boolean;
   profileMenuOpen: boolean;
   createMenuOpen: boolean;
+  librarySortOpen: boolean;
   trackActions: TrackActionsTarget;
   libraryActions: LibraryActionsTarget;
   openNowPlaying: () => void;
@@ -38,6 +39,8 @@ type UiState = {
   closeProfileMenu: () => void;
   openCreateMenu: () => void;
   closeCreateMenu: () => void;
+  openLibrarySort: () => void;
+  closeLibrarySort: () => void;
   openTrackActions: (target: NonNullable<TrackActionsTarget>) => void;
   closeTrackActions: () => void;
   openLibraryActions: (target: NonNullable<LibraryActionsTarget>) => void;
@@ -50,6 +53,7 @@ export const useUiStore = create<UiState>((set) => ({
   sleepTimerOpen: false,
   profileMenuOpen: false,
   createMenuOpen: false,
+  librarySortOpen: false,
   trackActions: null,
   libraryActions: null,
   openNowPlaying: () => set({ nowPlayingOpen: true }),
@@ -62,6 +66,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeProfileMenu: () => set({ profileMenuOpen: false }),
   openCreateMenu: () => set({ createMenuOpen: true }),
   closeCreateMenu: () => set({ createMenuOpen: false }),
+  openLibrarySort: () => set({ librarySortOpen: true }),
+  closeLibrarySort: () => set({ librarySortOpen: false }),
   openTrackActions: (target) => set({ trackActions: target }),
   closeTrackActions: () => set({ trackActions: null }),
   openLibraryActions: (target) => set({ libraryActions: target }),

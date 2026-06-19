@@ -12,7 +12,8 @@ import { type LibraryPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { PODCAST_SHOWS } from "@/lib/podcasts";
 import { useLibraryPinsStore } from "@/store/library-pins";
-import { useLibraryViewStore, type LibraryViewMode } from "@/store/library-view";
+import { useLibraryViewStore } from "@/store/library-view";
+import { librarySortLabel, useLibrarySortStore } from "@/store/library-sort";
 import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
@@ -29,6 +30,9 @@ type LibItem = {
   // Whether long-pressing the row offers Pin/Unpin (content items, not the
   // navigation shortcuts like Radio / Upload / Live Events).
   pinnable?: boolean;
+  // Epoch ms used by the "Recently added" sort. Undefined for items without a
+  // creation date (the nav shortcuts) — they sort as newest and stay on top.
+  addedAt?: number;
   onPress: () => void;
 };
 
@@ -116,36 +120,34 @@ function GridCell({ item, size, onLongPress }: { item: LibItem; size: number; on
 }
 
 // The "Add …" shortcuts pinned to the bottom of Your Library (Spotify parity): a
-// hollow chip + label, rendered as grid tiles (image) or list rows to match the
-// current view. Artists is a circle; the rest are rounded squares.
+// hollow chip + label. Artists is a circle; the rest are rounded squares. In grid
+// view these flow as cells in the SAME wrap as the library tiles, so they backfill
+// the last row instead of leaving gaps; in list view they're rows at the bottom.
 type AddAction = { key: string; label: string; shape: "circle" | "square"; Icon: LucideIcon; onPress: () => void };
 
-function LibraryAddActions({ view, cellWidth, actions }: { view: LibraryViewMode; cellWidth: number; actions: AddAction[] }) {
-  if (view === "grid") {
-    return (
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: GRID_GAP, paddingHorizontal: 16, paddingTop: 10 }}>
-        {actions.map((a) => (
-          <PressableScale key={a.key} scaleTo={0.97} onPress={a.onPress} style={{ width: cellWidth }}>
-            <View
-              style={{
-                width: cellWidth,
-                height: cellWidth,
-                borderRadius: a.shape === "circle" ? cellWidth / 2 : 6,
-                backgroundColor: colors.card,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <a.Icon size={Math.round(cellWidth * 0.34)} color={colors.iconIdle} />
-            </View>
-            <Text numberOfLines={2} className="mt-1.5 text-[13px] font-semibold leading-4" style={{ color: colors.foreground }}>
-              {a.label}
-            </Text>
-          </PressableScale>
-        ))}
+function AddActionGridCell({ action, size }: { action: AddAction; size: number }) {
+  return (
+    <PressableScale scaleTo={0.97} onPress={action.onPress} style={{ width: size }}>
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: action.shape === "circle" ? size / 2 : 6,
+          backgroundColor: colors.card,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <action.Icon size={Math.round(size * 0.34)} color={colors.iconIdle} />
       </View>
-    );
-  }
+      <Text numberOfLines={2} className="mt-1.5 text-[13px] font-semibold leading-4" style={{ color: colors.foreground }}>
+        {action.label}
+      </Text>
+    </PressableScale>
+  );
+}
+
+function LibraryAddActionsList({ actions }: { actions: AddAction[] }) {
   return (
     <View className="pt-1">
       {actions.map((a) => (
@@ -183,8 +185,10 @@ export default function LibraryScreen() {
   const [filter, setFilter] = useState<Filter>("all");
   const view = useLibraryViewStore((s) => s.view);
   const toggleView = useLibraryViewStore((s) => s.toggleView);
+  const sort = useLibrarySortStore((s) => s.sort);
   const pinnedKeys = useLibraryPinsStore((s) => s.pinned);
   const openLibraryActions = useUiStore((s) => s.openLibraryActions);
+  const openLibrarySort = useUiStore((s) => s.openLibrarySort);
 
   const cellWidth = Math.floor((width - 32 - GRID_GAP * 2) / 3);
 
@@ -219,14 +223,18 @@ export default function LibraryScreen() {
       subtitle: "Concerts & venues near you",
       onPress: () => router.push("/events"),
     };
-    const playlists: LibItem[] = data.playlists.map((pl) => ({
-      key: `pl-${pl.id}`,
-      cover: imageCover(pl.imageUrl),
-      title: pl.name,
-      subtitle: `Playlist • ${owner}`,
-      pinnable: true,
-      onPress: () => router.push(`/playlist/${pl.id}`),
-    }));
+    const playlists: LibItem[] = data.playlists.map((pl) => {
+      const added = pl.createdAt ? Date.parse(pl.createdAt) : NaN;
+      return {
+        key: `pl-${pl.id}`,
+        cover: imageCover(pl.imageUrl),
+        title: pl.name,
+        subtitle: `Playlist • ${owner}`,
+        pinnable: true,
+        addedAt: Number.isNaN(added) ? undefined : added,
+        onPress: () => router.push(`/playlist/${pl.id}`),
+      };
+    });
     const shows: LibItem[] = PODCAST_SHOWS.map((show) => ({
       key: `pod-${show.id}`,
       cover: imageCover(show.imageUrl),
@@ -241,16 +249,24 @@ export default function LibraryScreen() {
     return [liked, radio, podcastsShortcut, events, ...playlists];
   }, [filter, data.playlists, user, router]);
 
-  // Pinned items float to the top in pin order (newest first); everything else
-  // keeps its natural order. `pinned` drives the green pin indicator on the row.
+  // Pinned items float to the top in pin order (newest first); the rest follow the
+  // chosen sort. `pinned` drives the green pin indicator on the row.
   const ordered = useMemo(() => {
     const rank = new Map(pinnedKeys.map((k, i) => [k, i] as const));
     const pinnedItems = items
       .filter((it) => rank.has(it.key))
       .sort((a, b) => (rank.get(a.key) ?? 0) - (rank.get(b.key) ?? 0));
     const rest = items.filter((it) => !rank.has(it.key));
-    return [...pinnedItems, ...rest].map((it) => ({ ...it, pinned: rank.has(it.key) }));
-  }, [items, pinnedKeys]);
+    // "Recents" keeps the natural (API) order; the others sort the unpinned items.
+    // Both sorts are stable, so ties (and dateless nav shortcuts) hold their order.
+    const sortedRest =
+      sort === "alphabetical"
+        ? [...rest].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }))
+        : sort === "recently-added"
+          ? [...rest].sort((a, b) => (b.addedAt ?? Number.MAX_SAFE_INTEGER) - (a.addedAt ?? Number.MAX_SAFE_INTEGER))
+          : rest;
+    return [...pinnedItems, ...sortedRest].map((it) => ({ ...it, pinned: rank.has(it.key) }));
+  }, [items, pinnedKeys, sort]);
 
   const handleLongPress = (item: LibItem) => {
     if (!item.pinnable) return;
@@ -297,14 +313,17 @@ export default function LibraryScreen() {
           <FilterChip label="Podcasts" active={filter === "podcasts"} onPress={() => setFilter((f) => (f === "podcasts" ? "all" : "podcasts"))} />
         </View>
 
-        {/* recents + view toggle */}
+        {/* sort + view toggle */}
         <View className="mb-1 flex-row items-center justify-between px-4">
-          <View className="flex-row items-center gap-2">
-            <ArrowDownUp size={16} color={colors.foreground} />
-            <Text className="text-sm" style={{ color: colors.foreground }}>
-              Recents
-            </Text>
-          </View>
+          <PressableScale onPress={openLibrarySort} hitSlop={8} accessibilityLabel="Change sort order">
+            {/* flex-row on an inner View, not the Pressable (RN/Fabric row→column quirk) */}
+            <View className="flex-row items-center gap-2">
+              <ArrowDownUp size={16} color={colors.foreground} />
+              <Text className="text-sm" style={{ color: colors.foreground }}>
+                {librarySortLabel(sort)}
+              </Text>
+            </View>
+          </PressableScale>
           <PressableScale onPress={toggleView} hitSlop={8} accessibilityLabel="Toggle layout">
             <View>{view === "grid" ? <ListIcon size={22} color={colors.iconIdle} /> : <LayoutGrid size={20} color={colors.iconIdle} />}</View>
           </PressableScale>
@@ -315,6 +334,9 @@ export default function LibraryScreen() {
             {ordered.map((item) => (
               <GridCell key={item.key} item={item} size={cellWidth} onLongPress={() => handleLongPress(item)} />
             ))}
+            {filter === "all"
+              ? addActions.map((a) => <AddActionGridCell key={a.key} action={a} size={cellWidth} />)
+              : null}
           </View>
         ) : (
           ordered.map((item) => <ListRow key={item.key} item={item} onLongPress={() => handleLongPress(item)} />)
@@ -340,9 +362,9 @@ export default function LibraryScreen() {
           </Text>
         ) : null}
 
-        {filter === "all" ? (
+        {filter === "all" && view === "list" ? (
           <View className="mt-2">
-            <LibraryAddActions view={view} cellWidth={cellWidth} actions={addActions} />
+            <LibraryAddActionsList actions={addActions} />
           </View>
         ) : null}
       </ScrollView>
