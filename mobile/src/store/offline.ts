@@ -846,19 +846,11 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
       }
     } catch {}
 
-    // NSURLSession also stages some transfers as CFNetworkDownload_*.tmp directly
-    // in the container's tmp/, and an interrupted one (force-quit / offline) is
-    // stranded there — a spot the Downloads/ sweep above doesn't reach. Remove
-    // only those scraps; leave any other tmp/ file alone.
-    try {
-      const tmpRoot = `${containerRoot}tmp/`;
-      const tmpFiles = await FileSystem.readDirectoryAsync(tmpRoot).catch(() => [] as string[]);
-      await Promise.all(
-        tmpFiles
-          .filter((f) => f.startsWith("CFNetworkDownload"))
-          .map((f) => FileSystem.deleteAsync(`${tmpRoot}${f}`, { idempotent: true }).catch(() => {})),
-      );
-    } catch {}
+    // NOTE: CFNetwork can also strand a CFNetworkDownload_*.tmp partial directly
+    // in the container's tmp/, but expo-file-system is sandboxed to Documents/ +
+    // Caches/ (the nsurlsessiond sweep above works only because it's under Caches),
+    // so tmp/ is unreachable from JS — a sweep there silently no-ops. iOS reclaims
+    // NSTemporaryDirectory on its own; a stuck one can be zeroed via devicectl.
   }
 
   try {
