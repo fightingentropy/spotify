@@ -234,6 +234,14 @@ function createShuffleRemaining(queueLength: number, currentIndex: number): numb
   for (let index = 0; index < queueLength; index += 1) {
     if (index !== current) remaining.push(index);
   }
+  // Randomize the play order ONCE here (Fisher–Yates) rather than picking a random
+  // index at each next(). The queue sheet renders this exact order as "up next"
+  // (via getUpcomingPlaybackIndices) and next() consumes it head-first, so a fixed
+  // shuffled order is what keeps the displayed queue matching what actually plays.
+  for (let i = remaining.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+  }
   return remaining;
 }
 
@@ -466,7 +474,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
               if (i !== s.currentIndex && canPlay(song)) acc.push(i);
               return acc;
             }, []);
-      if (pool.length > 0) target = pool[Math.floor(Math.random() * pool.length)];
+      if (pool.length > 0) target = pool[0];
     } else {
       for (let step = 1; step < n; step++) {
         const i = (((s.currentIndex + direction * step) % n) + n) % n;
@@ -604,7 +612,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             : s.shuffleRemaining;
         const idx =
           idxFromFuture === undefined
-            ? shufflePool[Math.floor(Math.random() * shufflePool.length)]
+            ? shufflePool[0]
             : idxFromFuture;
         if (idx === undefined || idx < 0 || idx >= s.queue.length) return s;
         if (idx === s.currentIndex) return s;
