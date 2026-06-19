@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, type RefObject } from "react";
-import { resolveNativeApiUrl } from "@/lib/song-utils";
 
 type MediaSessionSong = {
   title: string;
@@ -36,8 +35,6 @@ function resolveArtworkUrl(imageUrl: string): string {
     return `${location.origin}${FALLBACK_ARTWORK}`;
   }
   if (/^https?:/i.test(imageUrl)) return imageUrl;
-  const nativeUrl = resolveNativeApiUrl(imageUrl);
-  if (/^https?:/i.test(nativeUrl)) return nativeUrl;
   return `${location.origin}${imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`}`;
 }
 

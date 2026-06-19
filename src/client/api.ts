@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlayerSong } from "@/types/player";
-import {
-  readOfflineApiSnapshot,
-  removeOfflineApiSnapshots,
-  writeOfflineApiSnapshot,
-} from "@/client/offline-api-snapshots";
+
+// The signed-in account the API cache + optimistic patches are scoped to. Kept
+// here (rather than in a player/store module) because api.ts owns withAccountScope
+// and patchLikeApiCache, the two things that actually read it. auth.tsx sets it on
+// every auth transition; likes.ts reads it before patching cached payloads.
+let currentAccountScope = "anonymous";
+
+export function normalizeAccountScope(scope: string | null | undefined): string {
+  const value = scope?.trim();
+  return value && value !== "loading" ? value : "anonymous";
+}
+
+export function getAccountScope(): string {
+  return currentAccountScope;
+}
+
+export function setAccountScope(scope: string | null | undefined): void {
+  currentAccountScope = normalizeAccountScope(scope);
+}
 
 export type PlaylistEntry = {
   id: string;
@@ -23,10 +37,8 @@ type ApiCacheEntry<T = unknown> = {
   promiseStartedAt?: number;
 };
 
-const API_REFRESH_HEADER = "x-spotify-api-refresh";
 export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
 const API_FETCH_TIMEOUT_MS = 5_000;
-const API_SNAPSHOT_READ_TIMEOUT_MS = 1_000;
 const apiCache = new Map<string, ApiCacheEntry>();
 
 function getApiPath(url: string): string {
@@ -60,27 +72,12 @@ export function withAccountScope(url: string, scope: string | null | undefined):
   }
 }
 
-function isPersistableApiUrl(url: string): boolean {
-  const path = getApiPath(url);
-  return (
-    path === "/api/home" ||
-    path === "/api/search-index" ||
-    path === "/api/library" ||
-    path === "/api/liked" ||
-    path === "/api/likes" ||
-    path === "/api/music/source" ||
-    path === "/api/songs" ||
-    path === "/api/stats/home" ||
-    path.startsWith("/api/playlist/")
-  );
-}
-
 function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   const memory = apiCache.get(url) as ApiCacheEntry<T> | undefined;
   if (!memory) return undefined;
   if (memory.promise) {
     const startedAt = memory.promiseStartedAt ?? (memory.fetchedAt > 0 ? memory.fetchedAt : 0);
-    if (!startedAt || Date.now() - startedAt > API_FETCH_TIMEOUT_MS + API_SNAPSHOT_READ_TIMEOUT_MS + 1_000) {
+    if (!startedAt || Date.now() - startedAt > API_FETCH_TIMEOUT_MS + 2_000) {
       apiCache.set(url, {
         data: memory.data,
         etag: memory.etag,
@@ -94,79 +91,22 @@ function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
   return undefined;
 }
 
-async function readStoredApiCache<T>(url: string): Promise<ApiCacheEntry<T> | undefined> {
-  if (typeof window === "undefined" || !isPersistableApiUrl(url)) return undefined;
-
-  const snapshot = await withClientTimeout(
-    readOfflineApiSnapshot<T>(url),
-    API_SNAPSHOT_READ_TIMEOUT_MS,
-    "Offline snapshot read timed out",
-  ).catch(() => undefined);
-  if (!snapshot || snapshot.data === undefined || typeof snapshot.fetchedAt !== "number") return undefined;
-  return {
-    data: snapshot.data,
-    etag: snapshot.etag ?? null,
-    fetchedAt: snapshot.fetchedAt,
-  };
-}
-
-async function getCacheEntryAsync<T>(url: string): Promise<ApiCacheEntry<T> | undefined> {
-  const memory = getCacheEntry<T>(url);
-  if (memory?.data !== undefined || memory?.promise) return memory;
-  const stored = await readStoredApiCache<T>(url);
-  if (stored) apiCache.set(url, stored);
-  return stored;
-}
-
 function getCachedData<T>(url: string): T | undefined {
   return getCacheEntry<T>(url)?.data;
 }
 
 function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
-  const entry: ApiCacheEntry<T> = { data, etag: etag ?? null, fetchedAt: Date.now() };
-  apiCache.set(url, entry);
-  if (isPersistableApiUrl(url)) {
-    void writeOfflineApiSnapshot(url, data, entry.etag, entry.fetchedAt);
-  }
+  apiCache.set(url, { data, etag: etag ?? null, fetchedAt: Date.now() });
   return data;
 }
 
-function canSyncApiData(): boolean {
-  return typeof navigator === "undefined" || navigator.onLine !== false;
-}
-
-function canReadApiThroughServiceWorkerCache(url: string): boolean {
-  return (
-    typeof navigator !== "undefined" &&
-    navigator.onLine === false &&
-    "serviceWorker" in navigator &&
-    !!navigator.serviceWorker.controller &&
-    isPersistableApiUrl(url)
-  );
-}
-
-function offlineCacheMissMessage(url: string): string {
-  const path = getApiPath(url);
-  if (path === "/api/home") return "Your library has not been cached for offline use yet.";
-  if (path === "/api/search-index") return "Search has not been cached for offline use yet.";
-  if (path === "/api/library") return "Your library sidebar has not been cached for offline use yet.";
-  if (path === "/api/liked" || path === "/api/likes") return "Liked songs have not been cached for offline use yet.";
-  if (path.startsWith("/api/playlist/")) return "This playlist has not been cached for offline use yet.";
-  return "This data has not been cached for offline use yet.";
-}
-
-function apiErrorMessage(url: string, error: unknown): string {
+function apiErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Request failed";
-  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-  if (offline) return offlineCacheMissMessage(url);
-  // A timeout/abort while we still appear online is not an offline-cache miss —
-  // the request just took too long. Surface a generic retry message instead of
-  // the misleading "not cached for offline use yet" copy.
   if (/request timed out|abort/i.test(message)) {
     return "Taking too long to load — please retry.";
   }
-  if (/offline|network and cache miss|failed to fetch|load failed/i.test(message)) {
-    return offlineCacheMissMessage(url);
+  if (/failed to fetch|load failed/i.test(message)) {
+    return "Couldn't load — check your connection and retry.";
   }
   return message;
 }
@@ -174,19 +114,6 @@ function apiErrorMessage(url: string, error: unknown): string {
 function dispatchApiAuthRequired(url: string): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(API_AUTH_REQUIRED_EVENT, { detail: { url } }));
-}
-
-async function withClientTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  if (typeof window === "undefined") return promise;
-  let timeoutId: number | undefined;
-  try {
-    const timeout = new Promise<never>((_, reject) => {
-      timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
-    });
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-  }
 }
 
 async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -300,12 +227,11 @@ export function patchLikeApiCache(
 }
 
 async function fetchApiData<T>(url: string): Promise<T> {
-  const cached = await getCacheEntryAsync<T>(url);
+  const cached = getCacheEntry<T>(url);
   if (cached?.promise) return cached.promise;
 
   const promise = (async () => {
     const headers = new Headers({ accept: "application/json" });
-    if (canSyncApiData()) headers.set(API_REFRESH_HEADER, "1");
     if (cached?.etag && cached.data !== undefined) headers.set("if-none-match", cached.etag);
 
     const response = await fetchWithTimeout(url, {
@@ -321,9 +247,8 @@ async function fetchApiData<T>(url: string): Promise<T> {
       return writeApiCache(url, current.data as T, current.etag ?? null);
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as { error?: string; offline?: boolean };
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
       if (response.status === 401) dispatchApiAuthRequired(url);
-      if (payload.offline) throw new Error(offlineCacheMissMessage(url));
       throw new Error(payload.error || `Request failed with ${response.status}`);
     }
     return writeApiCache(url, (await response.json()) as T, response.headers.get("etag"));
@@ -347,9 +272,6 @@ async function fetchApiData<T>(url: string): Promise<T> {
         etag: next.etag,
         fetchedAt: next.fetchedAt,
       });
-      if (next.data !== undefined && isPersistableApiUrl(url)) {
-        void writeOfflineApiSnapshot(url, next.data, next.etag, next.fetchedAt);
-      }
     }
   }
 }
@@ -357,7 +279,6 @@ async function fetchApiData<T>(url: string): Promise<T> {
 export function invalidateApiCache(match?: string | RegExp | ((url: string) => boolean)): void {
   if (!match) {
     apiCache.clear();
-    void removeOfflineApiSnapshots();
     return;
   }
 
@@ -370,7 +291,6 @@ export function invalidateApiCache(match?: string | RegExp | ((url: string) => b
           : match(key);
     if (shouldDelete) apiCache.delete(key);
   }
-  void removeOfflineApiSnapshots(match);
 }
 
 export function invalidateLibraryApiCache(accountScope?: string): void {
@@ -420,7 +340,7 @@ export function useApiData<T>(
     let cancelled = false;
 
     async function run() {
-      const cached = await getCacheEntryAsync<T>(url);
+      const cached = getCacheEntry<T>(url);
       const cachedData = cached?.data;
       // keepPreviousData should only suppress the spinner/error when data is
       // actually on screen — on a cold load (no visible data yet) it must NOT
@@ -442,14 +362,6 @@ export function useApiData<T>(
         setLoading(false);
       }
 
-      if (!canSyncApiData() && !(cachedData === undefined && canReadApiThroughServiceWorkerCache(url))) {
-        if (cachedData === undefined && !canReuseCurrentData) {
-          setError(offlineCacheMissMessage(url));
-        }
-        setLoading(false);
-        return;
-      }
-
       if (!background || cachedData !== undefined) setError(null);
       try {
         const payload = await fetchApiData<T>(url);
@@ -462,7 +374,7 @@ export function useApiData<T>(
         if (!cancelled) {
           setError(
             cachedData === undefined && !canReuseCurrentData
-              ? apiErrorMessage(url, err)
+              ? apiErrorMessage(err)
               : null,
           );
         }

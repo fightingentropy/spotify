@@ -13,7 +13,6 @@ import {
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { useDiscoverPlayback } from "@/client/use-discover-playback";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
@@ -86,23 +85,7 @@ export default function HomePage() {
   // Discover tiles play through the shared staging hook (no library writes).
   const discover = useDiscoverPlayback();
 
-  // Subscribe to a stable signature of only the downloaded record ids rather
-  // than the whole records map. resolveOfflinePlaybackSong only swaps in
-  // records whose status is "downloaded", so per-tick progress updates on an
-  // active download no longer churn this value. The signature changes only
-  // when a download completes/is removed.
-  const offlineRecordsSignature = useOfflineStore((state) => {
-    const ids: string[] = [];
-    for (const id of Object.keys(state.records)) {
-      if (state.records[id]?.status === "downloaded") ids.push(id);
-    }
-    return ids.sort().join("|");
-  });
-
-  const resolveHomeSong = useCallback(
-    (song: HomeSong): HomeSong => resolveOfflinePlaybackSong(song) as HomeSong,
-    [offlineRecordsSignature],
-  );
+  const resolveHomeSong = useCallback((song: HomeSong): HomeSong => song, []);
 
   const warmSongSoon = useCallback((song: HomeSong) => {
     warmPlaybackSong(song, true);

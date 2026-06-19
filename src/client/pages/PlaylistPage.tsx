@@ -13,7 +13,6 @@ import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
 import { SongGrid } from "@/components/SongGrid";
-import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
 import { cn } from "@/lib/utils";
 
 function PlaylistLoadingSkeleton() {
@@ -207,14 +206,6 @@ export default function PlaylistPage() {
           <h1 className="truncate text-2xl font-semibold">{data.playlist.name}</h1>
           <div className="mt-1 text-sm opacity-70">{data.songs.length} tracks</div>
         </div>
-        {data.songs.length > 0 ? (
-          <OfflineBulkDownloadButton
-            songs={data.songs}
-            scope={`playlist:${data.playlist.id}`}
-            label="Download playlist"
-            className="w-full justify-center sm:w-auto"
-          />
-        ) : null}
       </div>
       {data.songs.length === 0 ? (
         <div className="opacity-70">This playlist is empty.</div>

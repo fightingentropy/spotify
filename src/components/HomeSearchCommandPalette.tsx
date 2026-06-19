@@ -10,7 +10,6 @@ import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
 import { cn } from "@/lib/utils";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type HomeSearchCommandPaletteProps = {
   className?: string;
@@ -25,7 +24,6 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const setQueue = usePlayerStore((state) => state.setQueue);
-  const offlineRecords = useOfflineStore((state) => state.records);
   const { data, loading, error } = useApiData<SearchIndexPayload>(
     withAccountScope("/api/search-index", user?.id ?? status),
     { songs: [] },
@@ -47,10 +45,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       .slice(0, 20);
   }, [dedupedSongs, query]);
 
-  const resolvedResults = useMemo(
-    () => results.map((song) => resolveOfflinePlaybackSong(song)),
-    [offlineRecords, results],
-  );
+  const resolvedResults = results;
 
   useEffect(() => {
     if (!open) return;

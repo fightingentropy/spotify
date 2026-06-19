@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type MouseEvent,
@@ -16,9 +15,7 @@ import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { useModalDialogFocus } from "@/lib/use-modal-dialog";
-import { impactLight } from "@/lib/haptics";
 
 type TrackActionsButtonProps = {
   song: PlayerSong;
@@ -54,7 +51,6 @@ export function TrackActionsButton({
 
   const handleOpen = useCallback((event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    void impactLight();
     setOpen(true);
   }, []);
 
@@ -117,8 +113,7 @@ function TrackActionsSheet({
 }: TrackActionsSheetProps) {
   const addToQueue = usePlayerStore((state) => state.addToQueue);
   const playNext = usePlayerStore((state) => state.playNext);
-  const offlineRecord = useOfflineStore(useCallback((state) => state.records[song.id], [song.id]));
-  const displaySong = useMemo(() => resolveOfflinePlaybackSong(song), [offlineRecord, song]);
+  const displaySong = song;
 
   const panelRef = useRef<HTMLElement | null>(null);
   const closingRef = useRef(false);
@@ -165,7 +160,6 @@ function TrackActionsSheet({
 
   const runAction = useCallback(
     (action: () => void) => {
-      void impactLight();
       action();
       close();
     },

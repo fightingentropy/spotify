@@ -12,7 +12,6 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
-import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
 import {
   PODCAST_SHOWS,
   parsePodcastFeed,
@@ -360,8 +359,6 @@ export default function PodcastsPage() {
                           ) : null}
                         </div>
                       </button>
-
-                      <OfflineSongDownloadButton song={episode} className="h-10 w-10" />
                     </article>
                   );
                 })}

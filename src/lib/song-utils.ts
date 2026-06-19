@@ -1,28 +1,10 @@
 import type { SongRow } from "@/lib/db-types";
-import { rewriteNativeApiUrl } from "@/lib/native-api";
 import type { PlayerSong } from "@/types/player";
 
 const SPOTIFY_FALLBACK_COVER = "/apple-icon.png";
 
-export function isNativeCapacitorApp(): boolean {
-  if (typeof window === "undefined") return false;
-  const capacitor = (window as Window & {
-    Capacitor?: { isNativePlatform?: () => boolean };
-  }).Capacitor;
-  try {
-    return !!capacitor?.isNativePlatform?.();
-  } catch {
-    return false;
-  }
-}
-
-export function resolveNativeApiUrl(url: string): string {
-  return isNativeCapacitorApp() ? rewriteNativeApiUrl(url) : url;
-}
-
 export function normalizeCoverImageUrl(url: string | null | undefined): string {
-  if (!url) return SPOTIFY_FALLBACK_COVER;
-  return resolveNativeApiUrl(url);
+  return url || SPOTIFY_FALLBACK_COVER;
 }
 
 export function normalizeMediaUrl(url: string | null | undefined): string {

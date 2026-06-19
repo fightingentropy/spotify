@@ -26,9 +26,6 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
-    "@capacitor/core": "^8.4.0",
-    "@capacitor/filesystem": "^8.1.2",
-    "@capacitor/haptics": "^8.0.2",
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
     "hls.js": "^1.6.16",

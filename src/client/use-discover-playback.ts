@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import type { DiscoverTrack } from "@/client/api";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
@@ -31,18 +30,9 @@ export function useDiscoverPlayback(): UseDiscoverPlayback {
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const currentDiscoverTrackId = usePlayerStore((state) => state.currentSong?.discoverTrackId ?? null);
 
-  // Subscribe to a stable signature of only the downloaded record ids so
-  // per-tick progress updates on an active download don't churn resolveSong.
-  const offlineRecordsSignature = useOfflineStore((state) => {
-    const ids: string[] = [];
-    for (const id of Object.keys(state.records)) {
-      if (state.records[id]?.status === "downloaded") ids.push(id);
-    }
-    return ids.sort().join("|");
-  });
   const resolveSong = useCallback(
-    (song: DiscoverPlaybackSong): DiscoverPlaybackSong => resolveOfflinePlaybackSong(song) as DiscoverPlaybackSong,
-    [offlineRecordsSignature],
+    (song: DiscoverPlaybackSong): DiscoverPlaybackSong => song,
+    [],
   );
 
   const [importingId, setImportingId] = useState<string | null>(null);

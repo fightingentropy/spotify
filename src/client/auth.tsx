@@ -1,21 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { API_AUTH_REQUIRED_EVENT, invalidateApiCache } from "@/client/api";
-import { setOfflineAccountScope } from "@/client/offline";
-import { isNativeCapacitorApp } from "@/lib/song-utils";
+import { API_AUTH_REQUIRED_EVENT, invalidateApiCache, setAccountScope } from "@/client/api";
 import { useLikesStore } from "@/store/likes";
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image"));
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      const commaIndex = result.indexOf(",");
-      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
-    };
-    reader.readAsDataURL(file);
-  });
-}
 
 export type AuthUser = {
   id: string;
@@ -40,7 +25,6 @@ const CACHED_AUTH_USER_KEY = "spotify_cached_auth_user";
 const CACHED_AUTH_SIGNED_OUT_KEY = "spotify_auth_signed_out";
 const ERLIN_PROFILE_IMAGE_URL = "/profile.jpg";
 const SESSION_REFRESH_TIMEOUT_MS = 2_500;
-const PROFILE_IMAGE_CACHE = "spotify-media-v1";
 const LOCAL_OFFLINE_AUTH_USER: AuthUser = {
   id: "local-mac-mini",
   email: "erlin@spotify.local",
@@ -79,42 +63,6 @@ function coerceAuthUser(value: unknown): AuthUser | null {
     // owner) so we never falsely nag; the server sends an explicit boolean.
     emailVerified: candidate.emailVerified !== false,
   };
-}
-
-function sameOriginUrl(value: string | null | undefined): string | null {
-  if (typeof window === "undefined" || !value || /^(blob:|data:)/i.test(value)) return null;
-  try {
-    const url = new URL(value, window.location.origin);
-    return url.origin === window.location.origin ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-function warmProfileImage(imageUrl: string | null | undefined): void {
-  const url = sameOriginUrl(imageUrl);
-  if (!url || typeof window === "undefined") return;
-
-  try {
-    navigator.serviceWorker?.controller?.postMessage({
-      type: "CACHE_MEDIA",
-      urls: [url],
-      cacheName: PROFILE_IMAGE_CACHE,
-    });
-  } catch {}
-
-  if (typeof caches === "undefined") return;
-  void (async () => {
-    try {
-      const cache = await caches.open(PROFILE_IMAGE_CACHE);
-      if (await cache.match(url)) return;
-      const response = await fetch(url, {
-        credentials: "include",
-        cache: "reload",
-      });
-      if (response.ok) await cache.put(url, response);
-    } catch {}
-  })();
 }
 
 function isKnownOffline(): boolean {
@@ -163,17 +111,6 @@ function initialAuthStatus(user: AuthUser | null): AuthContextValue["status"] {
   return isKnownOffline() ? "unauthenticated" : "loading";
 }
 
-function clearServiceWorkerApiCache(): void {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-  const message = { type: "CLEAR_RUNTIME_CACHE" };
-  if (navigator.serviceWorker.controller) {
-    navigator.serviceWorker.controller.postMessage(message);
-  }
-  navigator.serviceWorker.ready
-    .then((registration) => registration.active?.postMessage(message))
-    .catch(() => undefined);
-}
-
 async function fetchSession(): Promise<Response> {
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
   let timeoutId: number | undefined;
@@ -220,7 +157,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (isStale()) return;
       if (response.status === 401 || response.status === 403) {
         invalidateApiCache();
-        clearServiceWorkerApiCache();
         writeCachedAuthUser(null, { signedOut: true });
         setUser(null);
         setStatus("unauthenticated");
@@ -255,15 +191,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   useEffect(() => {
-    warmProfileImage(user?.image);
-  }, [user?.image]);
-
-  useEffect(() => {
     if (typeof window === "undefined") return;
     const handleApiAuthRequired = () => {
       authGenerationRef.current += 1;
       invalidateApiCache();
-      clearServiceWorkerApiCache();
       writeCachedAuthUser(null, { signedOut: true });
       setUser(null);
       setStatus("unauthenticated");
@@ -273,7 +204,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setOfflineAccountScope(user?.id ?? status);
+    setAccountScope(user?.id ?? status);
   }, [status, user?.id]);
 
   useEffect(() => {
@@ -297,9 +228,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     authGenerationRef.current += 1;
     invalidateApiCache();
-    clearServiceWorkerApiCache();
     writeCachedAuthUser(nextUser);
-    setOfflineAccountScope(nextUser.id);
+    setAccountScope(nextUser.id);
     setUser(nextUser);
     setStatus("authenticated");
   }, []);
@@ -311,36 +241,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       credentials: "include",
     }).catch(() => null);
     invalidateApiCache();
-    clearServiceWorkerApiCache();
     writeCachedAuthUser(null, { signedOut: true });
-    setOfflineAccountScope("unauthenticated");
+    setAccountScope("unauthenticated");
     setUser(null);
     setStatus("unauthenticated");
   }, []);
 
   const updateProfileImage = useCallback(async (file: File) => {
-    // The native app's HTTP bridge (CapacitorHttp) mangles multipart bodies,
-    // so on iOS/Android the image is uploaded as base64 JSON instead.
-    const response = isNativeCapacitorApp()
-      ? await fetch("/api/profile/image", {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            image: await fileToBase64(file),
-            filename: file.name,
-            contentType: file.type,
-          }),
-        })
-      : await (() => {
-          const form = new FormData();
-          form.append("image", file);
-          return fetch("/api/profile/image", {
-            method: "POST",
-            credentials: "include",
-            body: form,
-          });
-        })();
+    const form = new FormData();
+    form.append("image", file);
+    const response = await fetch("/api/profile/image", {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    });
     const data = (await response.json().catch(() => ({}))) as { user?: unknown; error?: string };
     const nextUser = coerceAuthUser(data.user ?? null);
     if (!response.ok || !nextUser) {
@@ -349,7 +263,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     writeCachedAuthUser(nextUser);
     setUser(nextUser);
     setStatus("authenticated");
-    warmProfileImage(nextUser.image);
   }, []);
 
   const resendVerification = useCallback(async () => {

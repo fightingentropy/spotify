@@ -2,7 +2,6 @@
 
 import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { selectionTap } from "@/lib/haptics";
 
 type TabIconProps = { active: boolean };
 
@@ -60,7 +59,6 @@ const tabs = [
     match: (path: string) =>
       path.startsWith("/library") ||
       path.startsWith("/liked") ||
-      path.startsWith("/downloads") ||
       path.startsWith("/radio") ||
       path.startsWith("/podcasts") ||
       path.startsWith("/events") ||
@@ -83,9 +81,6 @@ export default function MobileNav() {
             <Link
               key={tab.href}
               to={tab.href}
-              onClick={() => {
-                void selectionTap();
-              }}
               className={cn(
                 "wf-control-button flex flex-col items-center justify-center gap-1 min-h-[44px] touch-manipulation transition-colors",
                 active ? "text-white" : "text-[#b3b3b3]",

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Download, Heart, ListMusic, Podcast, RadioTower, Ticket, Upload } from "lucide-react";
+import { Heart, ListMusic, Podcast, RadioTower, Ticket, Upload } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import { useApiData, withAccountScope, type FeaturedPlaylistsPayload, type LibraryPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
@@ -57,16 +57,6 @@ export default function LibraryPage() {
             <div>
               <div className="text-[15px] leading-snug">Liked Songs</div>
               <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Your favorites</div>
-            </div>
-          </Link>
-
-          <Link to="/downloads" className="wf-list-row wf-pressable flex min-h-[64px] items-center gap-3 rounded-xl px-3 touch-manipulation active:bg-black/5 dark:active:bg-white/5">
-            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-gradient-to-b from-[#1e3a8a] to-[#3b82f6] text-white">
-              <Download size={24} />
-            </div>
-            <div>
-              <div className="text-[15px] leading-snug">Downloads</div>
-              <div className="mt-0.5 text-[13px] leading-snug text-[#b3b3b3]">Saved for offline</div>
             </div>
           </Link>
 

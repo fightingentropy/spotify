@@ -11,30 +11,13 @@ function makeSong(overrides: Partial<PlayerSong> = {}): Pick<PlayerSong, "audioU
 }
 
 describe("playEventSongHasDeviceLocalUrl", () => {
-  test("rejects capacitor:// audio URLs", () => {
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "capacitor://localhost/api/files/local/test.flac" }))).toBe(true);
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "CAPACITOR://localhost/test.flac" }))).toBe(true);
-  });
-
-  test("rejects file: and _capacitor_file_ URLs", () => {
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "file:///var/mobile/Containers/test.flac" }))).toBe(true);
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "https://localhost/_capacitor_file_/var/mobile/test.flac" }))).toBe(true);
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "/_capacitor_file_/var/mobile/test.flac" }))).toBe(true);
-  });
-
-  test("rejects URLs carrying the offline-playback marker", () => {
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "/api/files/local/test.flac?spotify_offline=1" }))).toBe(true);
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "https://example.com/api/files/local/test.flac?spotify_offline=1" }))).toBe(true);
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ imageUrl: "/api/files/local/cover.jpg?x=1&spotify_offline=1" }))).toBe(true);
-  });
-
-  test("rejects blob: image URLs", () => {
+  // Offline downloads and the native Capacitor wrapper were removed, so the only
+  // device-local scheme the web app still produces is blob: (browser-local
+  // uploads), which the server can't fetch and must not record a play event for.
+  test("rejects blob: URLs in any media field", () => {
+    expect(playEventSongHasDeviceLocalUrl(makeSong({ audioUrl: "blob:https://localhost/abc-123" }))).toBe(true);
     expect(playEventSongHasDeviceLocalUrl(makeSong({ imageUrl: "blob:https://localhost/abc-123" }))).toBe(true);
-  });
-
-  test("rejects device-local lyrics URLs when present", () => {
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ lyricsUrl: "capacitor://localhost/lyrics.lrc" }))).toBe(true);
-    expect(playEventSongHasDeviceLocalUrl(makeSong({ lyricsUrl: "/api/lyrics/test.lrc?spotify_offline=1" }))).toBe(true);
+    expect(playEventSongHasDeviceLocalUrl(makeSong({ lyricsUrl: "blob:https://localhost/lyr-1" }))).toBe(true);
   });
 
   test("accepts relative /api URLs and absolute http(s) URLs", () => {

@@ -10,8 +10,6 @@ import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { SongCard } from "@/components/SongCard";
 import { SongListItem } from "@/components/SongListItem";
-import { OfflineBulkDownloadButton } from "@/components/OfflineDownloadButton";
-import type { DownloadScope } from "@/client/offline";
 
 type SongGridProps = {
   songs: PlayerSong[];
@@ -21,9 +19,6 @@ type SongGridProps = {
   showLikeControls?: boolean;
   // When false, hides the per-row "add to queue" button.
   showQueueButton?: boolean;
-  // When set, renders a single "download all" button in the header (scoped to
-  // this collection) and hides the per-song download buttons on the rows/cards.
-  bulkDownloadScope?: DownloadScope;
   emptyLabel?: string;
   viewToggleClassName?: string;
 };
@@ -73,11 +68,9 @@ export function SongGrid({
   canLike = false,
   showLikeControls = true,
   showQueueButton = true,
-  bulkDownloadScope,
   emptyLabel,
   viewToggleClassName,
 }: SongGridProps) {
-  const showRowDownload = !bulkDownloadScope;
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [sortMode, setSortMode] = useState<SongSortMode>("default");
   const [preferencesReady, setPreferencesReady] = useState(false);
@@ -449,7 +442,6 @@ export function SongGrid({
       canLike={canLike}
       showLike={showLikeControls}
       showQueue={showQueueButton}
-      showDownload={showRowDownload}
       onToggleLike={handleToggleLike}
       hideIfUnliked={hideIfUnliked}
       priority={index < 6}
@@ -496,14 +488,6 @@ export function SongGrid({
               )}
             />
           </button>
-          {bulkDownloadScope ? (
-            <OfflineBulkDownloadButton
-              songs={visibleSongs}
-              scope={bulkDownloadScope}
-              iconOnly
-              className="wf-control-button h-10 w-10"
-            />
-          ) : null}
           <select
             value={sortMode}
             onChange={(event) => setNextSortMode(event.target.value as SongSortMode)}
@@ -597,7 +581,6 @@ export function SongGrid({
                       canLike={canLike}
                       showLike={showLikeControls}
                       showQueue={showQueueButton}
-                      showDownload={showRowDownload}
                       onToggleLike={handleToggleLike}
                       priority={index < 6}
                     />
@@ -618,7 +601,6 @@ export function SongGrid({
                   canLike={canLike}
                   showLike={showLikeControls}
                   showQueue={showQueueButton}
-                  showDownload={showRowDownload}
                   onToggleLike={handleToggleLike}
                   priority={index < 6}
                 />

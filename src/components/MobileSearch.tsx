@@ -7,7 +7,6 @@ import type { PlayerSong } from "@/types/player";
 import { CoverImage } from "@/components/CoverImage";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 type MobileSearchProps = {
   songs: PlayerSong[];
@@ -16,7 +15,6 @@ type MobileSearchProps = {
 export default function MobileSearch({ songs }: MobileSearchProps) {
   const [query, setQuery] = useState("");
   const setQueue = usePlayerStore((state) => state.setQueue);
-  const offlineRecords = useOfflineStore((state) => state.records);
 
   const dedupedSongs = useMemo(() => dedupeSongsByTitleArtist(songs), [songs]);
 
@@ -32,10 +30,7 @@ export default function MobileSearch({ songs }: MobileSearchProps) {
       .slice(0, 50);
   }, [dedupedSongs, query]);
 
-  const resolvedResults = useMemo(
-    () => results.map((song) => resolveOfflinePlaybackSong(song)),
-    [offlineRecords, results],
-  );
+  const resolvedResults = results;
 
   return (
     <div className="px-4 py-6 max-w-7xl mx-auto">

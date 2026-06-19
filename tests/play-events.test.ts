@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { recordPlayEvent, shouldRecordPlay } from "../src/client/play-events";
-import { useOfflineStore, type OfflineDownloadRecord } from "../src/client/offline";
 import type { PlayerSong } from "../src/types/player";
 
 type PatchedGlobal = "navigator" | "fetch";
@@ -110,82 +109,6 @@ describe("recordPlayEvent", () => {
     expect(() => recordPlayEvent(makeSong())).not.toThrow();
     // Let the rejected promise settle; the .catch(() => {}) must absorb it.
     await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-});
-
-function makeDownloadRecord(song: PlayerSong): OfflineDownloadRecord {
-  return {
-    songId: song.id,
-    song,
-    audioUrl: song.audioUrl,
-    imageUrl: song.imageUrl,
-    status: "downloaded",
-    progress: 1,
-    size: 1024,
-    pinnedBy: [],
-    createdAt: 1,
-    updatedAt: 1,
-    lastAccessedAt: 1,
-  };
-}
-
-describe("recordPlayEvent offline sanitization", () => {
-  afterEach(() => {
-    useOfflineStore.setState({ records: {} });
-  });
-
-  test("records the canonical song for native capacitor-file playback", () => {
-    const canonical = makeSong();
-    useOfflineStore.setState({ records: { [canonical.id]: makeDownloadRecord(canonical) } });
-    const requests = installFetchSpy();
-    recordPlayEvent(
-      makeSong({
-        source: "offline",
-        audioUrl: "capacitor://localhost/_capacitor_file_/var/mobile/offline-media/audio.flac",
-      }),
-      215_000,
-    );
-    expect(requests.length).toBe(1);
-    const body = JSON.parse(String(requests[0]!.init?.body));
-    expect(body.song.id).toBe(canonical.id);
-    expect(body.song.audioUrl).toBe("/api/files/local/test.flac");
-    expect(body.song.source).toBeUndefined();
-  });
-
-  test("records the canonical song for ?spotify_offline=1 web playback", () => {
-    const canonical = makeSong();
-    useOfflineStore.setState({ records: { [canonical.id]: makeDownloadRecord(canonical) } });
-    const requests = installFetchSpy();
-    recordPlayEvent(makeSong({ audioUrl: "/api/files/local/test.flac?spotify_offline=1" }));
-    expect(requests.length).toBe(1);
-    const body = JSON.parse(String(requests[0]!.init?.body));
-    expect(body.song.audioUrl).toBe("/api/files/local/test.flac");
-  });
-
-  test("skips offline-resolved songs without a download record", () => {
-    const requests = installFetchSpy();
-    recordPlayEvent(makeSong({ source: "offline" }));
-    recordPlayEvent(makeSong({ audioUrl: "https://localhost/_capacitor_file_/x/audio.m4a" }));
-    recordPlayEvent(makeSong({ audioUrl: "/api/files/local/test.flac?spotify_offline=1" }));
-    expect(requests.length).toBe(0);
-  });
-
-  test("skips when the download record's song is itself offline-resolved", () => {
-    const canonical = makeSong({ source: "offline" });
-    useOfflineStore.setState({ records: { [canonical.id]: makeDownloadRecord(canonical) } });
-    const requests = installFetchSpy();
-    recordPlayEvent(makeSong({ source: "offline" }));
-    expect(requests.length).toBe(0);
-  });
-
-  test("leaves non-offline songs untouched even when a record exists", () => {
-    const canonical = makeSong({ title: "Canonical Title" });
-    useOfflineStore.setState({ records: { [canonical.id]: makeDownloadRecord(canonical) } });
-    const requests = installFetchSpy();
-    recordPlayEvent(makeSong({ title: "Live Title" }));
-    expect(requests.length).toBe(1);
-    const body = JSON.parse(String(requests[0]!.init?.body));
-    expect(body.song.title).toBe("Live Title");
   });
 });
 

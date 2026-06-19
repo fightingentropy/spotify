@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { parseLyrics, type ParsedLyrics } from "@/lib/lrc";
-import { resolveNativeApiUrl } from "@/lib/song-utils";
 
 export function parseCredits(artist: string): Array<{ name: string; role: string }> {
   const seen = new Set<string>();
@@ -65,9 +64,7 @@ export function useLyrics(
     if (loadedLyricsKeyRef.current === lyricsKey) {
       return;
     }
-    // Relative /api URLs must point at the remote origin on native; offline
-    // capacitor file URLs pass through untouched.
-    const safeLyricsUrl = resolveNativeApiUrl(lyricsUrl);
+    const safeLyricsUrl = lyricsUrl;
 
     let cancelled = false;
 

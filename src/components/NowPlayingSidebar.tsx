@@ -9,15 +9,10 @@ import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { requestPlaybackSeek, subscribePlaybackPosition } from "@/lib/playback-position";
 import { CoverImage } from "@/components/CoverImage";
 import { LyricsPanel } from "@/components/LyricsPanel";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 
 export default function NowPlayingSidebar() {
   const currentSong = usePlayerStore((state) => state.currentSong);
-  const offlineRecords = useOfflineStore((state) => state.records);
-  const displaySong = useMemo(
-    () => (currentSong ? resolveOfflinePlaybackSong(currentSong) : null),
-    [currentSong, offlineRecords],
-  );
+  const displaySong = currentSong;
   const liveStream = isRadioSong(displaySong);
   const podcastEpisode = isPodcastSong(displaySong);
   const podcastDescription = displaySong?.description?.trim() ?? "";

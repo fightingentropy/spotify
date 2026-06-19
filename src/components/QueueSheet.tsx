@@ -7,7 +7,6 @@ import type { PlayerSong } from "@/types/player";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
 type QueueSheetProps = {
@@ -28,8 +27,6 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   const shuffleRemaining = usePlayerStore((s) => s.shuffleRemaining);
   const playFuture = usePlayerStore((s) => s.playFuture);
   const removeFromQueue = usePlayerStore((s) => s.removeFromQueue);
-
-  const offlineRecords = useOfflineStore((state) => state.records);
 
   const touchStartYRef = useRef<number | null>(null);
   const swipeDismissAllowedRef = useRef(false);
@@ -61,8 +58,8 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   }, [currentIndex, playFuture, queue, shuffle, shuffleRemaining]);
 
   const resolveDisplaySong = useMemo(
-    () => (song: PlayerSong) => resolveOfflinePlaybackSong(song),
-    [offlineRecords],
+    () => (song: PlayerSong) => song,
+    [],
   );
 
   useEffect(() => {
@@ -95,7 +92,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
     const state = usePlayerStore.getState();
     const target = state.queue[queueIndex];
     if (!target) return;
-    requestImmediatePlayback(resolveOfflinePlaybackSong(target));
+    requestImmediatePlayback(target);
     // Tapping the entry the engine would play next (top of the redo stack)
     // should consume just that entry instead of wiping the whole redo stack.
     const fromFuture = state.shuffle && state.playFuture[state.playFuture.length - 1] === queueIndex;

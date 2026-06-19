@@ -25,12 +25,9 @@ import type { PlayerSong } from "@/types/player";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
-import { impactLight } from "@/lib/haptics";
 import { CoverImage } from "@/components/CoverImage";
 import { LyricsPanel } from "@/components/LyricsPanel";
 import { MarqueeText } from "@/components/MarqueeText";
-import { OfflineSongDownloadButton } from "@/components/OfflineDownloadButton";
-import { resolveOfflinePlaybackSong, useOfflineStore } from "@/client/offline";
 import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
 const SLEEP_TIMER_MINUTE_OPTIONS = [5, 15, 30, 45, 60];
@@ -117,11 +114,7 @@ export default function NowPlayingSheet({
   const [coverDragX, setCoverDragX] = useState(0);
   const [coverSwiping, setCoverSwiping] = useState(false);
 
-  const offlineRecords = useOfflineStore((state) => state.records);
-  const lyricsSong = useMemo(
-    () => resolveOfflinePlaybackSong(song),
-    [song, offlineRecords],
-  );
+  const lyricsSong = song;
 
   const credits = useMemo(() => parseCredits(song.artist), [song.artist]);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
@@ -177,7 +170,6 @@ export default function NowPlayingSheet({
   }
 
   function handleTogglePlayback() {
-    void impactLight();
     if (isPlaying) {
       pause();
       return;
@@ -244,10 +236,8 @@ export default function NowPlayingSheet({
     setCoverDragX(0);
     if (!swipe || swipe.axis !== "x") return;
     if (swipe.dx <= -COVER_SWIPE_COMMIT_PX) {
-      void impactLight();
       next();
     } else if (swipe.dx >= COVER_SWIPE_COMMIT_PX) {
-      void impactLight();
       previous();
     }
   }
@@ -305,7 +295,6 @@ export default function NowPlayingSheet({
               <div className="-mr-1 flex items-center gap-1">
                 {showLibraryActions ? (
                   <>
-                    <OfflineSongDownloadButton song={song} className="wf-control-button h-11 w-11 text-foreground/70 active:bg-black/10 dark:active:bg-white/10" />
                     <button
                       type="button"
                       aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}

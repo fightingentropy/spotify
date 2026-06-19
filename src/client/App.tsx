@@ -4,7 +4,6 @@ import { AuthProvider, useAuth } from "@/client/auth";
 import { AuthButtons } from "@/components/AuthButtons";
 import EmailVerificationBanner from "@/components/EmailVerificationBanner";
 import { HomeSearchCommandPalette } from "@/components/HomeSearchCommandPalette";
-import InstallPrompt from "@/components/InstallPrompt";
 import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
 import NowPlayingSidebar from "@/components/NowPlayingSidebar";
@@ -20,7 +19,6 @@ import { usePlayerStore } from "@/store/player";
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
 const loadLikedPage = () => import("@/client/pages/LikedPage");
-const loadDownloadedPage = () => import("@/client/pages/DownloadedPage");
 const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPodcastsPage = () => import("@/client/pages/PodcastsPage");
 const loadEventsPage = () => import("@/client/pages/EventsPage");
@@ -29,13 +27,11 @@ const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
 const loadSignInPage = () => import("@/client/pages/SignInPage");
 const loadRegisterPage = () => import("@/client/pages/RegisterPage");
-const loadOfflineStatusIndicator = () => import("@/components/OfflineStatusIndicator");
 type RoutePrefetcher = () => Promise<unknown>;
 const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
   loadSearchPage,
   loadLibraryPage,
   loadLikedPage,
-  loadDownloadedPage,
   loadRadioPage,
   loadPodcastsPage,
   loadEventsPage,
@@ -52,7 +48,6 @@ const ROUTE_PREFETCH_FALLBACK_DELAY_MS = 1_000;
 const SearchPage = lazy(loadSearchPage);
 const LibraryPage = lazy(loadLibraryPage);
 const LikedPage = lazy(loadLikedPage);
-const DownloadedPage = lazy(loadDownloadedPage);
 const RadioPage = lazy(loadRadioPage);
 const PodcastsPage = lazy(loadPodcastsPage);
 const EventsPage = lazy(loadEventsPage);
@@ -61,7 +56,6 @@ const UploadPage = lazy(loadUploadPage);
 const SettingsPage = lazy(loadSettingsPage);
 const SignInPage = lazy(loadSignInPage);
 const RegisterPage = lazy(loadRegisterPage);
-const OfflineStatusIndicator = lazy(loadOfflineStatusIndicator);
 
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
   return (
@@ -83,16 +77,11 @@ function RouteLoading({ label = "Loading..." }: { label?: string }) {
 }
 
 function RouteUnavailable() {
-  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
   return (
     <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white sm:px-6">
-      <h1 className="text-xl font-semibold">
-        {offline ? "Page unavailable offline" : "Something went wrong"}
-      </h1>
+      <h1 className="text-xl font-semibold">Something went wrong</h1>
       <p className="mt-2 max-w-md text-sm text-white/[0.62]">
-        {offline
-          ? "Reconnect once to finish caching this page, then it will open offline."
-          : "This page failed to load. Try reloading, or come back in a moment."}
+        This page failed to load. Try reloading, or come back in a moment.
       </p>
     </div>
   );
@@ -126,27 +115,7 @@ function lazyRoute(element: ReactNode, label?: string) {
   );
 }
 
-async function waitForServiceWorkerControl(): Promise<void> {
-  if (!("serviceWorker" in navigator)) return;
-  await navigator.serviceWorker.ready.catch(() => undefined);
-  if (navigator.serviceWorker.controller) return;
-
-  await new Promise<void>((resolve) => {
-    let done = false;
-    const cleanup = () => {
-      if (done) return;
-      done = true;
-      window.clearTimeout(timeoutId);
-      navigator.serviceWorker.removeEventListener("controllerchange", cleanup);
-      resolve();
-    };
-    const timeoutId = window.setTimeout(cleanup, 2_000);
-    navigator.serviceWorker.addEventListener("controllerchange", cleanup, { once: true });
-  });
-}
-
 async function prefetchRouteModules(): Promise<void> {
-  await waitForServiceWorkerControl();
   for (const load of ROUTE_PREFETCHERS) {
     if (prefetchedRouteModules.has(load)) continue;
     try {
@@ -251,10 +220,6 @@ function Shell() {
   return (
     <>
       <PwaRegister />
-      <InstallPrompt />
-      <Suspense fallback={null}>
-        <OfflineStatusIndicator />
-      </Suspense>
       <header className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.12] bg-background text-white pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           <Link to="/" className="font-semibold inline-flex shrink-0 items-center touch-manipulation">
@@ -288,7 +253,6 @@ function Shell() {
           <Route path="/search" element={lazyRoute(<SearchPage />, "Loading search...")} />
           <Route path="/library" element={lazyRoute(<LibraryPage />, "Loading library...")} />
           <Route path="/liked" element={lazyRoute(<LikedPage />, "Loading liked songs...")} />
-          <Route path="/downloads" element={lazyRoute(<DownloadedPage />, "Loading downloads...")} />
           <Route path="/radio" element={lazyRoute(<RadioPage />, "Loading radio stations...")} />
           <Route path="/podcasts" element={lazyRoute(<PodcastsPage />, "Loading podcasts...")} />
           <Route path="/events" element={lazyRoute(<EventsPage />, "Loading events...")} />
