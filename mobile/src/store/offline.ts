@@ -615,6 +615,10 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
             () => {},
           );
         }
+        // Orphaned NSURLSession partials live outside offline-media, so the loop
+        // above never touches them — sweep that OS scratch too so a manual clear
+        // reclaims it as well (see purgeOrphanedDownloadArtifacts).
+        await purgeOrphanedDownloadArtifacts();
         void refreshStorage();
       })();
       void refreshStorage();
@@ -668,13 +672,11 @@ async function quietVerifyDownloads(): Promise<void> {
 //      in flight, so every file under there is dead weight.
 //   2. offline-media song folders with no backing "ready" record (orphans from
 //      deletes / reinstalls / a move that never completed).
-// All best-effort and self-contained — cleanup must never break launch. Runs
-// once from hydrate(), BEFORE resuming downloads so it can't delete a partial a
-// just-resumed download is actively writing.
-let purgeStarted = false;
+// All best-effort and self-contained — cleanup must never break launch. Called
+// from hydrate() (at launch, before resuming downloads so it can't delete a
+// partial a just-resumed download is actively writing) and from clearDownloads()
+// so a manual "Clear downloads" sweeps the OS scratch too. Idempotent.
 async function purgeOrphanedDownloadArtifacts(): Promise<void> {
-  if (purgeStarted) return;
-  purgeStarted = true;
   const doc = FileSystem.documentDirectory;
 
   if (doc) {
