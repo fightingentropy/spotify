@@ -828,8 +828,8 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
   const doc = FileSystem.documentDirectory;
 
   if (doc) {
+    const containerRoot = doc.replace(/Documents\/?$/, "");
     try {
-      const containerRoot = doc.replace(/Documents\/?$/, "");
       const downloadsRoot = `${containerRoot}Library/Caches/com.apple.nsurlsessiond/Downloads/`;
       const info = await FileSystem.getInfoAsync(downloadsRoot);
       if (info.exists) {
@@ -844,6 +844,20 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
           );
         }
       }
+    } catch {}
+
+    // NSURLSession also stages some transfers as CFNetworkDownload_*.tmp directly
+    // in the container's tmp/, and an interrupted one (force-quit / offline) is
+    // stranded there — a spot the Downloads/ sweep above doesn't reach. Remove
+    // only those scraps; leave any other tmp/ file alone.
+    try {
+      const tmpRoot = `${containerRoot}tmp/`;
+      const tmpFiles = await FileSystem.readDirectoryAsync(tmpRoot).catch(() => [] as string[]);
+      await Promise.all(
+        tmpFiles
+          .filter((f) => f.startsWith("CFNetworkDownload"))
+          .map((f) => FileSystem.deleteAsync(`${tmpRoot}${f}`, { idempotent: true }).catch(() => {})),
+      );
     } catch {}
   }
 
