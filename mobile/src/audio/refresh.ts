@@ -6,7 +6,6 @@
 import { toAbsoluteApiUrl } from "@/lib/config";
 import { apiFetch } from "@/lib/http";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
-import { removeLocalPlaybackState } from "@/lib/playback-state";
 import { usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 
@@ -23,30 +22,32 @@ export function isOwnHandledSong(song: PlayerSong): boolean {
   );
 }
 
-const refreshNotFound: Record<string, number> = {};
-
-export function clearStaleCurrentSong(): void {
-  removeLocalPlaybackState();
-  usePlayerStore.getState().setQueue([], 0);
-  usePlayerStore.getState().pause();
-}
+// Per-song count of consecutive failed refreshes (auth-forbidden or not-found).
+const refreshFailures: Record<string, number> = {};
 
 // Refetch the current song to catch expired signed URLs (fire-and-forget).
 export async function refreshCurrentSong(song: PlayerSong): Promise<void> {
   if (isOwnHandledSong(song) || isPodcastSong(song)) return;
   try {
     const response = await apiFetch(`/api/songs/${encodeURIComponent(song.id)}`, { cache: "no-store" });
-    if (response.status === 401 || response.status === 403) {
-      clearStaleCurrentSong();
-      return;
-    }
-    if (response.status === 404) {
-      refreshNotFound[song.id] = (refreshNotFound[song.id] ?? 0) + 1;
-      if (refreshNotFound[song.id] >= 2) clearStaleCurrentSong(); // only after 2 (deploy/proxy hiccup)
+    // 401/403 (auth-forbidden) or 404 (gone) → we can't get a fresh signed URL.
+    // Tolerate a single transient failure (token blip / deploy/proxy hiccup), then
+    // SKIP past the track instead of wiping the queue + deleting the saved resume
+    // snapshot (the old clearStaleCurrentSong, which lost the whole queue + cross-
+    // device state on ONE bad response). The rest of the queue + snapshot survive,
+    // so a reconnect/relaunch recovers; next() respects offline/repeat and stops
+    // cleanly with the queue intact when nothing else is playable, and the engine's
+    // consecutive-error guard backstops a fully-dead session.
+    if (response.status === 401 || response.status === 403 || response.status === 404) {
+      refreshFailures[song.id] = (refreshFailures[song.id] ?? 0) + 1;
+      if (refreshFailures[song.id] >= 2) {
+        refreshFailures[song.id] = 0;
+        usePlayerStore.getState().next();
+      }
       return;
     }
     if (!response.ok) return;
-    refreshNotFound[song.id] = 0;
+    refreshFailures[song.id] = 0;
     const fresh = (await response.json()) as PlayerSong;
     if (fresh?.id === song.id && fresh.audioUrl) usePlayerStore.getState().replaceSong(fresh);
   } catch {
