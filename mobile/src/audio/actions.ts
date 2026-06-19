@@ -1,6 +1,7 @@
 import { getIsOnline } from "@/lib/connectivity";
 import { useOfflineStore } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
+import { markPlaybackEngaged } from "@/audio/publish-gate";
 import { seek } from "@/audio/engine";
 import type { PlayerSong } from "@/types/player";
 
@@ -30,11 +31,13 @@ export function playSongs(
   startIndex: number,
   options?: { respectShuffle?: boolean; contextKey?: string },
 ): void {
+  markPlaybackEngaged();
   const plan = playableQueue(songs, startIndex);
   usePlayerStore.getState().setQueue(plan.songs, plan.startIndex, options);
 }
 
 export function playSong(song: PlayerSong): void {
+  markPlaybackEngaged();
   usePlayerStore.getState().setQueue([song], 0);
 }
 
@@ -42,6 +45,7 @@ export function playSong(song: PlayerSong): void {
 // `contextKey` tags the queue with the collection it was started from, so that
 // collection's Play button can show Pause/resume instead of restarting.
 export function toggleSongInList(songs: PlayerSong[], startIndex: number, contextKey?: string): void {
+  markPlaybackEngaged();
   const state = usePlayerStore.getState();
   const target = songs[startIndex];
   if (target && state.currentSong?.id === target.id) {
@@ -53,5 +57,6 @@ export function toggleSongInList(songs: PlayerSong[], startIndex: number, contex
 }
 
 export async function seekTo(seconds: number): Promise<void> {
+  markPlaybackEngaged();
   await seek(Math.max(0, seconds));
 }

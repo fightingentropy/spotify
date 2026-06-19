@@ -15,6 +15,7 @@ import {
 } from "@/lib/offline-db";
 import { apiFetch } from "@/lib/http";
 import { getIsOnline, subscribeOnline } from "@/lib/connectivity";
+import { resetPlaybackEngaged } from "@/audio/publish-gate";
 import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
 
@@ -65,7 +66,12 @@ export function getOfflineAccountScope(): string {
   return accountScope;
 }
 export function setOfflineAccountScope(scope: string | null | undefined): void {
-  accountScope = scope?.trim() || "anonymous";
+  const next = scope?.trim() || "anonymous";
+  if (next === accountScope) return;
+  accountScope = next;
+  // A different account is now active: drop the "user engaged" flag so a stale
+  // restore for the new scope can't publish over the previous account's state.
+  resetPlaybackEngaged();
 }
 
 export function keyFor(scope: string, songId: string): string {

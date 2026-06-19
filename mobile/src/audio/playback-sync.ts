@@ -13,6 +13,7 @@ import {
   writeLocalPlaybackState,
   writeServerPlaybackState,
 } from "@/lib/playback-state";
+import { isPlaybackEngaged } from "@/audio/publish-gate";
 import { getOfflineAccountScope } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 
@@ -64,6 +65,11 @@ function buildSnapshot(): PlaybackStateSnapshot | null {
 }
 
 export async function publishPlaybackState(force: boolean): Promise<void> {
+  // Passive launches (cold-start restore / viewing cross-device state) must never
+  // write: loading a restored snapshot would otherwise auto-publish it and clobber
+  // the genuinely-newest state. Only real user/remote transport actions flip this
+  // flag on. See publish-gate.ts.
+  if (!isPlaybackEngaged()) return;
   if (!force && Date.now() - lastStatePublishMs < PLAYBACK_STATE_PUBLISH_INTERVAL_MS) return;
   lastStatePublishMs = Date.now();
   const snapshot = buildSnapshot();
@@ -78,6 +84,11 @@ export async function publishPlaybackState(force: boolean): Promise<void> {
 
 function applyPlaybackSnapshot(snapshot: PlaybackStateSnapshot): void {
   setPendingResumeSeek(snapshot.song.id, snapshot.currentTime);
+  // Keep the local cache aligned with whatever we restored (e.g. a newer server
+  // snapshot) WITHOUT a server write — restore stays read-only server-side so it
+  // can't clobber newer cross-device state. Preserves the snapshot's original
+  // updatedAt (no Date.now() restamp), so last-write-wins stays meaningful.
+  writeLocalPlaybackState(snapshot);
   const store = usePlayerStore.getState();
   store.setQueue(snapshot.queue, snapshot.currentIndex);
   store.pause(); // never auto-play on cold launch

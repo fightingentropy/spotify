@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { markPlaybackEngaged } from "@/audio/publish-gate";
 import { getIsOnline } from "@/lib/connectivity";
 import { songKind } from "@/lib/player-song";
 import { storage } from "@/lib/storage";
@@ -623,10 +624,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, index, -1),
       };
     }),
-  play: () => set({ isPlaying: true }),
+  play: () => {
+    markPlaybackEngaged();
+    set({ isPlaying: true });
+  },
   pause: () => set({ isPlaying: false }),
-  toggle: () => set((s) => ({ isPlaying: !s.isPlaying })),
+  toggle: () => {
+    markPlaybackEngaged();
+    set((s) => ({ isPlaying: !s.isPlaying }));
+  },
   next: () => {
+    markPlaybackEngaged();
     pruneQueueWhenOffline();
     set((s) => {
       if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
@@ -680,6 +688,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
   previous: () => {
+    markPlaybackEngaged();
     pruneQueueWhenOffline();
     set((s) => {
       if (s.queue.length === 0) return s;
