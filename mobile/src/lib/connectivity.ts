@@ -31,11 +31,25 @@ const ExpoNetwork = requireOptionalNativeModule<ExpoNetworkModule>("ExpoNetwork"
 let online = true;
 let nativeActive = false; // expo-network has reported at least once → it owns the flag
 let initStarted = false;
+const listeners = new Set<(online: boolean) => void>();
+
+// Single writer for `online`. Notifies subscribers only on an actual transition,
+// so download pause/resume fires on edges (offline→pause, online→resume) rather
+// than on every repeat reading of the same state.
+function setOnline(next: boolean): void {
+  if (next === online) return;
+  online = next;
+  for (const cb of listeners) {
+    try {
+      cb(next);
+    } catch {}
+  }
+}
 
 function applyNetworkState(state: NetworkLike): void {
   // Offline only on an explicit negative; `undefined` (unknown) stays online.
-  online = state.isConnected !== false && state.isInternetReachable !== false;
   nativeActive = true;
+  setOnline(state.isConnected !== false && state.isInternetReachable !== false);
 }
 
 function ensureInit(): void {
@@ -56,15 +70,26 @@ function ensureInit(): void {
 
 export function markOnline(): void {
   ensureInit();
-  if (!nativeActive) online = true;
+  if (!nativeActive) setOnline(true);
 }
 
 export function markOffline(): void {
   ensureInit();
-  if (!nativeActive) online = false;
+  if (!nativeActive) setOnline(false);
 }
 
 export function getIsOnline(): boolean {
   ensureInit();
   return online;
+}
+
+// Subscribe to online/offline edges; returns an unsubscribe fn. The download pump
+// uses this to pause an in-flight download the instant connectivity drops (banking
+// an NSURLSession resume blob) and to resume from the partial on recovery.
+export function subscribeOnline(listener: (online: boolean) => void): () => void {
+  ensureInit();
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }

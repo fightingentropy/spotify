@@ -12,6 +12,7 @@ import {
   type DownloadRow,
 } from "@/lib/offline-db";
 import { apiFetch } from "@/lib/http";
+import { getIsOnline, subscribeOnline } from "@/lib/connectivity";
 import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
 
@@ -40,9 +41,21 @@ export type OfflineDownloadRecord = {
   lyricsPath?: string;
   updatedAt: number;
   error?: string;
+  // NSURLSession resume blob captured when a download is deliberately paused
+  // (connectivity drop or app-background). The next attempt resumeAsync()s from
+  // the partial instead of restarting at byte 0. In-memory only — deliberately
+  // omitted from recordToRow, because a foreground-session blob is valid only
+  // within this process; across a relaunch the partial is purged and we restart.
+  resumeData?: string;
 };
 
 const OFFLINE_DIR = `${FileSystem.documentDirectory ?? ""}offline-media/`;
+
+// Whether the app is foregrounded. The download pump only runs while foreground
+// + online: a foreground URLSession download gets suspended on background anyway,
+// so we pause it (banking a resume blob) and must not let the pump immediately
+// re-launch it. Written by initOfflineSync's AppState handler (same module).
+let isForeground = true;
 
 // --- Account scope -----------------------------------------------------------
 let accountScope = "anonymous";
@@ -199,6 +212,8 @@ type OfflineState = {
   syncOfflineMutations: () => Promise<void>;
   clearDownloads: () => Promise<void>;
   refreshStorage: () => Promise<void>;
+  // Pause the in-flight download (banking its resume blob) — called on app-background.
+  pauseActiveDownload: () => Promise<void>;
 };
 
 function recordToRow(record: OfflineDownloadRecord): DownloadRow {
@@ -275,6 +290,14 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
 
   // Serial download pump — one track at a time, mirroring the web pump.
   let pumping = false;
+  // The download in flight right now, exposed so a connectivity drop or an
+  // app-background can pauseAsync() it (banking an NSURLSession resume blob)
+  // before the socket dies — otherwise the partial is orphaned and we restart
+  // from zero. Null whenever nothing is downloading.
+  let activeDownload: { resumable: FileSystem.DownloadResumable; key: string } | null = null;
+  // Key that pauseActiveDownload just paused, so the pump can tell a deliberate
+  // pause (re-queue + keep the resume blob) from a genuine failure (mark error).
+  let pausedKey: string | null = null;
   // Guards the mutation-outbox drain so overlapping AppState/foreground events
   // (and the Sync-now button) can't run two drains concurrently.
   let syncRunning = false;
@@ -286,15 +309,20 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       try {
         await FileSystem.makeDirectoryAsync(OFFLINE_DIR, { intermediates: true });
       } catch {}
-      // eslint-disable-next-line no-constant-condition
       while (true) {
+        // Run only while foreground + online. Offline: every attempt would fail
+        // instantly and flip the row to "error". Background: a just-paused download
+        // would be re-launched straight into iOS suspension. Stop on either; the
+        // connectivity + AppState handlers re-kick the pump on recovery.
+        if (!getIsOnline() || !isForeground) break;
         const queued = Object.values(get().records).find(
           (r) => r.accountScope === accountScope && r.status === "queued",
         );
         if (!queued) break;
-        const progressKey = keyFor(accountScope, queued.songId);
+        const key = keyFor(accountScope, queued.songId);
+        const resumeData = queued.resumeData;
         persist({ ...queued, status: "downloading", updatedAt: Date.now() });
-        setProgress(progressKey, 0);
+        setProgress(key, 0);
         try {
           const dir = `${OFFLINE_DIR}${safeName(queued.songId)}/`;
           await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
@@ -302,19 +330,39 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           const audioPath = `${dir}audio${audioExt}`;
           // Audio is ~all the bytes (cover/lyrics are tiny), so its byte stream
           // drives the fill ring. createDownloadResumable gives us the progress
-          // callback that downloadAsync lacks.
+          // callback that downloadAsync lacks — and, seeded with a resume blob,
+          // the ability to continue a partial instead of starting over.
           const resumable = FileSystem.createDownloadResumable(
             toAbsoluteApiUrl(queued.song.audioUrl),
             audioPath,
             {},
             ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
               if (totalBytesExpectedToWrite > 0) {
-                setProgress(progressKey, totalBytesWritten / totalBytesExpectedToWrite);
+                setProgress(key, totalBytesWritten / totalBytesExpectedToWrite);
               }
             },
+            resumeData,
           );
-          await resumable.downloadAsync();
-          setProgress(progressKey, 1);
+          activeDownload = { resumable, key };
+          // resumeAsync() continues from the saved partial (server replies 206);
+          // downloadAsync() starts fresh. Either resolves to undefined when a
+          // pauseAsync() cancels it — that's our deliberate-pause signal below.
+          const result = resumeData ? await resumable.resumeAsync() : await resumable.downloadAsync();
+          activeDownload = null;
+          if (!result) {
+            // Cancelled by pauseActiveDownload (offline/background). It has already
+            // re-queued the row with its resume blob — leave that record intact.
+            pausedKey = null;
+            clearProgress(key);
+            continue;
+          }
+          if (result.status >= 400) {
+            // expo resolves (doesn't throw) on a bad HTTP status and writes the
+            // response body to the file — e.g. an expired signed URL returning
+            // HTML. Guard it so we never mark a garbage file "ready".
+            throw new Error(`Download failed with HTTP ${result.status}`);
+          }
+          setProgress(key, 1);
 
           let coverPath: string | undefined;
           if (queued.song.imageUrl) {
@@ -335,19 +383,53 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           }
 
           // The record may have gained/lost scopes while downloading; re-read.
-          const latest = get().records[keyFor(accountScope, queued.songId)];
-          clearProgress(progressKey);
+          const latest = get().records[key];
+          clearProgress(key);
           if (!latest) continue; // unpinned mid-download
-          persist({ ...latest, status: "ready", audioPath, coverPath, lyricsPath, updatedAt: Date.now(), error: undefined });
+          persist({ ...latest, status: "ready", audioPath, coverPath, lyricsPath, resumeData: undefined, updatedAt: Date.now(), error: undefined });
         } catch (e) {
-          clearProgress(progressKey);
-          const latest = get().records[keyFor(accountScope, queued.songId)];
-          if (latest) persist({ ...latest, status: "error", updatedAt: Date.now(), error: e instanceof Error ? e.message : "Download failed" });
+          activeDownload = null;
+          clearProgress(key);
+          if (pausedKey === key) {
+            // A deliberate pause surfaced as a rejection rather than an undefined
+            // result — pauseActiveDownload already re-queued it with a resume blob.
+            pausedKey = null;
+            continue;
+          }
+          const latest = get().records[key];
+          if (!latest) continue;
+          if (!getIsOnline()) {
+            // Connectivity dropped mid-download and the socket error raced ahead of
+            // our pause (no resume blob captured). Keep it queued so it retries from
+            // scratch on reconnect, instead of stranding it as a manual-retry error.
+            persist({ ...latest, status: "queued", resumeData: undefined, updatedAt: Date.now() });
+          } else {
+            persist({ ...latest, status: "error", resumeData: undefined, updatedAt: Date.now(), error: e instanceof Error ? e.message : "Download failed" });
+          }
         }
       }
     } finally {
       pumping = false;
     }
+  };
+
+  // Pause whatever is downloading right now and bank its NSURLSession resume blob
+  // on the record, so a later resumeAsync() continues from the partial. Invoked on
+  // the two interruptions we can see coming — connectivity loss and app-background.
+  // Best-effort: if pauseAsync can't produce a blob, the row just restarts fresh.
+  const pauseActiveDownload = async () => {
+    const active = activeDownload;
+    if (!active) return;
+    activeDownload = null;
+    pausedKey = active.key;
+    let resumeData: string | undefined;
+    try {
+      const state = await active.resumable.pauseAsync();
+      resumeData = state.resumeData;
+    } catch {}
+    clearProgress(active.key);
+    const latest = get().records[active.key];
+    if (latest) persist({ ...latest, status: "queued", resumeData, updatedAt: Date.now() });
   };
 
   // Recompute total downloaded bytes + pending-mutation count into store state.
@@ -435,7 +517,13 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
       try {
         const rows = await dbAllRows();
         const records: Record<string, OfflineDownloadRecord> = {};
-        for (const row of rows) records[row.key] = rowToRecord(row);
+        for (const row of rows) {
+          const record = rowToRecord(row);
+          // A row left "downloading" means the app died mid-download; its resume
+          // blob lived only in memory, so restart it from scratch as "queued".
+          if (record.status === "downloading") record.status = "queued";
+          records[row.key] = record;
+        }
         set({ records, hydrated: true });
         // Reclaim interrupted-download debris (orphaned NSURLSession partials +
         // stale offline-media folders) before resuming, so the purge can't race
@@ -625,6 +713,7 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
     },
 
     refreshStorage,
+    pauseActiveDownload,
   };
 });
 
@@ -728,20 +817,45 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
 // an unsubscribe fn. The root layout owns the single call site (see brief).
 export function initOfflineSync(): () => void {
   let previous: AppStateStatus = AppState.currentState;
+  isForeground = AppState.currentState === "active";
   // Cover the cold-launch case: AppState is usually already "active" on mount,
   // so fire one immediate drain in addition to subscribing for later resumes.
   void useOfflineStore.getState().syncOfflineMutations();
   const subscription = AppState.addEventListener("change", (next: AppStateStatus) => {
     const cameToForeground = previous.match(/inactive|background/) && next === "active";
+    // Only the real suspension point — not transient "inactive" (control center,
+    // notification pulldown, Face ID), which doesn't suspend a foreground download.
+    const wentToBackground = next === "background";
     previous = next;
     if (cameToForeground) {
+      isForeground = true;
       void useOfflineStore.getState().syncOfflineMutations();
       // Resume any downloads iOS suspended while we were backgrounded. An empty
       // batch is a no-op that still kicks the serial pump for queued rows.
       void useOfflineStore.getState().queueDownloads([], "home");
+    } else if (wentToBackground) {
+      // Mark background BEFORE pausing, so the pump's gate sees it and won't
+      // re-launch the download we're about to pause straight into suspension.
+      isForeground = false;
+      // Pause first so we keep a resume blob and continue from the partial on return.
+      void useOfflineStore.getState().pauseActiveDownload();
     }
   });
-  return () => subscription.remove();
+  // Connectivity edges, the case AppState can't see: toggling airplane mode while
+  // the app stays foregrounded never changes AppState, so without this a large
+  // download would just die and orphan its partial. Pause on drop (banking a
+  // resume blob), kick the pump on recovery to resume from where it left off.
+  const unsubscribeOnline = subscribeOnline((isOnline) => {
+    if (isOnline) {
+      void useOfflineStore.getState().queueDownloads([], "home");
+    } else {
+      void useOfflineStore.getState().pauseActiveDownload();
+    }
+  });
+  return () => {
+    subscription.remove();
+    unsubscribeOnline();
+  };
 }
 
 // Swap a song's URLs for its downloaded file:// copies when a ready record exists.
