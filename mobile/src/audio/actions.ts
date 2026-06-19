@@ -25,7 +25,11 @@ function playableQueue(songs: PlayerSong[], startIndex: number): { songs: Player
   return { songs: filtered, startIndex: idx >= 0 ? idx : 0 };
 }
 
-export function playSongs(songs: PlayerSong[], startIndex: number, options?: { respectShuffle?: boolean }): void {
+export function playSongs(
+  songs: PlayerSong[],
+  startIndex: number,
+  options?: { respectShuffle?: boolean; contextKey?: string },
+): void {
   const plan = playableQueue(songs, startIndex);
   usePlayerStore.getState().setQueue(plan.songs, plan.startIndex, options);
 }
@@ -35,7 +39,9 @@ export function playSong(song: PlayerSong): void {
 }
 
 // Tap a tile: toggle if it's already current, otherwise start it within its list.
-export function toggleSongInList(songs: PlayerSong[], startIndex: number): void {
+// `contextKey` tags the queue with the collection it was started from, so that
+// collection's Play button can show Pause/resume instead of restarting.
+export function toggleSongInList(songs: PlayerSong[], startIndex: number, contextKey?: string): void {
   const state = usePlayerStore.getState();
   const target = songs[startIndex];
   if (target && state.currentSong?.id === target.id) {
@@ -43,7 +49,7 @@ export function toggleSongInList(songs: PlayerSong[], startIndex: number): void 
     return;
   }
   const plan = playableQueue(songs, startIndex);
-  state.setQueue(plan.songs, plan.startIndex);
+  state.setQueue(plan.songs, plan.startIndex, { contextKey });
 }
 
 export async function seekTo(seconds: number): Promise<void> {

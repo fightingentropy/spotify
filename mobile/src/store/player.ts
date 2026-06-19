@@ -20,6 +20,11 @@ type PlayerState = {
   playHistory: number[];
   playFuture: number[];
   shuffleRemaining: number[];
+  // Identifies the collection the current queue was started from (e.g. "liked",
+  // `playlist:<id>`). Lets a collection's Play button know it owns the active
+  // playback, so it can show Pause / resume instead of rebuilding the queue on
+  // every press. null when the queue wasn't started from a tracked context.
+  queueContextKey: string | null;
   isPlaying: boolean;
   volume: number; // 0..1
   isMuted: boolean;
@@ -73,6 +78,8 @@ type PlayerState = {
 
 type SetQueueOptions = {
   respectShuffle?: boolean;
+  // Tags the queue with the collection it came from (see queueContextKey).
+  contextKey?: string;
 };
 
 type AdvanceToIndexOptions = {
@@ -363,6 +370,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playHistory: [],
   playFuture: [],
   shuffleRemaining: [],
+  queueContextKey: null,
   isPlaying: false,
   volume: readStoredVolume(),
   isMuted: readStoredMuted(),
@@ -395,6 +403,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playHistory: [],
       playFuture: [],
       shuffleRemaining: get().shuffle ? createShuffleRemaining(queue.length, start) : [],
+      queueContextKey: currentSong != null ? (options?.contextKey ?? null) : null,
       isPlaying: currentSong != null,
     }));
     return currentSong;
@@ -407,6 +416,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playHistory: [],
       playFuture: [],
       shuffleRemaining: [],
+      queueContextKey: null,
     }),
   advanceToIndex: (index, options) =>
     set((s) => {

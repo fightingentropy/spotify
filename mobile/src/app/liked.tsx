@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import { Heart, Play, Shuffle } from "lucide-react-native";
+import { Heart, Pause, Play, Shuffle } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -13,6 +13,10 @@ import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
+
+// Tags the queue when playback starts from Liked Songs, so the big Play button
+// knows it owns the active playback (Pause/resume vs. starting over).
+const LIKED_CONTEXT_KEY = "liked";
 
 export default function LikedScreen() {
   const insets = useSafeAreaInsets();
@@ -29,9 +33,16 @@ export default function LikedScreen() {
 
   const shuffle = usePlayerStore((s) => s.shuffle);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
+  // This collection "owns" playback when the queue was started from it (big
+  // button or a row tap, both tagged "liked"). Then the button mirrors the
+  // player — Pause while playing, resume while paused — instead of restarting.
+  const isLikedContext = usePlayerStore((s) => s.queueContextKey === LIKED_CONTEXT_KEY);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const togglePlay = usePlayerStore((s) => s.toggle);
 
   const songs = data.songs;
   const count = songs.length;
+  const showPause = isLikedContext && isPlaying;
 
   if (status === "unauthenticated") {
     return (
@@ -90,13 +101,21 @@ export default function LikedScreen() {
         </View>
         {count > 0 ? (
           <PressableScale
-            onPress={() => playSongs(songs, 0, { respectShuffle: true })}
-            accessibilityLabel="Play"
+            onPress={() =>
+              isLikedContext
+                ? togglePlay()
+                : playSongs(songs, 0, { respectShuffle: true, contextKey: LIKED_CONTEXT_KEY })
+            }
+            accessibilityLabel={showPause ? "Pause" : "Play"}
             className="h-14 w-14 items-center justify-center rounded-full"
             style={{ backgroundColor: colors.emerald }}
           >
             <View>
-              <Play size={28} color="#000" fill="#000" style={{ marginLeft: 3 }} />
+              {showPause ? (
+                <Pause size={28} color="#000" fill="#000" />
+              ) : (
+                <Play size={28} color="#000" fill="#000" style={{ marginLeft: 3 }} />
+              )}
             </View>
           </PressableScale>
         ) : null}
@@ -116,6 +135,7 @@ export default function LikedScreen() {
         header={header}
         initialMode="list"
         showToggle={false}
+        contextKey={LIKED_CONTEXT_KEY}
         emptyComponent={
           loading ? null : (
             <EmptyState title="No liked songs yet" subtitle="Tap the heart on any track to save it here." />

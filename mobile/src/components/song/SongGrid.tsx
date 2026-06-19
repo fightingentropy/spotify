@@ -21,6 +21,7 @@ export function SongGrid({
   showToggle = true,
   initialMode = "grid",
   contentBottomInset = layout.mobileNavHeight + layout.mobilePlayerHeight + 24,
+  contextKey,
 }: {
   songs: PlayerSong[];
   header?: ReactElement | null;
@@ -29,13 +30,16 @@ export function SongGrid({
   showToggle?: boolean;
   initialMode?: Mode;
   contentBottomInset?: number;
+  // Tags playback started from a row tap with the collection it came from, so
+  // that collection's Play button stays in sync (Pause/resume vs restart).
+  contextKey?: string;
 }) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const numColumns = mode === "grid" ? 2 : 1;
 
   const renderItem = useCallback(
     ({ item, index }: { item: PlayerSong; index: number }) => {
-      const onPress = () => toggleSongInList(songs, index);
+      const onPress = () => toggleSongInList(songs, index, contextKey);
       if (mode === "grid") {
         return (
           <View style={{ flex: 1 / numColumns, maxWidth: `${100 / numColumns}%` }}>
@@ -45,7 +49,7 @@ export function SongGrid({
       }
       return <SongListItem song={item} onPress={onPress} />;
     },
-    [mode, numColumns, songs],
+    [mode, numColumns, songs, contextKey],
   );
 
   const toggleBar = showToggle ? (
