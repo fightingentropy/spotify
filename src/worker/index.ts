@@ -3568,7 +3568,75 @@ app.get("/api/library", async (c) => {
 });
 
 const PODCAST_FEED_CACHE_TTL_MS = 5 * 60 * 1000;
+const PODCAST_FEED_FETCH_ATTEMPTS = 3;
+// The client only renders the newest ~50 episodes (parsePodcastFeed slices to
+// 50), so the proxy trims the feed to a little more than that. This is what
+// makes the proxy reliable: the Workers runtime truncates these multi-megabyte
+// chunked feed bodies at ~2.2MB when an isolate reads several concurrently (the
+// page loads the feed next to one image proxy per visible episode), mangling
+// the back half. RSS lists newest first, so the episodes we keep always sit in
+// the clean leading slice that arrives intact — dropping the long tail makes
+// the truncation irrelevant and keeps the served/re-read document small.
+const PODCAST_FEED_MAX_ITEMS = 60;
 const podcastFeedXmlCache = new Map<string, { fetchedAt: number; xml: string }>();
+const podcastFeedInFlight = new Map<string, Promise<string>>();
+
+// Rebuild a compact, well-formed RSS document from at most `limit` <item>
+// elements. The Worker has no XML parser, so this works on the raw — and
+// possibly tail-truncated — feed text: everything before the first <item> is
+// the channel preamble (show title, description, cover art), which is kept
+// verbatim, then the leading items, then the closing tags are reattached.
+// Returns null when not even one complete item is present (a read that
+// truncated unusually early) so the caller can retry.
+function trimPodcastFeed(xmlText: string, limit: number): string | null {
+  const firstItem = xmlText.search(/<item[\s>]/i);
+  if (firstItem === -1) return null;
+  const preamble = xmlText.slice(0, firstItem);
+  const itemPattern = /<item[\s>][\s\S]*?<\/item\s*>/gi;
+  itemPattern.lastIndex = firstItem;
+  let items = "";
+  let count = 0;
+  let match: RegExpExecArray | null;
+  while (count < limit && (match = itemPattern.exec(xmlText)) !== null) {
+    items += match[0];
+    count += 1;
+  }
+  if (count === 0) return null;
+  return `${preamble}${items}\n  </channel>\n</rss>\n`;
+}
+
+async function fetchPodcastFeedXmlUncached(
+  show: PodcastShow,
+  cached: { fetchedAt: number; xml: string } | undefined,
+): Promise<string> {
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < PODCAST_FEED_FETCH_ATTEMPTS; attempt++) {
+    // Accept-Encoding: identity requests the raw, uncompressed feed. The hosts
+    // (megaphone, libsyn) honor it, and it opts this subrequest out of the
+    // runtime's transparent decompression. A truncated read then cuts cleanly
+    // mid-document instead of garbling, so the leading items we keep stay intact.
+    const response = await fetchWithTimeout(show.feedUrl, SPOTIFY_REQUEST_TIMEOUT_MS, {
+      headers: { "accept-encoding": "identity" },
+    });
+    if (!response.ok) {
+      lastStatus = response.status;
+      continue;
+    }
+    const trimmed = trimPodcastFeed(await response.text(), PODCAST_FEED_MAX_ITEMS);
+    if (trimmed) {
+      podcastFeedXmlCache.set(show.feedUrl, { fetchedAt: Date.now(), xml: trimmed });
+      return trimmed;
+    }
+  }
+
+  // Every attempt errored or came back unusable: serve the last good copy
+  // (even if past its TTL) rather than surface a parse error to the client.
+  if (cached) return cached.xml;
+  throw new ApiError(
+    lastStatus ? `Podcast feed returned ${lastStatus}` : "Podcast feed could not be loaded",
+    502,
+  );
+}
 
 // Per-isolate feed cache: /api/podcast-media validates every request (including
 // each playback range request) against the feed, so it can't refetch a
@@ -3576,14 +3644,20 @@ const podcastFeedXmlCache = new Map<string, { fetchedAt: number; xml: string }>(
 async function fetchPodcastFeedXml(show: PodcastShow): Promise<string> {
   const cached = podcastFeedXmlCache.get(show.feedUrl);
   if (cached && Date.now() - cached.fetchedAt < PODCAST_FEED_CACHE_TTL_MS) return cached.xml;
-  const response = await fetchWithTimeout(show.feedUrl, SPOTIFY_REQUEST_TIMEOUT_MS);
-  if (!response.ok) {
-    if (cached) return cached.xml;
-    throw new ApiError(`Podcast feed returned ${response.status}`, 502);
+
+  // Collapse the burst a cold isolate sees — the feed request plus one
+  // /api/podcast-media validation per visible episode — into a single upstream
+  // fetch, so callers share one document instead of each re-fetching their own.
+  const existing = podcastFeedInFlight.get(show.feedUrl);
+  if (existing) return existing;
+
+  const work = fetchPodcastFeedXmlUncached(show, cached);
+  podcastFeedInFlight.set(show.feedUrl, work);
+  try {
+    return await work;
+  } finally {
+    podcastFeedInFlight.delete(show.feedUrl);
   }
-  const xml = await response.text();
-  podcastFeedXmlCache.set(show.feedUrl, { fetchedAt: Date.now(), xml });
-  return xml;
 }
 
 app.get("/api/podcast-feeds/:id", async (c) => {
