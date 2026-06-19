@@ -17,6 +17,25 @@ export type DownloadRow = {
   updatedAt: number;
 };
 
+// Downloaded assets are addressed RELATIVE to the app's document directory
+// (e.g. "offline-media/<safeName(songId)>/audio.flac"). iOS can hand the app a
+// DIFFERENT container path after a reinstall, so any absolute path persisted by a
+// previous install goes stale and strands the file on disk. Never trust a stored
+// absolute path: resolve it against the CURRENT documentDirectory at the point of
+// use. resolveMediaPath also repairs a legacy absolute value by re-rooting it.
+const MEDIA_MARKER = "offline-media/";
+export function toMediaRelativePath(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const i = path.indexOf(MEDIA_MARKER);
+  return i >= 0 ? path.slice(i) : path;
+}
+export function resolveMediaPath(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const i = path.indexOf(MEDIA_MARKER);
+  if (i < 0) return path;
+  return `${FileSystem.documentDirectory ?? ""}${path.slice(i)}`;
+}
+
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
@@ -86,7 +105,7 @@ export async function readAllDownloadedRecords(accountScope: string): Promise<Do
 // download pump re-downloads it on its next run. Cover/lyrics are best-effort
 // sidecars in the pump and are not gated here, matching the pump's own behavior.
 export async function verifyOrRepairRecord(row: DownloadRow): Promise<{ ok: boolean }> {
-  const audioPath = row.audioPath;
+  const audioPath = resolveMediaPath(row.audioPath);
   if (audioPath) {
     try {
       const info = await FileSystem.getInfoAsync(audioPath);

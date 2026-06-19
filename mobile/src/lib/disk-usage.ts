@@ -1,6 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
 import { getOfflineAccountScope } from "@/store/offline";
-import { readAllDownloadedRecords } from "@/lib/offline-db";
+import { readAllDownloadedRecords, resolveMediaPath } from "@/lib/offline-db";
 
 // Storage accounting for OfflineSettings. The web app leaned on the browser's
 // navigator.storage.estimate() for usage/quota; RN has no such API, so this sums
@@ -30,9 +30,10 @@ export function formatBytes(value: number | null | undefined): string {
 }
 
 async function fileSize(path: string | null | undefined): Promise<number> {
-  if (!path) return 0;
+  const resolved = resolveMediaPath(path);
+  if (!resolved) return 0;
   try {
-    const info = await FileSystem.getInfoAsync(path);
+    const info = await FileSystem.getInfoAsync(resolved);
     return info.exists && !info.isDirectory ? info.size : 0;
   } catch {
     return 0;

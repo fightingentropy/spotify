@@ -8,6 +8,8 @@ import {
   dbDeleteRow,
   dbUpsertRow,
   readAllDownloadedRecords,
+  resolveMediaPath,
+  toMediaRelativePath,
   verifyOrRepairRecord,
   type DownloadRow,
 } from "@/lib/offline-db";
@@ -411,7 +413,18 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           const latest = get().records[key];
           clearProgress(key);
           if (!latest) continue; // unpinned mid-download
-          persist({ ...latest, status: "ready", audioPath, coverPath, lyricsPath, resumeData: undefined, updatedAt: Date.now(), error: undefined });
+          // Persist paths RELATIVE to documentDirectory — never the absolute
+          // container path, which iOS can change across a reinstall and strand.
+          persist({
+            ...latest,
+            status: "ready",
+            audioPath: toMediaRelativePath(audioPath) ?? audioPath,
+            coverPath: toMediaRelativePath(coverPath) ?? undefined,
+            lyricsPath: toMediaRelativePath(lyricsPath) ?? undefined,
+            resumeData: undefined,
+            updatedAt: Date.now(),
+            error: undefined,
+          });
         } catch (e) {
           activeDownload = null;
           clearProgress(key);
@@ -550,12 +563,23 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
           records[row.key] = record;
         }
         set({ records, hydrated: true });
+        // Re-attach records to their downloaded files at the CURRENT container
+        // path. Files are keyed on disk by safeName(songId), so this relinks them
+        // regardless of a stale absolute path or a path cleared by verify — the
+        // reason a reinstall must NOT strand downloads or trigger a re-download.
+        // MUST run before the purge (so recovered folders aren't seen as orphans)
+        // and before the pump (so it doesn't re-download what we just relinked).
+        await reconcileDownloadedFiles();
         // Reclaim interrupted-download debris (orphaned NSURLSession partials +
         // stale offline-media folders) before resuming, so the purge can't race
         // a freshly-resumed download's partial.
         await purgeOrphanedDownloadArtifacts();
-        // resume any interrupted downloads
-        if (Object.values(records).some((r) => r.status === "queued" || r.status === "downloading")) {
+        // resume any genuinely-incomplete downloads (post-reconcile state)
+        if (
+          Object.values(get().records).some(
+            (r) => r.status === "queued" || r.status === "downloading",
+          )
+        ) {
           void runPump();
         }
       } catch {
@@ -731,6 +755,61 @@ export const useOfflineStore = create<OfflineState>((set, get) => {
   };
 });
 
+// Re-attach records to their downloaded files at the CURRENT container path.
+// Files are addressed on disk by safeName(songId), so a record can be relinked
+// regardless of a stale absolute path (iOS changes the container path across
+// reinstalls) or a path an over-eager verify cleared — which is what stops a
+// reinstall from stranding downloads or kicking off a needless multi-GB
+// re-download. Also migrates legacy absolute paths to the stored relative form.
+// Batched: one state merge + parallel DB upserts. Cheap on a healthy launch —
+// records that already hold a resolvable relative path are skipped with no I/O.
+async function reconcileDownloadedFiles(): Promise<void> {
+  const records = Object.values(useOfflineStore.getState().records);
+  const fixed: Record<string, OfflineDownloadRecord> = {};
+  for (const rec of records) {
+    const hasRelativePath =
+      rec.status === "ready" &&
+      !!rec.audioPath &&
+      !rec.audioPath.startsWith("file://") &&
+      !rec.audioPath.startsWith("/");
+    if (hasRelativePath) continue;
+
+    const relDir = `offline-media/${safeName(rec.songId)}`;
+    const absDir = `${FileSystem.documentDirectory ?? ""}${relDir}`;
+    let names: string[];
+    try {
+      names = await FileSystem.readDirectoryAsync(absDir);
+    } catch {
+      continue; // no folder → genuinely not downloaded; leave it for the pump
+    }
+    const audioName = names.find((n) => n.startsWith("audio"));
+    if (!audioName) continue;
+    let size = 0;
+    try {
+      const info = await FileSystem.getInfoAsync(`${absDir}/${audioName}`);
+      size = info.exists && !info.isDirectory ? info.size : 0;
+    } catch {}
+    if (size <= 0) continue;
+
+    const coverName = names.find((n) => n.startsWith("cover"));
+    const lyricsName = names.find((n) => n.startsWith("lyrics"));
+    fixed[keyFor(rec.accountScope, rec.songId)] = {
+      ...rec,
+      status: "ready",
+      audioPath: `${relDir}/${audioName}`,
+      coverPath: coverName ? `${relDir}/${coverName}` : undefined,
+      lyricsPath: lyricsName ? `${relDir}/${lyricsName}` : undefined,
+      resumeData: undefined,
+      error: undefined,
+      updatedAt: Date.now(),
+    };
+  }
+  const keys = Object.keys(fixed);
+  if (keys.length === 0) return;
+  useOfflineStore.setState((s) => ({ records: { ...s.records, ...fixed } }));
+  await Promise.all(Object.values(fixed).map((r) => dbUpsertRow(recordToRow(r)).catch(() => {})));
+}
+
 // Reclaim space left behind by interrupted downloads — two sources expo never
 // cleans on its own:
 //   1. NSURLSession partial-download temp files. createDownloadResumable()
@@ -773,14 +852,15 @@ async function purgeOrphanedDownloadArtifacts(): Promise<void> {
     if (info.exists) {
       const folders = await FileSystem.readDirectoryAsync(OFFLINE_DIR);
       if (folders.length > 0) {
-        const readyFolders = new Set(
-          Object.values(useOfflineStore.getState().records)
-            .filter((r) => r.status === "ready")
-            .map((r) => safeName(r.songId)),
+        // A folder is an orphan only if NO record (any status) references it —
+        // keying on "ready" alone would delete folders for queued/downloading/
+        // just-reconciled records and wipe real downloads.
+        const knownFolders = new Set(
+          Object.values(useOfflineStore.getState().records).map((r) => safeName(r.songId)),
         );
         await Promise.all(
           folders
-            .filter((folder) => !readyFolders.has(folder))
+            .filter((folder) => !knownFolders.has(folder))
             .map((folder) =>
               FileSystem.deleteAsync(`${OFFLINE_DIR}${folder}`, { idempotent: true }).catch(() => {}),
             ),
@@ -842,14 +922,17 @@ export function initOfflineSync(): () => void {
 // networkImageUrl stays remote so the lock-screen artwork still resolves (§11).
 export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong {
   const record = useOfflineStore.getState().records[keyFor(accountScope, song.id)];
-  if (!record || record.status !== "ready" || !record.audioPath) return song;
+  // Resolve the stored (relative) path against the live container; the native
+  // engine needs an absolute file:// URL, and a legacy absolute path is re-rooted.
+  const audioUrl = resolveMediaPath(record?.audioPath);
+  if (!record || record.status !== "ready" || !audioUrl) return song;
   return {
     ...song,
     source: "offline",
-    audioUrl: record.audioPath,
-    imageUrl: record.coverPath ?? song.imageUrl,
+    audioUrl,
+    imageUrl: resolveMediaPath(record.coverPath) ?? song.imageUrl,
     networkImageUrl: song.networkImageUrl ?? song.imageUrl,
-    lyricsUrl: record.lyricsPath ?? song.lyricsUrl,
+    lyricsUrl: resolveMediaPath(record.lyricsPath) ?? song.lyricsUrl,
   };
 }
 
