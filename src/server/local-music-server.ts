@@ -616,6 +616,43 @@ function titleFromFileName(fileName: string): { title: string; artist: string } 
   return { title: stem || "Untitled", artist: "Unknown Artist" };
 }
 
+function topLevelFolder(localPath: string | null | undefined): string | null {
+  if (!localPath) return null;
+  const slash = localPath.indexOf("/");
+  if (slash <= 0) return null;
+  return localPath.slice(0, slash);
+}
+
+// A top-level subdirectory of the music root surfaces as a browsable playlist.
+// The id is derived from the folder name so it stays stable across rescans and
+// carries a recognizable prefix the Worker matches to route playlist reads here
+// (instead of to its D1-backed / curated playlist handlers).
+function folderPlaylistId(folderName: string): string {
+  return `local-folder-${createHash("sha1").update(folderName).digest("hex").slice(0, 16)}`;
+}
+
+// Group request-scoped songs by their top-level folder. Songs sitting directly
+// in the library root belong to no folder and are skipped.
+function folderPlaylistGroups(songs: PlayerSong[]): Map<string, PlayerSong[]> {
+  const groups = new Map<string, PlayerSong[]>();
+  for (const song of songs) {
+    const folder = topLevelFolder(song.localPath);
+    if (!folder) continue;
+    const existing = groups.get(folder);
+    if (existing) existing.push(song);
+    else groups.set(folder, [song]);
+  }
+  return groups;
+}
+
+function earliestCreatedAt(songs: PlayerSong[]): string {
+  let earliest: string | undefined;
+  for (const song of songs) {
+    if (song.createdAt && (!earliest || song.createdAt < earliest)) earliest = song.createdAt;
+  }
+  return earliest ?? new Date(0).toISOString();
+}
+
 function firstString(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (Array.isArray(value)) {
@@ -2930,8 +2967,64 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/library" && request.method === "GET") {
-    return jsonCached(request, { playlists: [], userId: currentUserIdForRequest(request) }, {
+    const userId = currentUserIdForRequest(request);
+    const source = librarySourceForRequest(request);
+    if (!source) {
+      return jsonCached(request, { playlists: [], userId }, {
+        cacheControl: "private, max-age=300, stale-while-revalidate=600",
+      });
+    }
+    const snapshot = await getLibrary(source);
+    const songs = songsForRequest(snapshot.songs, request);
+    const playlists = [...folderPlaylistGroups(songs).entries()]
+      .map(([name, list]) => ({
+        id: folderPlaylistId(name),
+        name,
+        imageUrl: list.find((song) => song.imageUrl)?.imageUrl ?? null,
+        userId,
+        createdAt: earliestCreatedAt(list),
+        songsCount: list.length,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    return jsonCached(request, { playlists, userId }, {
       cacheControl: "private, max-age=300, stale-while-revalidate=600",
+    });
+  }
+
+  // Folder-as-playlist read. The Worker only proxies `local-folder-*` ids here
+  // (curated + D1-backed playlists stay on the Worker), so this resolves the
+  // matching top-level music folder and returns its songs library-playlist shaped.
+  if (pathname.startsWith("/api/playlist/") && request.method === "GET") {
+    const rest = pathname.slice("/api/playlist/".length);
+    if (!rest || rest.includes("/")) return notFound("Playlist not found");
+    const id = safeDecode(rest);
+    const userId = currentUserIdForRequest(request);
+    if (!userId) return json({ error: "Unauthorized" }, { status: 401 });
+    const source = librarySourceForRequest(request);
+    if (!source) return forbiddenLibraryResponse();
+    const snapshot = await getLibrary(source);
+    const songs = songsForRequest(snapshot.songs, request);
+    let matchName: string | null = null;
+    let matchSongs: PlayerSong[] | null = null;
+    for (const [name, list] of folderPlaylistGroups(songs).entries()) {
+      if (folderPlaylistId(name) === id) {
+        matchName = name;
+        matchSongs = list;
+        break;
+      }
+    }
+    if (!matchName || !matchSongs) return notFound("Playlist not found");
+    return jsonCached(request, {
+      kind: "library",
+      playlist: {
+        id,
+        name: matchName,
+        imageUrl: matchSongs.find((song) => song.imageUrl)?.imageUrl ?? null,
+        userId,
+        createdAt: earliestCreatedAt(matchSongs),
+      },
+      songs: matchSongs,
+      likedSongIds: await likedSongIdsForSongs(source, matchSongs),
     });
   }
 

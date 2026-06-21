@@ -41,6 +41,21 @@ describe("Mac mini proxy diversion", () => {
     expect(shouldProxyMusicPathnameToMacMini("/api/play-events", "POST", "application/json")).toBe(false);
     expect(shouldProxyMusicPathnameToMacMini("/api/stats/home", "GET")).toBe(false);
   });
+
+  test("diverts folder-as-playlist reads to the mini but leaves curated/D1 playlists on the Worker", () => {
+    // Local folder playlists are filesystem-derived → served by the mini.
+    expect(shouldProxyMusicPathnameToMacMini("/api/playlist/local-folder-abc123", "GET")).toBe(true);
+    // Reorder (or any mutation) stays on the Worker — only GET reads divert.
+    expect(shouldProxyMusicPathnameToMacMini("/api/playlist/local-folder-abc123/reorder", "POST", "application/json")).toBe(false);
+    // Curated Spotify playlists are resolved by the Worker before its auth gate.
+    expect(shouldProxyMusicPathnameToMacMini("/api/playlist/37i9dQZF1E8MlVyHRy0DWb", "GET")).toBe(false);
+    // D1-backed playlist ids (no local-folder prefix) stay on the Worker too.
+    expect(shouldProxyMusicPathnameToMacMini("/api/playlist/clx9k2abc0001", "GET")).toBe(false);
+  });
+
+  test("forwards user context for folder-as-playlist reads", () => {
+    expect(shouldForwardMacMiniUserForPathname("/api/playlist/local-folder-abc123")).toBe(true);
+  });
 });
 
 describe("security headers on proxied responses", () => {

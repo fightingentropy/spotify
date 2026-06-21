@@ -2685,6 +2685,10 @@ export function shouldProxyMusicPathnameToMacMini(pathname: string, method: stri
   if (pathname.startsWith("/api/files/local/")) return true;
   if (pathname.startsWith("/api/artwork/local/")) return true;
   if (pathname.startsWith("/api/songs/")) return true;
+  // Folder-as-playlist reads live on the Mac mini (its library is the filesystem
+  // scan). Curated + D1-backed playlist ids don't carry this prefix, so they
+  // fall through to the Worker's own /api/playlist/:id handler.
+  if (normalizedMethod === "GET" && pathname.startsWith("/api/playlist/local-folder-")) return true;
   if (["/api/music/source", "/api/home", "/api/search-index", "/api/library", "/api/liked", "/api/likes"].includes(pathname)) {
     return true;
   }
