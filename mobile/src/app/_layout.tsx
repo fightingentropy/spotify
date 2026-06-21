@@ -78,7 +78,16 @@ export default function RootLayout() {
             <Stack.Screen name="settings/about" options={{ ...headerOptions, title: "About" }} />
             <Stack.Screen name="profile" options={{ ...headerOptions, title: "Profile" }} />
             <Stack.Screen name="listening-stats" options={{ ...headerOptions, title: "Listening stats" }} />
-            <Stack.Screen name="playlist/[id]" options={{ ...headerOptions, title: "" }} />
+            <Stack.Screen
+              name="playlist/[id]"
+              options={{
+                ...headerOptions,
+                title: "",
+                headerTransparent: true,
+                headerStyle: { backgroundColor: "transparent" },
+                headerTintColor: "#fff",
+              }}
+            />
           </Stack>
           <TabBar />
           <MiniPlayer />

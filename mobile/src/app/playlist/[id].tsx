@@ -1,19 +1,24 @@
 import { useEffect } from "react";
 import { Text, View } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
-import { ArrowDownToLine, CheckCircle2 } from "lucide-react-native";
-import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useLocalSearchParams } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
+import { Music, Pause, Play, Shuffle } from "lucide-react-native";
+import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
-import { PressableScale } from "@/components/ui/PressableScale";
 import { CoverImage } from "@/components/CoverImage";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { EmptyState, ErrorText } from "@/components/ui/States";
 import { type PlaylistPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useArtworkColor } from "@/lib/useArtworkColor";
+import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
-import { useBatchDownload, useOfflineStore } from "@/store/offline";
+import { usePlayerStore } from "@/store/player";
 import { colors } from "@/theme";
 
 export default function PlaylistScreen() {
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user, status } = useAuth();
   const { data, loading, error } = useApiData<PlaylistPayload>(
@@ -25,67 +30,118 @@ export default function PlaylistScreen() {
   useEffect(() => {
     mergeInitialLikes(data.likedSongIds);
   }, [mergeInitialLikes, data.likedSongIds]);
-  const queueDownloads = useOfflineStore((s) => s.queueDownloads);
-  const unpinScope = useOfflineStore((s) => s.unpinScope);
-  const agg = useBatchDownload(data.songs);
 
+  // Tag the queue with this playlist so the big Play button mirrors the player
+  // (Pause/resume vs. starting over), exactly like the Liked Songs screen.
+  const contextKey = `playlist:${id}` as const;
+  const shuffle = usePlayerStore((s) => s.shuffle);
+  const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
+  const isThisContext = usePlayerStore((s) => s.queueContextKey === contextKey);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const togglePlay = usePlayerStore((s) => s.toggle);
+
+  const songs = data.songs;
+  const count = songs.length;
   const name = data.playlist?.name ?? "Playlist";
+  const cover = data.playlist?.imageUrl ?? songs[0]?.imageUrl ?? null;
+  const tint = useArtworkColor(cover);
+  const heroColor = tint ?? "#3f3f46";
+  const showPause = isThisContext && isPlaying;
 
+  // Spotify-style hero: a gradient tinted by the cover art, the large artwork, the
+  // title + count, then the download · shuffle · play action row. Rendered as the
+  // list header so it scrolls with the songs.
   const header = (
-    <View className="px-4 pb-4 pt-2">
-      <View className="flex-row items-center gap-4">
-        <View className="h-24 w-24 overflow-hidden rounded" style={{ backgroundColor: colors.card }}>
-          {data.playlist?.imageUrl ? (
-            <CoverImage src={data.playlist.imageUrl} style={{ width: "100%", height: "100%" }} />
-          ) : null}
-        </View>
-        <View className="min-w-0 flex-1">
-          <Text numberOfLines={2} className="text-2xl font-bold" style={{ color: colors.foreground }}>
-            {name}
-          </Text>
-          <Text className="mt-1 text-sm" style={{ color: colors.muted }}>
-            {data.songs.length} {data.songs.length === 1 ? "track" : "tracks"}
-          </Text>
-        </View>
-      </View>
-      {data.songs.length > 0 ? (
-        <PressableScale
-          onPress={() => {
-            if (agg.status === "downloading") {
-              for (const s of data.songs) void unpinScope(s.id, `playlist:${id}`);
-            } else if (agg.status !== "ready") {
-              void queueDownloads(data.songs, `playlist:${id}`);
-            }
+    <View>
+      <LinearGradient
+        colors={[heroColor, heroColor, colors.background]}
+        style={{ paddingTop: insets.top + 52, paddingBottom: 18, paddingHorizontal: 20, alignItems: "center" }}
+      >
+        <View
+          style={{
+            borderRadius: 6,
+            shadowColor: "#000",
+            shadowOpacity: 0.45,
+            shadowRadius: 16,
+            shadowOffset: { width: 0, height: 8 },
           }}
-          className="mt-4 flex-row items-center gap-1.5 self-start rounded-full px-4 py-2"
-          style={{ borderWidth: 1, borderColor: colors.line }}
         >
-          {agg.status === "downloading" ? (
-            <DownloadProgressRing size={16} strokeWidth={2} progress={agg.progress} />
-          ) : agg.status === "ready" ? (
-            <CheckCircle2 size={16} color={colors.emerald} />
-          ) : (
-            <ArrowDownToLine size={16} color={colors.emerald} />
-          )}
-          <Text className="text-sm font-medium" style={{ color: colors.emerald }}>
-            {agg.status === "downloading"
-              ? `Downloading ${Math.round(agg.progress * 100)}%`
-              : agg.status === "ready"
-                ? "Downloaded"
-                : "Download playlist"}
-          </Text>
-        </PressableScale>
+          <View
+            style={{
+              width: 132,
+              height: 132,
+              borderRadius: 6,
+              overflow: "hidden",
+              backgroundColor: colors.card,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {cover ? (
+              <CoverImage src={cover} style={{ width: "100%", height: "100%" }} />
+            ) : (
+              <Music size={52} color={colors.muted} />
+            )}
+          </View>
+        </View>
+        <Text numberOfLines={2} className="mt-5 text-center text-3xl font-extrabold" style={{ color: "#fff" }}>
+          {name}
+        </Text>
+        <Text className="mt-1.5 text-sm font-medium" style={{ color: colors.muted }}>
+          {count} {count === 1 ? "song" : "songs"}
+        </Text>
+      </LinearGradient>
+
+      {/* action row: download · shuffle · play (Spotify layout) */}
+      <View
+        className="flex-row items-center justify-between px-5 pb-3 pt-1"
+        style={{ backgroundColor: colors.background }}
+      >
+        <View className="flex-row items-center" style={{ gap: 22 }}>
+          {count > 0 ? <BatchDownloadButton songs={songs} scope={contextKey} size={30} /> : null}
+          <PressableScale onPress={toggleShuffle} hitSlop={8} accessibilityLabel="Toggle shuffle">
+            <View>
+              <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />
+            </View>
+          </PressableScale>
+        </View>
+        {count > 0 ? (
+          <PressableScale
+            onPress={() =>
+              isThisContext
+                ? togglePlay()
+                : playSongs(songs, 0, { respectShuffle: true, contextKey })
+            }
+            accessibilityLabel={showPause ? "Pause" : "Play"}
+            className="h-14 w-14 items-center justify-center rounded-full"
+            style={{ backgroundColor: colors.emerald }}
+          >
+            <View>
+              {showPause ? (
+                <Pause size={28} color="#000" fill="#000" />
+              ) : (
+                <Play size={28} color="#000" fill="#000" style={{ marginLeft: 3 }} />
+              )}
+            </View>
+          </PressableScale>
+        ) : null}
+      </View>
+      {error ? (
+        <View className="px-5 pb-2">
+          <ErrorText>{error}</ErrorText>
+        </View>
       ) : null}
-      {error ? <View className="mt-2"><ErrorText>{error}</ErrorText></View> : null}
     </View>
   );
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <Stack.Screen options={{ title: data.playlist?.name ?? "" }} />
       <SongGrid
-        songs={data.songs}
+        songs={songs}
         header={header}
+        initialMode="list"
+        showToggle={false}
+        contextKey={contextKey}
         emptyComponent={loading ? null : <EmptyState title="This playlist is empty" />}
       />
     </View>
