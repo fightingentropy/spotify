@@ -22,6 +22,11 @@ type SpotifyTrack = {
 };
 
 type ActionStatus = "idle" | "loading" | "success" | "error";
+type ImportProgress = { stage: "resolving" | "downloading" | "saving"; received: number; total: number };
+type ImportStreamOutcome =
+  | { kind: "done" }
+  | { kind: "duplicate"; existingSong: { title?: string; artist?: string } | null }
+  | { kind: "error"; error: string };
 // Server imports only accept FLAC/original audio (see assertServerImportOutputFormat in the Worker).
 type OutputFormat = "flac";
 type BatchType = "track" | "album" | "playlist";
@@ -74,6 +79,94 @@ function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function formatMb(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function importStageLabel(progress: ImportProgress): string {
+  if (progress.stage === "resolving") return "Resolving lossless source…";
+  if (progress.stage === "saving") return "Saving to your library…";
+  return "Downloading lossless audio…";
+}
+
+// Bar width: real % while downloading with a known size; otherwise a sensible
+// indeterminate position per stage (rendered with a pulse by the caller).
+function importBarPercent(progress: ImportProgress): number {
+  if (progress.stage === "resolving") return 8;
+  // Saving sits above the downloading cap so the bar only ever moves forward.
+  if (progress.stage === "saving") return 98;
+  if (progress.total > 0) return Math.min(96, Math.max(2, Math.round((progress.received / progress.total) * 100)));
+  return progress.received > 0 ? 55 : 12;
+}
+
+function importIsDeterminate(progress: ImportProgress): boolean {
+  return progress.stage === "downloading" && progress.total > 0;
+}
+
+// True download percentage for the label (0–100), independent of the bar's
+// capped width.
+function importDownloadPercent(progress: ImportProgress): number {
+  if (progress.total <= 0) return 0;
+  return Math.min(100, Math.round((progress.received / progress.total) * 100));
+}
+
+// Read the worker's NDJSON import stream, driving `onProgress` and returning the
+// terminal outcome (done / duplicate / error).
+async function consumeImportProgressStream(
+  body: ReadableStream<Uint8Array>,
+  onProgress: (progress: ImportProgress) => void,
+): Promise<ImportStreamOutcome> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // If the stream closes with no terminal event, the import may actually have
+  // saved server-side — don't claim a hard failure.
+  let outcome: ImportStreamOutcome = {
+    kind: "error",
+    error: "Connection interrupted before the import finished — check your library before retrying.",
+  };
+  const handleLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const stage = typeof event.stage === "string" ? event.stage : "";
+    if (stage === "resolving") onProgress({ stage: "resolving", received: 0, total: 0 });
+    else if (stage === "downloading")
+      onProgress({ stage: "downloading", received: Number(event.received) || 0, total: Number(event.total) || 0 });
+    else if (stage === "saving") onProgress({ stage: "saving", received: 0, total: 0 });
+    else if (stage === "done") outcome = { kind: "done" };
+    else if (stage === "duplicate")
+      outcome = {
+        kind: "duplicate",
+        existingSong: (event.existingSong as { title?: string; artist?: string } | null) ?? null,
+      };
+    else if (stage === "error")
+      outcome = { kind: "error", error: typeof event.error === "string" ? event.error : "Import failed" };
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        handleLine(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+      }
+    }
+    if (buffer) handleLine(buffer);
+  } finally {
+    reader.releaseLock?.();
+  }
+  return outcome;
+}
+
 export default function UploadPage() {
   const { user, status } = useAuth();
   const navigate = useNavigate();
@@ -89,6 +182,7 @@ export default function UploadPage() {
   const [lyricsText, setLyricsText] = useState("");
   const [fetchStatus, setFetchStatus] = useState<ActionStatus>("idle");
   const [downloadStatus, setDownloadStatus] = useState<ActionStatus>("idle");
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [showReplaceModal, setShowReplaceModal] = useState(false);
   const [replaceModalMessage, setReplaceModalMessage] = useState("");
   const [pendingImportPayload, setPendingImportPayload] = useState<PendingImportPayload | null>(null);
@@ -297,6 +391,7 @@ export default function UploadPage() {
     setNotice(null);
     setFetchStatus("loading");
     setDownloadStatus("idle");
+    setImportProgress(null);
     setBatchStatus("idle");
     setBatchProgress(null);
     setBatchFailures([]);
@@ -676,6 +771,16 @@ export default function UploadPage() {
     }
   }
 
+  function duplicateSongError(existingSong: { title?: string; artist?: string } | null): Error & { code: string } {
+    const message =
+      typeof existingSong?.title === "string" && typeof existingSong?.artist === "string"
+        ? `You already have "${existingSong.title}" by ${existingSong.artist}. Replace it?`
+        : "You already have this song in your library. Replace it?";
+    const error = new Error(message) as Error & { code: string };
+    error.code = "DUPLICATE_SONG";
+    return error;
+  }
+
   async function submitSpotifyImport(lyricsToInclude: string, replaceExisting = false) {
     if (!spotifyTrack) return;
     const payload: Record<string, string> = {
@@ -692,21 +797,28 @@ export default function UploadPage() {
     };
     if (lyricsToInclude) payload.lyricsText = lyricsToInclude;
     if (replaceExisting) payload.replaceExisting = "true";
+    setImportProgress({ stage: "resolving", received: 0, total: 0 });
     const res = await fetch("/api/songs", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-progress-stream": "1" },
       credentials: "include",
       body: JSON.stringify(payload),
     });
+
+    // Progress stream: read NDJSON events; the outcome is the terminal event.
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/x-ndjson") && res.body) {
+      const outcome = await consumeImportProgressStream(res.body, setImportProgress);
+      if (outcome.kind === "duplicate") throw duplicateSongError(outcome.existingSong);
+      if (outcome.kind === "error") throw new Error(outcome.error);
+      invalidateLibraryApiCache();
+      return;
+    }
+
+    // Fallback: a server that didn't stream (e.g. non-mini path) returns plain JSON.
     const data = await res.json().catch(() => ({}));
     if (res.status === 409 && data?.code === "DUPLICATE_SONG") {
-      const duplicateMessage =
-        typeof data?.existingSong?.title === "string" && typeof data?.existingSong?.artist === "string"
-          ? `You already have "${data.existingSong.title}" by ${data.existingSong.artist}. Replace it?`
-          : "You already have this song in your library. Replace it?";
-      const duplicateError = new Error(duplicateMessage) as Error & { code?: string };
-      duplicateError.code = "DUPLICATE_SONG";
-      throw duplicateError;
+      throw duplicateSongError(data?.existingSong ?? null);
     }
     if (!res.ok) throw new Error(data?.error ?? "Failed to add song from Spotify");
     invalidateLibraryApiCache();
@@ -720,12 +832,14 @@ export default function UploadPage() {
     setShowReplaceModal(false);
     setPendingImportPayload(null);
     setDownloadStatus("idle");
+    setImportProgress(null);
   }
 
   async function handleConfirmReplaceSong() {
     if (!pendingImportPayload) return;
     setShowReplaceModal(false);
     setDownloadStatus("loading");
+    setImportProgress({ stage: "resolving", received: 0, total: 0 });
     setError(null);
     setNotice(null);
     try {
@@ -734,6 +848,7 @@ export default function UploadPage() {
       setDownloadStatus("success");
       navigate("/");
     } catch (err) {
+      setImportProgress(null);
       setDownloadStatus("error");
       setError(err instanceof Error ? err.message : "Failed to replace existing song");
     }
@@ -748,6 +863,7 @@ export default function UploadPage() {
     setError(null);
     setNotice(null);
     setDownloadStatus("loading");
+    setImportProgress({ stage: "resolving", received: 0, total: 0 });
     let resolvedLyrics = "";
     try {
       resolvedLyrics = await fetchLyricsForImport();
@@ -755,6 +871,7 @@ export default function UploadPage() {
       setDownloadStatus("success");
       navigate("/");
     } catch (err) {
+      setImportProgress(null);
       if (isDuplicateSongError(err)) {
         setPendingImportPayload({ lyricsToInclude: resolvedLyrics || lyricsText.trim() });
         setReplaceModalMessage(err.message);
@@ -963,6 +1080,26 @@ export default function UploadPage() {
                       </button>
                     )}
                   </div>
+                  {downloadStatus === "loading" && importProgress && (
+                    <div className="space-y-2" aria-live="polite">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-foreground/70">{importStageLabel(importProgress)}</span>
+                        <span className="shrink-0 tabular-nums text-foreground/70">
+                          {importIsDeterminate(importProgress)
+                            ? `${importDownloadPercent(importProgress)}% · ${formatMb(importProgress.received)} / ${formatMb(importProgress.total)} MB`
+                            : importProgress.stage === "downloading" && importProgress.received > 0
+                              ? `${formatMb(importProgress.received)} MB`
+                              : ""}
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                        <div
+                          className={`h-full bg-yellow-500 transition-all duration-300 ${importIsDeterminate(importProgress) ? "" : "animate-pulse"}`}
+                          style={{ width: `${importBarPercent(importProgress)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                   {notice && <div className="text-sm text-green-500">{notice}</div>}
                 </div>
               </div>

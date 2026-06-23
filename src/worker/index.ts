@@ -1077,10 +1077,11 @@ function buildFallbackSongLinkPayload(
   deezerId: string,
   title: string,
   artist: string,
+  thumbnailUrl = "",
 ): Record<string, unknown> {
   const spotifyKey = `SPOTIFY_SONG::${trackId}`;
   const deezerKey = `DEEZER_SONG::${deezerId}`;
-  const entity = { title, artistName: artist, thumbnailUrl: "" };
+  const entity = { title, artistName: artist, thumbnailUrl };
   return {
     entityUniqueId: spotifyKey,
     entitiesByUniqueId: { [spotifyKey]: entity, [deezerKey]: entity },
@@ -1111,7 +1112,7 @@ async function resolveViaSpotify(trackId: string, spotifyCookie: string): Promis
   let deezerId = meta.isrc ? await deezerIdByIsrc(meta.isrc).catch(() => "") : "";
   if (!deezerId) deezerId = await searchDeezerTrackId(meta.title, meta.artist).catch(() => "");
   if (!deezerId) return null;
-  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist);
+  return buildFallbackSongLinkPayload(trackId, deezerId, meta.title, meta.artist, meta.imageUrl);
 }
 
 // Resolve a Spotify track to a song.link-shaped payload. Primary source is
@@ -1209,6 +1210,12 @@ async function fetchDeezerTrackInfo(deezerTrackId: string) {
   return {
     album: toStringValue(albumObj?.title),
     albumArtist: toStringValue(artistObj?.name),
+    coverUrl:
+      toStringValue(albumObj?.cover_xl) ||
+      toStringValue(albumObj?.cover_big) ||
+      toStringValue(albumObj?.cover_medium) ||
+      toStringValue(albumObj?.cover) ||
+      "",
     releaseDate: toStringValue(deezerPayload.release_date),
     trackNumber: typeof deezerPayload.track_position === "number" ? deezerPayload.track_position : undefined,
     totalTracks: typeof albumObj?.nb_tracks === "number" ? albumObj.nb_tracks : undefined,
@@ -1820,11 +1827,17 @@ function audioCodecLabel(info: AudioCodecInfo): string {
 // a multi-hundred-MB body past the header-only size check and OOM the isolate
 // before the post-buffer guard runs. Returns null (and cancels the stream) once
 // the budget is exceeded.
-async function readResponseBodyWithLimit(response: Response, maxBytes: number): Promise<ArrayBuffer | null> {
+async function readResponseBodyWithLimit(
+  response: Response,
+  maxBytes: number,
+  onProgress?: (received: number) => void,
+): Promise<ArrayBuffer | null> {
   const reader = response.body?.getReader();
   if (!reader) {
     const buffer = await response.arrayBuffer();
-    return buffer.byteLength > maxBytes ? null : buffer;
+    if (buffer.byteLength > maxBytes) return null;
+    onProgress?.(buffer.byteLength);
+    return buffer;
   }
   const chunks: Uint8Array[] = [];
   let received = 0;
@@ -1839,6 +1852,7 @@ async function readResponseBodyWithLimit(response: Response, maxBytes: number): 
         return null;
       }
       chunks.push(value);
+      onProgress?.(received);
     }
   } finally {
     reader.releaseLock?.();
@@ -1855,6 +1869,7 @@ async function readResponseBodyWithLimit(response: Response, maxBytes: number): 
 async function validateMinimumQualityResponse(
   response: Response,
   candidate: ResolvedAudioDownloadCandidate,
+  onProgress?: (received: number, total: number) => void,
 ): Promise<Response | string> {
   if (candidate.minimumQuality !== "lossless") return response;
   const contentType = `${response.headers.get("content-type") || candidate.contentType || ""}`.toLowerCase();
@@ -1866,7 +1881,15 @@ async function validateMinimumQualityResponse(
   const length = Number(response.headers.get("content-length") || "0");
   if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) return "Audio file is too large";
 
-  const buffer = await readResponseBodyWithLimit(response, MAX_AUDIO_BYTES);
+  // Lossless validation must drain the body to sniff magic bytes, so this read is
+  // the real provider→Worker download. Surface its progress so the streaming
+  // import shows a true % even though the returned Response is then in-memory.
+  const total = Number.isFinite(length) && length > 0 ? length : 0;
+  const buffer = await readResponseBodyWithLimit(
+    response,
+    MAX_AUDIO_BYTES,
+    onProgress ? (received) => onProgress(received, total) : undefined,
+  );
   if (!buffer) return "Audio file is too large";
   const byteInfo = classifyAudioBytes(buffer);
   if (byteInfo.quality === "lossless") {
@@ -2837,6 +2860,7 @@ async function fetchResolvedAudioDownloadForRequest(
   c: Context<AppEnv>,
   user: AuthUser,
   resolved: ResolvedAudioDownload,
+  onProgress?: (received: number, total: number) => void,
 ): Promise<Response> {
   const candidates = [resolved, ...(resolved.fallbacks ?? [])];
   const errors: string[] = [];
@@ -2847,7 +2871,7 @@ async function fetchResolvedAudioDownloadForRequest(
       const macMiniResponse = await materializeLicensedStreamOnMacMini(c, user, candidate);
       if (macMiniResponse) {
         if (macMiniResponse.ok) {
-          const validated = await validateMinimumQualityResponse(macMiniResponse, candidate);
+          const validated = await validateMinimumQualityResponse(macMiniResponse, candidate, onProgress);
           if (validated instanceof Response) return validated;
           errors.push(validated);
           continue;
@@ -2859,7 +2883,7 @@ async function fetchResolvedAudioDownloadForRequest(
 
       const response = await fetchResolvedAudioDownloadCandidate(candidate);
       if (response.ok) {
-        const validated = await validateMinimumQualityResponse(response, candidate);
+        const validated = await validateMinimumQualityResponse(response, candidate, onProgress);
         if (validated instanceof Response) return validated;
         errors.push(validated);
         continue;
@@ -2951,6 +2975,163 @@ async function audioFileFromResolvedResponse(
   }
   const fileName = `${sanitizeFileName(`${artist} - ${title}`)}${ext}`;
   return new File([buffer], fileName, { type: responseType });
+}
+
+// Like audioFileFromResolvedResponse but reports byte progress as the provider
+// body streams in, so the single-track import can show a real download %.
+async function audioFileFromResolvedResponseWithProgress(
+  response: Response,
+  resolved: ResolvedAudioDownload,
+  title: string,
+  artist: string,
+  onProgress: (received: number, total: number) => void,
+): Promise<File> {
+  const length = Number(response.headers.get("content-length") || "0");
+  if (Number.isFinite(length) && length > MAX_AUDIO_BYTES) {
+    throw new ApiError("Audio file is too large", 413);
+  }
+  const total = Number.isFinite(length) && length > 0 ? length : 0;
+  const responseType = response.headers.get("content-type") || resolved.contentType || "audio/flac";
+  const ext = extensionFromResponse(response, resolved.streamUrl);
+  const fileName = `${sanitizeFileName(`${artist} - ${title}`)}${ext}`;
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_AUDIO_BYTES) throw new ApiError("Audio file is too large", 413);
+    onProgress(buffer.byteLength, total || buffer.byteLength);
+    return new File([buffer], fileName, { type: responseType });
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      if (received > MAX_AUDIO_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new ApiError("Audio file is too large", 413);
+      }
+      chunks.push(value);
+      onProgress(received, total);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new File([out], fileName, { type: responseType });
+}
+
+// Opt-in: the single-track Upload page sets this header to receive an NDJSON
+// progress stream instead of a one-shot JSON response.
+function wantsImportProgressStream(c: Context<AppEnv>): boolean {
+  return c.req.header("x-progress-stream") === "1";
+}
+
+// Stream a Spotify single-track import as NDJSON progress events so the client
+// can render a real download %. Each line is one JSON event:
+//   {stage:"resolving"} | {stage:"downloading",received,total} | {stage:"saving"}
+//   | {stage:"done"} | {stage:"duplicate",existingSong} | {stage:"error",error}
+// The HTTP status is always 200 once streaming begins; the outcome lives in the
+// final event, so the client must read the stream to learn success/failure.
+function streamMacMiniSpotifyImport(
+  c: Context<AppEnv>,
+  user: AuthUser,
+  payload: SongPayload,
+  values: { title: string; artist: string; album: string; duration: number | null; replaceExisting: boolean },
+): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const emit = (event: Record<string, unknown>) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const finish = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      };
+      try {
+        emit({ stage: "resolving" });
+        const resolved = await resolveStreamUrl(c.env, payload);
+        emit({ stage: "downloading", received: 0, total: 0 });
+        // One throttled reporter shared across the (lossless) validation read and
+        // the file read, so progress is real whether the body streams live or is
+        // pre-buffered by quality validation. ~96KB granularity keeps the NDJSON
+        // small (a 30MB file is ~300 lines). lastEmitted persists across both
+        // reads so the buffered re-read can't reset the bar.
+        let lastEmitted = 0;
+        let lastTotal = 0;
+        const reportDownload = (received: number, total: number) => {
+          if (total > 0) lastTotal = total;
+          if (received - lastEmitted >= 98_304 || (lastTotal > 0 && received >= lastTotal)) {
+            lastEmitted = received;
+            emit({ stage: "downloading", received, total: lastTotal });
+          }
+        };
+        const response = await fetchResolvedAudioDownloadForRequest(c, user, resolved, reportDownload);
+        if (!response.ok || !response.body) {
+          emit({ stage: "error", error: `Audio server returned ${response.status}` });
+          finish();
+          return;
+        }
+        const file = await audioFileFromResolvedResponseWithProgress(
+          response,
+          resolved,
+          values.title,
+          values.artist,
+          reportDownload,
+        );
+        emit({ stage: "downloading", received: file.size, total: lastTotal || file.size });
+        emit({ stage: "saving" });
+        const form = new FormData();
+        appendMacMiniSongFields(form, payload, values, resolved);
+        form.set("audio", file);
+        const miniResp = await postFormToMacMini(c, user, form);
+        const data = (await miniResp.json().catch(() => ({}))) as Record<string, unknown>;
+        if (miniResp.status === 409 && data?.code === "DUPLICATE_SONG") {
+          emit({ stage: "duplicate", existingSong: data.existingSong ?? null });
+          finish();
+          return;
+        }
+        if (!miniResp.ok) {
+          const message = typeof data?.error === "string" ? data.error : `Audio server returned ${miniResp.status}`;
+          emit({ stage: "error", error: message });
+          finish();
+          return;
+        }
+        emit({ stage: "done" });
+        finish();
+      } catch (err) {
+        emit({ stage: "error", error: err instanceof Error ? err.message : "Import failed" });
+        finish();
+      }
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store",
+      "x-accel-buffering": "no",
+    },
+  });
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -4313,7 +4494,7 @@ app.post("/api/songs/spotify", async (c) => {
       releaseDate: deezerInfo?.releaseDate || "",
       totalPlays: deezerInfo?.plays || 0,
       durationMs: (deezerInfo?.durationSec || 0) * 1000,
-      imageUrl: metadata.imageUrl || "",
+      imageUrl: metadata.imageUrl || deezerInfo?.coverUrl || "",
       previewUrl,
     },
     availability: {
@@ -4360,6 +4541,9 @@ app.post("/api/songs", async (c) => {
     if (isMacMiniMusicConfigured(c.env)) {
       const isSpotifyImport = toStringValue(payload.mode).toLowerCase() === "spotify" || Boolean(toStringValue(payload.spotifyUrl));
       const remoteAudioUrl = toStringValue(payload.audioUrl);
+      if (isSpotifyImport && wantsImportProgressStream(c)) {
+        return streamMacMiniSpotifyImport(c, user, payload, { title, artist, album, duration, replaceExisting });
+      }
       const resolved = isSpotifyImport ? await resolveStreamUrl(c.env, payload) : null;
       if (resolved) {
         const response = await fetchResolvedAudioDownloadForRequest(c, user, resolved);
