@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router";
@@ -6,6 +6,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Music, Pause, Play, Shuffle } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
+import { SongSortBar } from "@/components/song/SongSortBar";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { EmptyState, ErrorText } from "@/components/ui/States";
@@ -15,6 +16,7 @@ import { useArtworkColor } from "@/lib/useArtworkColor";
 import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
+import { sortSongs, useSongSort } from "@/store/song-sort";
 import { colors } from "@/theme";
 
 export default function PlaylistScreen() {
@@ -40,7 +42,10 @@ export default function PlaylistScreen() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const togglePlay = usePlayerStore((s) => s.toggle);
 
-  const songs = data.songs;
+  // Apply the user's chosen sort for this playlist (Date added / Title / …); the
+  // sorted list drives Play, batch download, and the rows so taps stay in sync.
+  const sort = useSongSort(contextKey);
+  const songs = useMemo(() => sortSongs(data.songs, sort), [data.songs, sort]);
   const count = songs.length;
   const name = data.playlist?.name ?? "Playlist";
   const cover = data.playlist?.imageUrl ?? songs[0]?.imageUrl ?? null;
@@ -131,6 +136,7 @@ export default function PlaylistScreen() {
           <ErrorText>{error}</ErrorText>
         </View>
       ) : null}
+      {count > 0 ? <SongSortBar context={contextKey} /> : null}
     </View>
   );
 

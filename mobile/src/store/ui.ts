@@ -27,6 +27,10 @@ type UiState = {
   profileMenuOpen: boolean;
   createMenuOpen: boolean;
   librarySortOpen: boolean;
+  // The song collection whose sort sheet is open (e.g. "liked", "playlist:<id>",
+  // "downloads"), or null when closed. Carried so the global SongSortMenu edits
+  // the right collection's persisted order.
+  songSortContext: string | null;
   trackActions: TrackActionsTarget;
   libraryActions: LibraryActionsTarget;
   openNowPlaying: () => void;
@@ -41,6 +45,8 @@ type UiState = {
   closeCreateMenu: () => void;
   openLibrarySort: () => void;
   closeLibrarySort: () => void;
+  openSongSort: (context: string) => void;
+  closeSongSort: () => void;
   openTrackActions: (target: NonNullable<TrackActionsTarget>) => void;
   closeTrackActions: () => void;
   openLibraryActions: (target: NonNullable<LibraryActionsTarget>) => void;
@@ -54,6 +60,7 @@ export const useUiStore = create<UiState>((set) => ({
   profileMenuOpen: false,
   createMenuOpen: false,
   librarySortOpen: false,
+  songSortContext: null,
   trackActions: null,
   libraryActions: null,
   openNowPlaying: () => set({ nowPlayingOpen: true }),
@@ -68,6 +75,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeCreateMenu: () => set({ createMenuOpen: false }),
   openLibrarySort: () => set({ librarySortOpen: true }),
   closeLibrarySort: () => set({ librarySortOpen: false }),
+  openSongSort: (context) => set({ songSortContext: context }),
+  closeSongSort: () => set({ songSortContext: null }),
   openTrackActions: (target) => set({ trackActions: target }),
   closeTrackActions: () => set({ trackActions: null }),
   openLibraryActions: (target) => set({ libraryActions: target }),

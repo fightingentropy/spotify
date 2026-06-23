@@ -5,6 +5,7 @@ import { SleepTimerSheet } from "@/components/player/SleepTimerSheet";
 import { CreateMenuSheet } from "@/components/player/CreateMenuSheet";
 import { LibraryActionsMenu } from "@/components/library/LibraryActionsMenu";
 import { LibrarySortMenu } from "@/components/library/LibrarySortMenu";
+import { SongSortMenu } from "@/components/song/SongSortMenu";
 import { useUiStore } from "@/store/ui";
 
 // Hosts the global bottom sheets, each controlled by the ui-store booleans.
@@ -17,6 +18,7 @@ export function PlayerSheets() {
   const sleepTimerOpen = useUiStore((s) => s.sleepTimerOpen);
   const createMenuOpen = useUiStore((s) => s.createMenuOpen);
   const librarySortOpen = useUiStore((s) => s.librarySortOpen);
+  const songSortContext = useUiStore((s) => s.songSortContext);
 
   const closeNowPlaying = useUiStore((s) => s.closeNowPlaying);
   const closeQueue = useUiStore((s) => s.closeQueue);
@@ -25,6 +27,7 @@ export function PlayerSheets() {
   const closeSleepTimer = useUiStore((s) => s.closeSleepTimer);
   const closeCreateMenu = useUiStore((s) => s.closeCreateMenu);
   const closeLibrarySort = useUiStore((s) => s.closeLibrarySort);
+  const closeSongSort = useUiStore((s) => s.closeSongSort);
 
   return (
     <>
@@ -33,6 +36,7 @@ export function PlayerSheets() {
       <TrackActionsMenu visible={!!trackActions} onClose={closeTrackActions} />
       <LibraryActionsMenu visible={!!libraryActions} onClose={closeLibraryActions} />
       <LibrarySortMenu visible={librarySortOpen} onClose={closeLibrarySort} />
+      <SongSortMenu context={songSortContext} onClose={closeSongSort} />
       <SleepTimerSheet visible={sleepTimerOpen} onClose={closeSleepTimer} />
       <CreateMenuSheet visible={createMenuOpen} onClose={closeCreateMenu} />
     </>

@@ -1,10 +1,14 @@
 import { useMemo } from "react";
 import { View } from "react-native";
 import { SongGrid } from "@/components/song/SongGrid";
+import { SongSortBar } from "@/components/song/SongSortBar";
 import { EmptyState } from "@/components/ui/States";
 import { getOfflineAccountScope, useOfflineStore } from "@/store/offline";
+import { sortSongs, useSongSort } from "@/store/song-sort";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
+
+const DOWNLOADS_CONTEXT = "downloads";
 
 // Grid of locally-downloaded tracks (status "ready"), deduped by songId. The
 // records map is populated by the download pump (task 5). Offline playback
@@ -13,7 +17,7 @@ export default function DownloadsScreen() {
   const records = useOfflineStore((s) => s.records);
   const scope = getOfflineAccountScope();
 
-  const songs = useMemo(() => {
+  const rawSongs = useMemo(() => {
     const seen = new Set<string>();
     const list: PlayerSong[] = [];
     for (const key of Object.keys(records)) {
@@ -26,10 +30,14 @@ export default function DownloadsScreen() {
     return list;
   }, [records, scope]);
 
+  const sort = useSongSort(DOWNLOADS_CONTEXT);
+  const songs = useMemo(() => sortSongs(rawSongs, sort), [rawSongs, sort]);
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <SongGrid
         songs={songs}
+        header={songs.length > 0 ? <SongSortBar context={DOWNLOADS_CONTEXT} /> : undefined}
         emptyComponent={<EmptyState title="No downloads yet" subtitle="Download songs to listen offline." />}
       />
     </View>

@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Heart, Pause, Play, Shuffle } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
+import { SongSortBar } from "@/components/song/SongSortBar";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { EmptyState, ErrorText, SignedOutPrompt } from "@/components/ui/States";
 import { type LikedPayload, useApiData, withAccountScope } from "@/lib/api";
@@ -12,6 +13,7 @@ import { useAuth } from "@/lib/auth";
 import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
+import { sortSongs, useSongSort } from "@/store/song-sort";
 import { colors } from "@/theme";
 
 // Tags the queue when playback starts from Liked Songs, so the big Play button
@@ -40,7 +42,11 @@ export default function LikedScreen() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const togglePlay = usePlayerStore((s) => s.toggle);
 
-  const songs = data.songs;
+  // Apply the user's chosen sort for this collection (Date added / Title / …).
+  // The sorted list feeds the big Play button, batch download, and the rows alike
+  // so a tap always plays what's visible.
+  const sort = useSongSort(LIKED_CONTEXT_KEY);
+  const songs = useMemo(() => sortSongs(data.songs, sort), [data.songs, sort]);
   const count = songs.length;
   const showPause = isLikedContext && isPlaying;
 
@@ -125,6 +131,7 @@ export default function LikedScreen() {
           <ErrorText>{error}</ErrorText>
         </View>
       ) : null}
+      {count > 0 ? <SongSortBar context={LIKED_CONTEXT_KEY} /> : null}
     </View>
   );
 
