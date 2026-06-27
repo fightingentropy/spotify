@@ -597,6 +597,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   next: () => {
     markPlaybackEngaged();
+    // Offline shuffle: honor the redo stack first — forward after a back should
+    // return you to where you were (mirrors online), skipping any entry that
+    // isn't downloaded. With no downloaded redo entry it falls through to the
+    // fresh-downloaded pick below. (Online, next()'s own playFuture pop handles
+    // this; this branch only covers the offline shortcut that bypasses it.)
+    if (get().shuffle && !getIsOnline()) {
+      const s = get();
+      const isDownloaded = useOfflineStore.getState().isDownloaded;
+      const redo = rewindHistory(s.playFuture, s.queue.length, (i) => isDownloaded(s.queue[i].id));
+      if (redo) {
+        set({
+          currentIndex: redo.index,
+          currentSong: s.queue[redo.index],
+          playFuture: redo.remaining,
+          playHistory: pushHistory(s.playHistory, s.currentIndex),
+          isPlaying: true,
+        });
+        return;
+      }
+    }
     if (skipDownloadedOffline(1)) return;
     set((s) => {
       if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
