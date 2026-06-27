@@ -1,4 +1,4 @@
-import { normalizeSongPart } from "@/lib/song-dedupe";
+import { looksNonCanonicalTrack, normalizeSongPart } from "@/lib/song-dedupe";
 
 const SPOTIFY_TOKEN_URL = "https://open.spotify.com/api/token";
 const SPOTIFY_SERVER_TIME_URL = "https://open.spotify.com/api/server-time";
@@ -436,7 +436,7 @@ async function pathfinderQuery(
   return payload;
 }
 
-type SearchCandidate = {
+export type SearchCandidate = {
   id: string;
   name: string;
   artists: string[];
@@ -499,22 +499,44 @@ function collectSearchCandidates(value: unknown, out: SearchCandidate[], depth =
   }
 }
 
-// Pick the candidate whose normalized title matches the query AND whose artist
-// tokens overlap the query artist — the guard against resolving to a wrong (but
-// similarly-named) track. Returns null when nothing clears the bar.
-function bestSearchCandidate(candidates: SearchCandidate[], query: SpotifyBatchTrack): SearchCandidate | null {
+// Pick the best candidate whose normalized title matches the query AND whose
+// artist tokens overlap the query artist — the guard against resolving to a wrong
+// (but similarly-named) track. Among the matches it prefers the most canonical: a
+// full artist agreement (then exact-artist equality) beats a loose token overlap,
+// and earlier (more relevance-ranked → usually more popular) results break ties.
+// A junk/cover candidate is skipped outright when a clean track was requested, so
+// the real recording — or nothing — wins instead of an obscure SEO cover. Returns
+// null when nothing clears the bar.
+export function bestSearchCandidate(
+  candidates: SearchCandidate[],
+  query: SpotifyBatchTrack,
+): SearchCandidate | null {
   const wantTitle = normalizeSongPart(query.name);
-  const wantArtistTokens = new Set(normalizeSongPart(query.artists.join(" ")).split(" ").filter(Boolean));
+  const wantArtist = query.artists.join(" ");
+  const wantArtistNorm = normalizeSongPart(wantArtist);
+  const wantArtistTokens = new Set(wantArtistNorm.split(" ").filter(Boolean));
+  // Only enforce the canonical-title guard when we actually asked for a clean
+  // track; if the query itself is a version edit, a matching version is correct.
+  const wantIsClean = !looksNonCanonicalTrack(query.name, wantArtist);
+
   let best: SearchCandidate | null = null;
-  for (const candidate of candidates) {
-    if (normalizeSongPart(candidate.name) !== wantTitle) continue;
-    const candidateTokens = normalizeSongPart(candidate.artists.join(" ")).split(" ").filter(Boolean);
-    const overlaps = candidateTokens.some((token) => wantArtistTokens.has(token));
-    if (!overlaps) continue;
-    // First exact title + artist-overlap hit wins (results are relevance-ranked).
-    best = candidate;
-    break;
-  }
+  let bestScore = -Infinity;
+  candidates.forEach((candidate, position) => {
+    if (normalizeSongPart(candidate.name) !== wantTitle) return;
+    const candidateArtistNorm = normalizeSongPart(candidate.artists.join(" "));
+    const candidateTokens = candidateArtistNorm.split(" ").filter(Boolean);
+    if (!candidateTokens.some((token) => wantArtistTokens.has(token))) return;
+    if (wantIsClean && looksNonCanonicalTrack(candidate.name, candidate.artists.join(" "))) return;
+
+    let score = 0;
+    if ([...wantArtistTokens].every((token) => candidateTokens.includes(token))) score += 4;
+    if (candidateArtistNorm === wantArtistNorm) score += 3;
+    score -= position * 0.1; // earlier result = slightly better (relevance/popularity proxy)
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  });
   return best;
 }
 

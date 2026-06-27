@@ -1,3 +1,5 @@
+import { looksNonCanonicalTrack } from "@/lib/song-dedupe";
+
 const LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/";
 const LASTFM_REQUEST_TIMEOUT_MS = 8_000;
 // Last.fm calls fan out per seed, so cap how many seeds we hit to keep the
@@ -61,7 +63,10 @@ function tracksFromTrackList(payload: unknown, containerKey: string): SeedTrack[
     const artistValue = record.artist;
     const artist =
       typeof artistValue === "string" ? toStringValue(artistValue) : toStringValue(toObject(artistValue)?.name);
-    if (title && artist) tracks.push({ title, artist });
+    // Drop cover-farm / karaoke / version edits at the source so recommendations
+    // stay on the canonical recording (Last.fm's "similar tracks" sometimes return
+    // SEO covers like "BAD IDEA, Right? (R.R.C1)" by Ravens Rock).
+    if (title && artist && !looksNonCanonicalTrack(title, artist)) tracks.push({ title, artist });
   }
   return tracks;
 }
