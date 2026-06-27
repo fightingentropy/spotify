@@ -4,6 +4,7 @@ import { getIsOnline } from "@/lib/connectivity";
 import { songKind } from "@/lib/player-song";
 import { storage } from "@/lib/storage";
 import { useOfflineStore } from "@/store/offline";
+import { rewindHistory } from "@/store/player-nav";
 import type { PlayerSong } from "@/types/player";
 
 export type { PlayerSong } from "@/types/player";
@@ -650,18 +651,28 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   previous: () => {
     markPlaybackEngaged();
-    if (skipDownloadedOffline(-1)) return;
+    // Linear (non-shuffle) offline: hop backward to the nearest DOWNLOADED track
+    // — there's no history stack in linear mode. Shuffle is handled below via
+    // playHistory; routing it through the forward-biased skipToPlayable picker is
+    // exactly the bug where offline "back" jumped to an unplayed track.
+    if (!get().shuffle && skipDownloadedOffline(-1)) return;
     set((s) => {
       if (s.queue.length === 0) return s;
       if (s.shuffle) {
-        const history = s.playHistory.slice();
-        const idx = history.pop();
-        if (idx === undefined || idx < 0 || idx >= s.queue.length) return s;
+        // Step back through the ACTUAL play-history. Offline, skip any entry that
+        // isn't currently downloaded so "back" never surfaces an un-streamable
+        // track; online, canPlay is always true so this just pops the last visit.
+        const skipUndownloaded = !getIsOnline();
+        const isDownloaded = useOfflineStore.getState().isDownloaded;
+        const back = rewindHistory(s.playHistory, s.queue.length, (i) =>
+          skipUndownloaded ? isDownloaded(s.queue[i].id) : true,
+        );
+        if (!back) return s;
         return {
           ...s,
-          currentIndex: idx,
-          currentSong: s.queue[idx],
-          playHistory: history,
+          currentIndex: back.index,
+          currentSong: s.queue[back.index],
+          playHistory: back.remaining,
           playFuture: pushHistory(s.playFuture, s.currentIndex),
           isPlaying: true,
         };
