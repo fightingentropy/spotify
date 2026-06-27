@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import { Heart, Pause, Play, Shuffle } from "lucide-react-native";
+import { Heart, Pause, Play, Shuffle, Sparkles } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
 import { SongSortBar } from "@/components/song/SongSortBar";
@@ -14,6 +14,7 @@ import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 import { sortSongs, useSongSort } from "@/store/song-sort";
+import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 // Tags the queue when playback starts from Liked Songs, so the big Play button
@@ -34,7 +35,8 @@ export default function LikedScreen() {
   }, [mergeInitialLikes, data.likedSongIds]);
 
   const shuffle = usePlayerStore((s) => s.shuffle);
-  const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
+  const smartShuffleEnabled = usePlayerStore((s) => s.smartShuffleEnabled);
+  const openListeningModes = useUiStore((s) => s.openListeningModes);
   // This collection "owns" playback when the queue was started from it (big
   // button or a row tap, both tagged "liked"). Then the button mirrors the
   // player — Pause while playing, resume while paused — instead of restarting.
@@ -99,9 +101,16 @@ export default function LikedScreen() {
       >
         <View className="flex-row items-center" style={{ gap: 22 }}>
           {count > 0 ? <BatchDownloadButton songs={songs} scope="liked" size={30} /> : null}
-          <PressableScale onPress={toggleShuffle} hitSlop={8} accessibilityLabel="Toggle shuffle">
+          {/* Listening mode: mirrors the Now Playing control — emerald Sparkles
+              when Smart Shuffle is on, an emerald/idle Shuffle glyph otherwise.
+              Tap opens the modes popup, scoped to this collection. */}
+          <PressableScale onPress={() => openListeningModes({ kind: "liked" })} hitSlop={8} accessibilityLabel="Listening modes">
             <View>
-              <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />
+              {smartShuffleEnabled ? (
+                <Sparkles size={26} color={colors.emerald} />
+              ) : (
+                <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />
+              )}
             </View>
           </PressableScale>
         </View>

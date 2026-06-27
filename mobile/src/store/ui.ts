@@ -32,10 +32,23 @@ export type LibraryActionsTarget = {
   cover: (size: number) => ReactNode;
 } | null;
 
+// Optional collection context when the Listening Modes sheet is opened from a
+// collection header (Liked / a playlist) instead of the Now Playing transport.
+// Lets Smart Shuffle enable for that collection even before it is the playing
+// queue. Same shape as the player store's queueContext.
+export type ListeningModesContext = {
+  playlistId?: string;
+  editable?: boolean;
+  kind?: "liked" | "playlist";
+} | null;
+
 type UiState = {
   nowPlayingOpen: boolean;
   queueOpen: boolean;
   listeningModesOpen: boolean;
+  // Collection passed when the modes sheet is opened from a header (or null when
+  // opened from Now Playing, where the sheet falls back to the playing queue).
+  listeningModesContext: ListeningModesContext;
   sleepTimerOpen: boolean;
   profileMenuOpen: boolean;
   createMenuOpen: boolean;
@@ -53,7 +66,7 @@ type UiState = {
   closeNowPlaying: () => void;
   openQueue: () => void;
   closeQueue: () => void;
-  openListeningModes: () => void;
+  openListeningModes: (context?: ListeningModesContext) => void;
   closeListeningModes: () => void;
   openSleepTimer: () => void;
   closeSleepTimer: () => void;
@@ -79,6 +92,7 @@ export const useUiStore = create<UiState>((set) => ({
   nowPlayingOpen: false,
   queueOpen: false,
   listeningModesOpen: false,
+  listeningModesContext: null,
   sleepTimerOpen: false,
   profileMenuOpen: false,
   createMenuOpen: false,
@@ -92,8 +106,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeNowPlaying: () => set({ nowPlayingOpen: false }),
   openQueue: () => set({ queueOpen: true }),
   closeQueue: () => set({ queueOpen: false }),
-  openListeningModes: () => set({ listeningModesOpen: true }),
-  closeListeningModes: () => set({ listeningModesOpen: false }),
+  openListeningModes: (context) => set({ listeningModesOpen: true, listeningModesContext: context ?? null }),
+  closeListeningModes: () => set({ listeningModesOpen: false, listeningModesContext: null }),
   openSleepTimer: () => set({ sleepTimerOpen: true }),
   closeSleepTimer: () => set({ sleepTimerOpen: false }),
   openProfileMenu: () => set({ profileMenuOpen: true }),

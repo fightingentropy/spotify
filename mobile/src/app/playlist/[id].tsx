@@ -3,7 +3,7 @@ import { Alert, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { MoreHorizontal, Music, Pause, Pencil, Play, Shuffle, Trash2 } from "lucide-react-native";
+import { MoreHorizontal, Music, Pause, Pencil, Play, Shuffle, Sparkles, Trash2 } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
 import { SongSortBar } from "@/components/song/SongSortBar";
@@ -44,7 +44,8 @@ export default function PlaylistScreen() {
   // (Pause/resume vs. starting over), exactly like the Liked Songs screen.
   const contextKey = `playlist:${id}` as const;
   const shuffle = usePlayerStore((s) => s.shuffle);
-  const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
+  const smartShuffleEnabled = usePlayerStore((s) => s.smartShuffleEnabled);
+  const openListeningModes = useUiStore((s) => s.openListeningModes);
   const isThisContext = usePlayerStore((s) => s.queueContextKey === contextKey);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const togglePlay = usePlayerStore((s) => s.toggle);
@@ -160,9 +161,20 @@ export default function PlaylistScreen() {
               </View>
             </PressableScale>
           ) : null}
-          <PressableScale onPress={toggleShuffle} hitSlop={8} accessibilityLabel="Toggle shuffle">
+          {/* Listening mode: mirrors the Now Playing control — emerald Sparkles
+              when Smart Shuffle is on, an emerald/idle Shuffle glyph otherwise.
+              Tap opens the modes popup, scoped to this playlist. */}
+          <PressableScale
+            onPress={() => openListeningModes({ kind: "playlist", playlistId: id, editable })}
+            hitSlop={8}
+            accessibilityLabel="Listening modes"
+          >
             <View>
-              <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />
+              {smartShuffleEnabled ? (
+                <Sparkles size={26} color={colors.emerald} />
+              ) : (
+                <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />
+              )}
             </View>
           </PressableScale>
         </View>

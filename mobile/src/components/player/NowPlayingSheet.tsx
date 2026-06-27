@@ -155,7 +155,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
                   at a glance. */}
               <PressableScale
                 onPress={toggleShuffle}
-                onLongPress={openListeningModes}
+                onLongPress={() => openListeningModes()}
                 hitSlop={10}
                 accessibilityLabel={smartShuffleEnabled ? "Smart Shuffle on" : "Toggle shuffle"}
               >

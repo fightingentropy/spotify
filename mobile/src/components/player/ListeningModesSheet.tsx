@@ -5,6 +5,7 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { Sheet } from "@/components/ui/Sheet";
 import { getIsOnline } from "@/lib/connectivity";
 import { usePlayerStore } from "@/store/player";
+import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 // The three listening modes (Off / Shuffle / Smart Shuffle), opened by
@@ -58,16 +59,18 @@ function ModeRow({
 export function ListeningModesSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const shuffle = usePlayerStore((s) => s.shuffle);
   const smartShuffleEnabled = usePlayerStore((s) => s.smartShuffleEnabled);
-  const queueContextKey = usePlayerStore((s) => s.queueContextKey);
   const queueContext = usePlayerStore((s) => s.queueContext);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
   const setSmartShuffleEnabled = usePlayerStore((s) => s.setSmartShuffleEnabled);
+  const listeningModesContext = useUiStore((s) => s.listeningModesContext);
 
   // Smart Shuffle only makes sense over a liked/editable collection we can add
-  // recs into, and only while online (recs are fetched + streamed live).
+  // recs into, and only while online (recs are fetched + streamed live). Prefer
+  // the collection the sheet was opened from (a header) and fall back to the
+  // currently-playing queue (opened from the Now Playing transport).
+  const ctx = listeningModesContext ?? queueContext;
   const contextSupported =
-    queueContextKey != null &&
-    (queueContext?.kind === "liked" || (!!queueContext?.playlistId && !!queueContext?.editable));
+    ctx != null && (ctx.kind === "liked" || (!!ctx.playlistId && !!ctx.editable));
   const smartDisabled = !getIsOnline() || !contextSupported;
 
   const active: Mode = smartShuffleEnabled ? "smart" : shuffle ? "shuffle" : "off";
