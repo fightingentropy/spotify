@@ -1,6 +1,9 @@
+import { normalizeSongPart } from "@/lib/song-dedupe";
+
 const SPOTIFY_TOKEN_URL = "https://open.spotify.com/api/token";
 const SPOTIFY_SERVER_TIME_URL = "https://open.spotify.com/api/server-time";
 const SPOTIFY_PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v1/query";
+const SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search";
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 const PAGE_SIZE = 100;
@@ -15,6 +18,8 @@ const PATHFINDER_QUERIES = {
   fetchPlaylistMetadata: "6f7fef1ef9760ba77aeb68d8153d458eeec2dce3430cef02b5f094a8ef9a465d",
   fetchLibraryTracks: "8474ec383b530ce3e54611fca2d8e3da57ef5612877838b8dbf00bd9fc692dfb",
   getAlbum: "46ae954ef2d2fe7732b4b2b4022157b2e18b7ea84f70591ceb164e4de1b5d5d3",
+  searchTracks: "16c02d6304f5f721fc2eb39dacf2361a4543815112506a9c05c9e0bc9733a679",
+  searchDesktop: "21969b655b795601fb2d2204a4243188e75fdc6d3520e7b9cd3f4db2aff9591e",
 } as const;
 
 const TOKEN_TOTP_SECRETS = [
@@ -429,6 +434,200 @@ async function pathfinderQuery(
     throw new SpotifyPathfinderError(message || "Spotify pathfinder query failed", 502);
   }
   return payload;
+}
+
+type SearchCandidate = {
+  id: string;
+  name: string;
+  artists: string[];
+  album?: string;
+  imageUrl?: string;
+  durationMs?: number;
+};
+
+function candidateToTrack(candidate: SearchCandidate): SpotifyBatchTrack {
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    artists: candidate.artists,
+    album: candidate.album,
+    imageUrl: candidate.imageUrl,
+    durationMs: candidate.durationMs,
+  };
+}
+
+// Recursively walk an arbitrary GraphQL `data` blob collecting every object that
+// looks like a track: it carries a `uri` matching spotify:track:<22> and a
+// readable `name`. Search results nest under data.searchV2.tracksV2.items[].item
+// .data, but Spotify reshuffles these shapes often, so we walk generically and
+// pull name + artists[].profile.name off whichever object holds the uri.
+function collectSearchCandidates(value: unknown, out: SearchCandidate[], depth = 0): void {
+  if (depth > 8) return;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectSearchCandidates(entry, out, depth + 1);
+    return;
+  }
+  const object = toObject(value);
+  if (!object) return;
+
+  const id = parseTrackIdFromUri(toStringValue(object.uri));
+  const name = toStringValue(object.name);
+  if (id && name) {
+    const artistsValue = toObject(object.artists);
+    const artistItems = Array.isArray(artistsValue?.items) ? artistsValue.items : [];
+    const artists = artistItems
+      .map((entry) => toStringValue(toObject(toObject(entry)?.profile)?.name))
+      .filter(Boolean);
+    // The same object that carries the uri also carries albumOfTrack (cover art +
+    // name) and a duration — pull them so recommendation rows render real art and
+    // a duration instead of the placeholder, even before the track is staged.
+    const albumValue = toObject(object.albumOfTrack) ?? toObject(object.album);
+    const durationMs = durationMsFromTrackData(object);
+    const imageUrl = imageUrlFromAlbum(albumValue);
+    out.push({
+      id,
+      name,
+      artists: artists.length > 0 ? artists : ["Unknown Artist"],
+      album: toStringValue(albumValue?.name) || undefined,
+      imageUrl: imageUrl || undefined,
+      durationMs: durationMs > 0 ? durationMs : undefined,
+    });
+  }
+
+  for (const child of Object.values(object)) {
+    if (child && typeof child === "object") collectSearchCandidates(child, out, depth + 1);
+  }
+}
+
+// Pick the candidate whose normalized title matches the query AND whose artist
+// tokens overlap the query artist — the guard against resolving to a wrong (but
+// similarly-named) track. Returns null when nothing clears the bar.
+function bestSearchCandidate(candidates: SearchCandidate[], query: SpotifyBatchTrack): SearchCandidate | null {
+  const wantTitle = normalizeSongPart(query.name);
+  const wantArtistTokens = new Set(normalizeSongPart(query.artists.join(" ")).split(" ").filter(Boolean));
+  let best: SearchCandidate | null = null;
+  for (const candidate of candidates) {
+    if (normalizeSongPart(candidate.name) !== wantTitle) continue;
+    const candidateTokens = normalizeSongPart(candidate.artists.join(" ")).split(" ").filter(Boolean);
+    const overlaps = candidateTokens.some((token) => wantArtistTokens.has(token));
+    if (!overlaps) continue;
+    // First exact title + artist-overlap hit wins (results are relevance-ranked).
+    best = candidate;
+    break;
+  }
+  return best;
+}
+
+// Resolve a free-text {title, artist} to a Spotify track id. Tries the proven
+// Pathfinder search persisted queries first (same partner endpoint + web-player
+// token the importer already uses), then falls back to the public /v1/search as
+// a LAST resort — that surface is authorized but heavily rate-limited (429), so
+// it only runs when both Pathfinder hashes miss. Returns null on no confident
+// match so a wrong-track guess never leaks downstream.
+export async function searchSpotifyTrackId(
+  query: { title: string; artist: string },
+  spotifyCookie?: string,
+): Promise<SpotifyBatchTrack | null> {
+  const title = toStringValue(query.title);
+  const artist = toStringValue(query.artist);
+  if (!title || !artist) return null;
+  const want: SpotifyBatchTrack = { id: "", name: title, artists: [artist] };
+  const searchTerm = `${title} ${artist}`;
+
+  // (1) Pathfinder searchTracks.
+  try {
+    const payload = await pathfinderQuery(
+      "searchTracks",
+      {
+        searchTerm,
+        offset: 0,
+        limit: 5,
+        numberOfTopResults: 5,
+        includeAudiobooks: false,
+        includePreReleases: false,
+      },
+      PATHFINDER_QUERIES.searchTracks,
+      spotifyCookie,
+    );
+    const candidates: SearchCandidate[] = [];
+    collectSearchCandidates(toObject(payload.data), candidates);
+    const match = bestSearchCandidate(candidates, want);
+    if (match) return candidateToTrack(match);
+  } catch {
+    // fall through to the next surface
+  }
+
+  // (2) Pathfinder searchDesktop (drops includePreReleases).
+  try {
+    const payload = await pathfinderQuery(
+      "searchDesktop",
+      {
+        searchTerm,
+        offset: 0,
+        limit: 5,
+        numberOfTopResults: 5,
+        includeAudiobooks: false,
+      },
+      PATHFINDER_QUERIES.searchDesktop,
+      spotifyCookie,
+    );
+    const candidates: SearchCandidate[] = [];
+    collectSearchCandidates(toObject(payload.data), candidates);
+    const match = bestSearchCandidate(candidates, want);
+    if (match) return candidateToTrack(match);
+  } catch {
+    // fall through to the rate-limited public API
+  }
+
+  // (3) Last resort: public /v1/search (heavily rate-limited, 429 under load).
+  try {
+    const accessToken = await fetchSpotifyAccessToken(spotifyCookie);
+    const params = new URLSearchParams({
+      q: `track:"${title}" artist:"${artist}"`,
+      type: "track",
+      limit: "5",
+    });
+    const response = await fetchWithTimeout(`${SPOTIFY_SEARCH_URL}?${params.toString()}`, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+        "user-agent": DEFAULT_USER_AGENT,
+      },
+    });
+    if (response?.ok) {
+      const payload = toObject(await response.json().catch(() => null));
+      const items = Array.isArray(toObject(payload?.tracks)?.items) ? toObject(payload?.tracks)?.items : [];
+      const candidates: SearchCandidate[] = (items as unknown[])
+        .map((entry) => {
+          const data = toObject(entry);
+          const id = parseTrackIdFromUri(toStringValue(data?.uri)) || toStringValue(data?.id);
+          const name = toStringValue(data?.name);
+          if (!id || !name) return null;
+          const artistRows = Array.isArray(data?.artists) ? data.artists : [];
+          const artists = artistRows.map((row) => toStringValue(toObject(row)?.name)).filter(Boolean);
+          // Public Web API shape: album.images[].url + duration_ms (flat, unlike Pathfinder).
+          const albumValue = toObject(data?.album);
+          const images = Array.isArray(albumValue?.images) ? albumValue.images : [];
+          const imageUrl = toStringValue(toObject(images[0])?.url);
+          const durationMs = toFiniteNumber(data?.duration_ms) ?? 0;
+          return {
+            id,
+            name,
+            artists: artists.length > 0 ? artists : ["Unknown Artist"],
+            album: toStringValue(albumValue?.name) || undefined,
+            imageUrl: imageUrl || undefined,
+            durationMs: durationMs > 0 ? durationMs : undefined,
+          } as SearchCandidate;
+        })
+        .filter((candidate): candidate is SearchCandidate => candidate !== null);
+      const match = bestSearchCandidate(candidates, want);
+      if (match) return candidateToTrack(match);
+    }
+  } catch {
+    // give up
+  }
+
+  return null;
 }
 
 async function fetchPaginatedTracks(options: {

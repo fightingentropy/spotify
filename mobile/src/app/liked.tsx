@@ -110,7 +110,11 @@ export default function LikedScreen() {
             onPress={() =>
               isLikedContext
                 ? togglePlay()
-                : playSongs(songs, 0, { respectShuffle: true, contextKey: LIKED_CONTEXT_KEY })
+                : playSongs(songs, 0, {
+                    respectShuffle: true,
+                    contextKey: LIKED_CONTEXT_KEY,
+                    contextMeta: { kind: "liked" },
+                  })
             }
             accessibilityLabel={showPause ? "Pause" : "Play"}
             className="h-14 w-14 items-center justify-center rounded-full"

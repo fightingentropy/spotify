@@ -3,7 +3,7 @@ import { Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn } from "react-native-reanimated";
-import { ListMusic, MicVocal, Moon, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from "lucide-react-native";
+import { ListMusic, MicVocal, Moon, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Sparkles } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { MarqueeText } from "@/components/ui/MarqueeText";
@@ -24,6 +24,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
   const song = usePlayerStore((s) => s.currentSong);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const shuffle = usePlayerStore((s) => s.shuffle);
+  const smartShuffleEnabled = usePlayerStore((s) => s.smartShuffleEnabled);
   const repeatMode = usePlayerStore((s) => s.repeatMode);
   const playbackRate = usePlayerStore((s) => s.playbackRate);
   const toggle = usePlayerStore((s) => s.toggle);
@@ -34,6 +35,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
   const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate);
   const openQueue = useUiStore((s) => s.openQueue);
   const openSleepTimer = useUiStore((s) => s.openSleepTimer);
+  const openListeningModes = useUiStore((s) => s.openListeningModes);
   const [showLyrics, setShowLyrics] = useState(false);
 
   const isRadio = isRadioSong(song);
@@ -147,9 +149,34 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
 
             {/* transport: shuffle / [gap] prev / play / next [gap] / repeat */}
             <View className="mt-3 flex-row items-center justify-between">
-              <PressableScale onPress={toggleShuffle} hitSlop={10} accessibilityLabel="Toggle shuffle">
-                <View>
-                  <Shuffle size={24} color={shuffle ? colors.emerald : colors.iconIdle} />
+              {/* Single tap = plain shuffle toggle; long-press opens the listening
+                  modes sheet (Off / Shuffle / Smart Shuffle). When Smart Shuffle is
+                  on, swap the glyph for an emerald Sparkles so the active mode reads
+                  at a glance. */}
+              <PressableScale
+                onPress={toggleShuffle}
+                onLongPress={openListeningModes}
+                hitSlop={10}
+                accessibilityLabel={smartShuffleEnabled ? "Smart Shuffle on" : "Toggle shuffle"}
+              >
+                <View style={{ alignItems: "center", justifyContent: "center" }}>
+                  {smartShuffleEnabled ? (
+                    <Sparkles size={24} color={colors.emerald} />
+                  ) : (
+                    <Shuffle size={24} color={shuffle ? colors.emerald : colors.iconIdle} />
+                  )}
+                  {/* active-mode dot — mirrors Spotify's small marker under the control */}
+                  {(shuffle || smartShuffleEnabled) ? (
+                    <View
+                      style={{
+                        marginTop: 4,
+                        width: 4,
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: colors.emerald,
+                      }}
+                    />
+                  ) : null}
                 </View>
               </PressableScale>
 

@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 import { startDiscoverQueueStager } from "@/audio/discover-stager";
 import * as nativeEngine from "@/audio/engine-native";
 import * as rntpEngine from "@/audio/engine-rntp";
+import { startSmartShuffleController } from "@/audio/smart-shuffle-controller";
 
 // Audio engine dispatcher. iOS uses the native dual-deck crossfade engine
 // (engine-native); every other platform uses the RNTP single-player engine
@@ -20,6 +21,9 @@ export async function initAudio(): Promise<void> {
   // Backend-agnostic: drives just-in-time staging for Discover queue placeholders
   // via a store subscription, so it must be live before any track loads.
   startDiscoverQueueStager();
+  // Smart Shuffle top-up loop — also a store subscription; keeps recommended
+  // tracks buffered ahead of the current track while the mode is on.
+  startSmartShuffleController();
   if (isIOS) {
     await nativeEngine.initNativeAudio();
     return;

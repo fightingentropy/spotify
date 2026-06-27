@@ -27,4 +27,9 @@ export type PlayerSong = {
   // discoverTrackId is the Spotify track id used for that promote call.
   staged?: boolean;
   discoverTrackId?: string;
+  // Initial-insert sugar marking a Smart Shuffle recommendation interleaved into
+  // the queue. Authoritative rec-membership lives in the player store's in-memory
+  // `recommendedIds` Set (the id changes on staging, which would drop this flag),
+  // so this is only a convenience on the freshly-built PlayerSong before insert.
+  recommended?: boolean;
 };

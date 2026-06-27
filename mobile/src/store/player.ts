@@ -42,6 +42,23 @@ type PlayerState = {
   crossfadeEnabled: boolean;
   crossfadeSeconds: number; // 0..12
   playbackRate: number; // 0.5..3, applied to podcast playback only
+  // Smart Shuffle: a third listening mode (orthogonal to `shuffle`) that
+  // interleaves recommended tracks not in the current collection into the queue.
+  // Persisted (key spotify_smart_shuffle_enabled), mirroring the shuffle flag.
+  smartShuffleEnabled: boolean;
+  // Ids of the queue songs that are Smart Shuffle recommendations. IN-MEMORY
+  // ONLY — never written to MMKV and never part of any cross-device resume
+  // snapshot (playback-sync.ts serializes a hand-picked field list that omits
+  // this). Rec-membership lives here, NOT on the song object, because staging
+  // swaps the whole PlayerSong and changes its id (discover:<id> →
+  // local-server:<sha1>); replaceStagedSong remaps the id so the sparkle
+  // survives. Treated immutably: every mutation creates a fresh Set so
+  // subscribers re-render.
+  recommendedIds: Set<string>;
+  // The collection the current queue was started from, carried so the rec
+  // top-up + Add/Skip actions know where to add a kept track. IN-MEMORY ONLY
+  // (not persisted). Set from SetQueueOptions.contextMeta in setQueue.
+  queueContext: { playlistId?: string; editable?: boolean; kind?: "liked" | "playlist" } | null;
   // In-memory only: a sleep timer should not survive a relaunch.
   sleepTimerEndsAt: number | null; // epoch ms
   sleepAtEndOfTrack: boolean;
@@ -77,6 +94,17 @@ type PlayerState = {
   setCrossfadeEnabled: (enabled: boolean) => void;
   setCrossfadeSeconds: (seconds: number) => void;
   setPlaybackRate: (rate: number) => void;
+  // Toggle the Smart Shuffle mode. Persists + sets state; turning it OFF also
+  // prunes any unplayed recs still queued ahead (removeUnplayedRecommendations).
+  setSmartShuffleEnabled: (enabled: boolean) => void;
+  // Interleave `recs` into the upcoming queue: walk from currentIndex+1, and
+  // after every RECS_INTERVAL non-rec songs splice in the next rec (deduped vs
+  // recommendedIds + queue). No-op unless smartShuffleEnabled && queueContextKey
+  // && queue.length. Uses the playNext remap contract for index bookkeeping.
+  injectRecommendations: (recs: PlayerSong[]) => void;
+  // Remove every recommendation still queued AHEAD of the current track (never
+  // the current). Used on mode-off, Skip, and going offline.
+  removeUnplayedRecommendations: () => void;
   startSleepTimer: (minutes: number) => void;
   setSleepAtEndOfTrack: () => void;
   cancelSleepTimer: () => void;
@@ -86,6 +114,9 @@ type SetQueueOptions = {
   respectShuffle?: boolean;
   // Tags the queue with the collection it came from (see queueContextKey).
   contextKey?: string;
+  // Richer description of the collection, stashed as queueContext for Smart
+  // Shuffle's top-up + Add/Skip actions. In-memory only.
+  contextMeta?: { playlistId?: string; editable?: boolean; kind?: "liked" | "playlist" };
 };
 
 type AdvanceToIndexOptions = {
@@ -100,6 +131,7 @@ type AdvanceToIndexOptions = {
 
 const MAX_PLAY_HISTORY = 200;
 const SHUFFLE_STORAGE_KEY = "spotify_shuffle_enabled";
+const SMART_SHUFFLE_STORAGE_KEY = "spotify_smart_shuffle_enabled";
 const VOLUME_STORAGE_KEY = "spotify_volume";
 const MUTED_STORAGE_KEY = "spotify_muted";
 const REPEAT_MODE_STORAGE_KEY = "spotify_repeat_mode";
@@ -118,6 +150,20 @@ function readStoredShuffle(): boolean {
 function writeStoredShuffle(enabled: boolean): void {
   try {
     storage.setItem(SHUFFLE_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {}
+}
+
+function readStoredSmartShuffle(): boolean {
+  try {
+    return storage.getItem(SMART_SHUFFLE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredSmartShuffle(enabled: boolean): void {
+  try {
+    storage.setItem(SMART_SHUFFLE_STORAGE_KEY, enabled ? "1" : "0");
   } catch {}
 }
 
@@ -196,6 +242,17 @@ function readStoredPlaybackRate(): number {
     return 1;
   }
 }
+
+// Smart Shuffle tuning (exported so the controller + UI share one source of
+// truth). RECS_INTERVAL: how many of the user's own songs play between each
+// interleaved rec (~1 rec per 3). MIN_RECS_AHEAD: how many recs the controller
+// keeps queued ahead of the current track before topping up. RECS_FETCH_BATCH:
+// how many recs to request per fetch. MIN_SEEDS: fewest seed songs needed before
+// asking for recommendations.
+export const RECS_INTERVAL = 3;
+export const MIN_RECS_AHEAD = 2;
+export const RECS_FETCH_BATCH = 12;
+export const MIN_SEEDS = 2;
 
 // Tap-to-cycle order for the podcast speed chip.
 export const PLAYBACK_RATE_CYCLE = [1, 1.25, 1.5, 1.75, 2, 0.75];
@@ -398,6 +455,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   crossfadeEnabled: readStoredCrossfadeEnabled(),
   crossfadeSeconds: readStoredCrossfadeSeconds(),
   playbackRate: readStoredPlaybackRate(),
+  smartShuffleEnabled: readStoredSmartShuffle(),
+  recommendedIds: new Set<string>(),
+  queueContext: null,
   sleepTimerEndsAt: null,
   sleepAtEndOfTrack: false,
   setQueue: (songs, startIndex, options) => {
@@ -423,6 +483,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playFuture: [],
       shuffleRemaining: get().shuffle ? createShuffleRemaining(queue.length, start) : [],
       queueContextKey: currentSong != null ? (options?.contextKey ?? null) : null,
+      queueContext: currentSong != null ? (options?.contextMeta ?? null) : null,
+      // A brand-new queue carries no recommendations yet.
+      recommendedIds: new Set<string>(),
       queueToken: get().queueToken + 1,
       isPlaying: currentSong != null,
     }));
@@ -437,6 +500,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playFuture: [],
       shuffleRemaining: [],
       queueContextKey: null,
+      queueContext: null,
+      recommendedIds: new Set<string>(),
       queueToken: get().queueToken + 1,
     }),
   advanceToIndex: (index, options) =>
@@ -517,15 +582,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   replaceStagedSong: (oldId, song) =>
     set((s) => {
+      // Staging swaps the whole song and its id changes, so carry rec-membership
+      // across (oldId → song.id) — otherwise the sparkle would vanish once a
+      // recommended track finishes staging. Fresh Set so subscribers re-render.
+      const recommendedIds = s.recommendedIds.has(oldId)
+        ? new Set([...s.recommendedIds].map((id) => (id === oldId ? song.id : id)))
+        : s.recommendedIds;
       const matchIndex = s.queue.findIndex((item) => item.id === oldId);
       if (matchIndex < 0) {
-        return s.currentSong?.id === oldId ? { currentSong: song } : s;
+        return s.currentSong?.id === oldId
+          ? { currentSong: song, recommendedIds }
+          : recommendedIds === s.recommendedIds
+            ? s
+            : { recommendedIds };
       }
       const queue = s.queue.slice();
       queue[matchIndex] = song;
       return {
         queue,
         currentSong: s.currentSong?.id === oldId ? song : s.currentSong,
+        recommendedIds,
       };
     }),
   addToQueue: (song) =>
@@ -576,14 +652,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (!Number.isInteger(index) || index < 0 || index >= s.queue.length || index === s.currentIndex) {
         return s;
       }
+      const removedId = s.queue[index].id;
       const queue = s.queue.slice();
       queue.splice(index, 1);
+      // Drop the removed song's rec-membership (fresh Set so subscribers update).
+      let recommendedIds = s.recommendedIds;
+      if (recommendedIds.has(removedId)) {
+        recommendedIds = new Set(s.recommendedIds);
+        recommendedIds.delete(removedId);
+      }
       return {
         queue,
         currentIndex: index < s.currentIndex ? s.currentIndex - 1 : s.currentIndex,
         playHistory: remapQueueIndices(s.playHistory, index, -1),
         playFuture: remapQueueIndices(s.playFuture, index, -1),
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, index, -1),
+        recommendedIds,
       };
     }),
   play: () => {
@@ -757,6 +841,94 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     } catch {}
     set({ playbackRate: clamped });
   },
+  setSmartShuffleEnabled: (enabled) => {
+    writeStoredSmartShuffle(enabled);
+    // Pruning reads + remaps the live queue, so prune BEFORE flipping the flag
+    // off (the prune itself doesn't gate on the flag, but doing it first keeps a
+    // single coherent transition). Then publish the new flag.
+    if (!enabled) get().removeUnplayedRecommendations();
+    set({ smartShuffleEnabled: enabled });
+  },
+  injectRecommendations: (recs) =>
+    set((s) => {
+      if (!s.smartShuffleEnabled || s.queueContextKey == null || s.queue.length === 0) return s;
+      if (recs.length === 0) return s;
+      const queue = s.queue.slice();
+      let playHistory = s.playHistory;
+      let playFuture = s.playFuture;
+      let shuffleRemaining = s.shuffleRemaining;
+      const recommendedIds = new Set(s.recommendedIds);
+      // Ids already present in the queue (post-mutation aware) so we never splice
+      // a duplicate; seeded from the current queue and grown as we insert.
+      const presentIds = new Set(queue.map((item) => item.id));
+      let recCursor = 0;
+      // Walk the upcoming queue counting only the user's OWN (non-rec) songs;
+      // after every RECS_INTERVAL of them, splice the next eligible rec right
+      // after that run. `position` tracks the live array index as it grows.
+      let nonRecSinceLast = 0;
+      let position = s.currentIndex + 1;
+      while (position <= queue.length) {
+        const reachedEnd = position === queue.length;
+        const songAtPosition = reachedEnd ? null : queue[position];
+        const isRec = songAtPosition != null && recommendedIds.has(songAtPosition.id);
+        // Time to drop a rec once we've passed RECS_INTERVAL of the user's songs.
+        if (nonRecSinceLast >= RECS_INTERVAL) {
+          // Find the next rec not already queued or recommended (dedupe).
+          let rec: PlayerSong | null = null;
+          while (recCursor < recs.length) {
+            const candidate = recs[recCursor];
+            recCursor += 1;
+            if (recommendedIds.has(candidate.id) || presentIds.has(candidate.id)) continue;
+            rec = candidate;
+            break;
+          }
+          if (rec == null) break; // no more recs to place
+          const insertAt = position;
+          queue.splice(insertAt, 0, rec);
+          playHistory = remapQueueIndices(playHistory, insertAt, 1);
+          shuffleRemaining = remapQueueIndices(shuffleRemaining, insertAt, 1);
+          playFuture = s.shuffle
+            ? [...remapQueueIndices(playFuture, insertAt, 1), insertAt]
+            : remapQueueIndices(playFuture, insertAt, 1);
+          recommendedIds.add(rec.id);
+          presentIds.add(rec.id);
+          nonRecSinceLast = 0;
+          // The inserted rec now sits at `insertAt`; step past it to the song we
+          // were about to inspect (now shifted up by one).
+          position += 1;
+          continue;
+        }
+        if (reachedEnd) break;
+        if (!isRec) nonRecSinceLast += 1;
+        position += 1;
+      }
+      return { queue, playHistory, playFuture, shuffleRemaining, recommendedIds };
+    }),
+  removeUnplayedRecommendations: () =>
+    set((s) => {
+      if (s.recommendedIds.size === 0) return s;
+      const queue = s.queue.slice();
+      let playHistory = s.playHistory;
+      let playFuture = s.playFuture;
+      let shuffleRemaining = s.shuffleRemaining;
+      const recommendedIds = new Set(s.recommendedIds);
+      let changed = false;
+      // Remove every rec strictly AHEAD of the current track, high index → low so
+      // earlier indices stay valid. currentIndex is never touched (we only remove
+      // indices above it), so it needs no adjustment.
+      for (let index = queue.length - 1; index > s.currentIndex; index -= 1) {
+        const id = queue[index].id;
+        if (!recommendedIds.has(id)) continue;
+        queue.splice(index, 1);
+        playHistory = remapQueueIndices(playHistory, index, -1);
+        playFuture = remapQueueIndices(playFuture, index, -1);
+        shuffleRemaining = remapQueueIndices(shuffleRemaining, index, -1);
+        recommendedIds.delete(id);
+        changed = true;
+      }
+      if (!changed) return s;
+      return { queue, playHistory, playFuture, shuffleRemaining, recommendedIds };
+    }),
   startSleepTimer: (minutes) =>
     set({ sleepTimerEndsAt: Date.now() + minutes * 60_000, sleepAtEndOfTrack: false }),
   setSleepAtEndOfTrack: () => set({ sleepTimerEndsAt: null, sleepAtEndOfTrack: true }),

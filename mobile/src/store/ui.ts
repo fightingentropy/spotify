@@ -35,6 +35,7 @@ export type LibraryActionsTarget = {
 type UiState = {
   nowPlayingOpen: boolean;
   queueOpen: boolean;
+  listeningModesOpen: boolean;
   sleepTimerOpen: boolean;
   profileMenuOpen: boolean;
   createMenuOpen: boolean;
@@ -52,6 +53,8 @@ type UiState = {
   closeNowPlaying: () => void;
   openQueue: () => void;
   closeQueue: () => void;
+  openListeningModes: () => void;
+  closeListeningModes: () => void;
   openSleepTimer: () => void;
   closeSleepTimer: () => void;
   openProfileMenu: () => void;
@@ -75,6 +78,7 @@ type UiState = {
 export const useUiStore = create<UiState>((set) => ({
   nowPlayingOpen: false,
   queueOpen: false,
+  listeningModesOpen: false,
   sleepTimerOpen: false,
   profileMenuOpen: false,
   createMenuOpen: false,
@@ -88,6 +92,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeNowPlaying: () => set({ nowPlayingOpen: false }),
   openQueue: () => set({ queueOpen: true }),
   closeQueue: () => set({ queueOpen: false }),
+  openListeningModes: () => set({ listeningModesOpen: true }),
+  closeListeningModes: () => set({ listeningModesOpen: false }),
   openSleepTimer: () => set({ sleepTimerOpen: true }),
   closeSleepTimer: () => set({ sleepTimerOpen: false }),
   openProfileMenu: () => set({ profileMenuOpen: true }),

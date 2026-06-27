@@ -171,7 +171,11 @@ export default function PlaylistScreen() {
             onPress={() =>
               isThisContext
                 ? togglePlay()
-                : playSongs(songs, 0, { respectShuffle: true, contextKey })
+                : playSongs(songs, 0, {
+                    respectShuffle: true,
+                    contextKey,
+                    contextMeta: { kind: "playlist", playlistId: id, editable },
+                  })
             }
             accessibilityLabel={showPause ? "Pause" : "Play"}
             className="h-14 w-14 items-center justify-center rounded-full"

@@ -29,7 +29,13 @@ function playableQueue(songs: PlayerSong[], startIndex: number): { songs: Player
 export function playSongs(
   songs: PlayerSong[],
   startIndex: number,
-  options?: { respectShuffle?: boolean; contextKey?: string },
+  options?: {
+    respectShuffle?: boolean;
+    contextKey?: string;
+    // Richer description of the collection, threaded into setQueue as
+    // queueContext for Smart Shuffle's top-up + Add/Skip actions.
+    contextMeta?: { playlistId?: string; editable?: boolean; kind?: "liked" | "playlist" };
+  },
 ): void {
   markPlaybackEngaged();
   const plan = playableQueue(songs, startIndex);

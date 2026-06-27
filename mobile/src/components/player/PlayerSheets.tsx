@@ -1,5 +1,6 @@
 import { NowPlayingSheet } from "@/components/player/NowPlayingSheet";
 import { QueueSheet } from "@/components/player/QueueSheet";
+import { ListeningModesSheet } from "@/components/player/ListeningModesSheet";
 import { TrackActionsMenu } from "@/components/player/TrackActionsMenu";
 import { SleepTimerSheet } from "@/components/player/SleepTimerSheet";
 import { CreateMenuSheet } from "@/components/player/CreateMenuSheet";
@@ -15,6 +16,7 @@ import { useUiStore } from "@/store/ui";
 export function PlayerSheets() {
   const nowPlayingOpen = useUiStore((s) => s.nowPlayingOpen);
   const queueOpen = useUiStore((s) => s.queueOpen);
+  const listeningModesOpen = useUiStore((s) => s.listeningModesOpen);
   const trackActions = useUiStore((s) => s.trackActions);
   const libraryActions = useUiStore((s) => s.libraryActions);
   const sleepTimerOpen = useUiStore((s) => s.sleepTimerOpen);
@@ -24,6 +26,7 @@ export function PlayerSheets() {
 
   const closeNowPlaying = useUiStore((s) => s.closeNowPlaying);
   const closeQueue = useUiStore((s) => s.closeQueue);
+  const closeListeningModes = useUiStore((s) => s.closeListeningModes);
   const closeTrackActions = useUiStore((s) => s.closeTrackActions);
   const closeLibraryActions = useUiStore((s) => s.closeLibraryActions);
   const closeSleepTimer = useUiStore((s) => s.closeSleepTimer);
@@ -35,6 +38,7 @@ export function PlayerSheets() {
     <>
       <NowPlayingSheet visible={nowPlayingOpen} onClose={closeNowPlaying} />
       <QueueSheet visible={queueOpen} onClose={closeQueue} />
+      <ListeningModesSheet visible={listeningModesOpen} onClose={closeListeningModes} />
       <TrackActionsMenu visible={!!trackActions} onClose={closeTrackActions} />
       <LibraryActionsMenu visible={!!libraryActions} onClose={closeLibraryActions} />
       <LibrarySortMenu visible={librarySortOpen} onClose={closeLibrarySort} />

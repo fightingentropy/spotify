@@ -47,8 +47,11 @@ import {
   fetchSpotifyPlaylistTracks as fetchPathfinderPlaylistTracks,
   fetchSpotifyTrackMetadata,
   scrapeSpotifyTrackIdsFromHtml,
+  searchSpotifyTrackId,
   type SpotifyBatchTrack,
 } from "@/lib/spotify-pathfinder";
+import { fetchLastFmSimilarTracks } from "@/lib/recommendations";
+import { normalizeSongPart } from "@/lib/song-dedupe";
 import { resolveTidalTrackIdByIsrc } from "@/lib/tidal-isrc";
 
 type Variables = {
@@ -3839,6 +3842,135 @@ app.post("/api/discover/promote", async (c) => {
     status: res.status,
     headers: { "content-type": "application/json" },
   });
+});
+
+// Smart Shuffle: given the listening context's seeds (+ exclude sets), return a
+// batch of recommended tracks shaped exactly like /api/discover/trending so the
+// client can stream them through the existing Discover staging pipeline. The
+// worker stays stateless — the client owns the seed/exclude/blocklist sets.
+// Recommendations come from Last.fm "similar tracks", resolved name→Spotify id.
+const SMART_SHUFFLE_DEFAULT_LIMIT = 12;
+const SMART_SHUFFLE_RESOLVE_CONCURRENCY = 3;
+
+type SmartShuffleRequest = {
+  contextKey?: unknown;
+  seeds?: unknown;
+  exclude?: unknown;
+  excludeIds?: unknown;
+  limit?: unknown;
+};
+
+function smartShuffleSeedList(value: unknown): { title: string; artist: string }[] {
+  if (!Array.isArray(value)) return [];
+  const seeds: { title: string; artist: string }[] = [];
+  for (const entry of value) {
+    const record = entry as { title?: unknown; artist?: unknown } | null;
+    const title = toStringValue(record?.title);
+    const artist = toStringValue(record?.artist);
+    if (title && artist) seeds.push({ title, artist });
+  }
+  return seeds;
+}
+
+function smartShuffleKey(title: string, artist: string): string {
+  return `${normalizeSongPart(title)}::${normalizeSongPart(artist)}`;
+}
+
+app.post("/api/smart-shuffle/recommend", async (c) => {
+  requireUser(c.get("user"));
+  if (!isMacMiniMusicConfigured(c.env)) return jsonError("Smart Shuffle is not available", 503);
+
+  const payload = await readJson<SmartShuffleRequest>(c.req.raw);
+  if (!payload) return jsonError("Invalid JSON body", 400);
+
+  const seeds = smartShuffleSeedList(payload.seeds);
+  const limit = Math.min(25, Math.max(1, toNumberValue(payload.limit) ?? SMART_SHUFFLE_DEFAULT_LIMIT));
+  const apiKey = envString(c.env, "LAST_FM_API_KEY");
+  if (!apiKey) return jsonCached(c, { tracks: [], reason: "no-recommender-configured" });
+  if (seeds.length === 0) return jsonCached(c, { tracks: [] });
+
+  const contextKey = toStringValue(payload.contextKey);
+  const exclude = smartShuffleSeedList(payload.exclude);
+  const excludeIds = new Set(
+    (Array.isArray(payload.excludeIds) ? payload.excludeIds : []).map((id) => toStringValue(id)).filter(Boolean),
+  );
+
+  // Daily-refresh cache: stable across the same seed set + context within a UTC
+  // day, so a session keeps getting a consistent batch but fresh recs roll in
+  // each day. Keyed without a binding via the Cache API (like other routes).
+  const cache = await caches.open("smart-shuffle-v1");
+  const seedKeys = seeds.map((seed) => smartShuffleKey(seed.title, seed.artist)).sort();
+  const dayStamp = new Date().toISOString().slice(0, 10);
+  const cacheSignature = `${dayStamp}|${contextKey}|${limit}|${seedKeys.join(",")}`;
+  const cacheUrl = new URL(c.req.url);
+  cacheUrl.search = `?key=${encodeURIComponent(cacheSignature)}`;
+  const cacheRequest = new Request(cacheUrl.toString(), { method: "GET" });
+  const cached = await cache.match(cacheRequest).catch(() => null);
+  if (cached) return cached;
+
+  // Exclude the user's own context songs (seeds ∪ exclude) by normalized key so
+  // recommendations never echo a track the playlist already contains.
+  const excludeKeys = new Set<string>();
+  for (const seed of seeds) excludeKeys.add(smartShuffleKey(seed.title, seed.artist));
+  for (const entry of exclude) excludeKeys.add(smartShuffleKey(entry.title, entry.artist));
+
+  let tracks: DiscoverStagedTrack[] = [];
+  try {
+    const candidates = (await fetchLastFmSimilarTracks(seeds, apiKey, limit)).filter(
+      (candidate) => !excludeKeys.has(smartShuffleKey(candidate.title, candidate.artist)),
+    );
+
+    // Resolve name→Spotify id, capped at SMART_SHUFFLE_RESOLVE_CONCURRENCY so we
+    // don't hammer the search surface. Drop misses, excluded ids, and id dupes.
+    const spotifyCookie = envString(c.env, "SPOTIFY_SP_DC");
+    const resolved: DiscoverTrendingTrack[] = [];
+    const seenIds = new Set<string>();
+    for (let i = 0; i < candidates.length && resolved.length < limit; i += SMART_SHUFFLE_RESOLVE_CONCURRENCY) {
+      const batch = candidates.slice(i, i + SMART_SHUFFLE_RESOLVE_CONCURRENCY);
+      const hits = await Promise.all(
+        batch.map((candidate) =>
+          searchSpotifyTrackId({ title: candidate.title, artist: candidate.artist }, spotifyCookie || undefined).catch(
+            () => null,
+          ),
+        ),
+      );
+      for (const hit of hits) {
+        if (!hit || excludeIds.has(hit.id) || seenIds.has(hit.id)) continue;
+        seenIds.add(hit.id);
+        resolved.push({
+          id: hit.id,
+          title: hit.name,
+          artist: hit.artists.join(", "),
+          album: hit.album || "",
+          imageUrl: hit.imageUrl || "/apple-icon.png",
+          durationMs: typeof hit.durationMs === "number" && hit.durationMs > 0 ? hit.durationMs : null,
+          spotifyUrl: `https://open.spotify.com/track/${hit.id}`,
+        });
+        if (resolved.length >= limit) break;
+      }
+    }
+
+    // Flag already-staged recs so they play instantly (same as Discover).
+    tracks = (await markDiscoverStaged(c.env, resolved)).slice(0, limit);
+  } catch {
+    // Tolerate Last.fm/search failures: return whatever resolved (possibly none)
+    // rather than throwing to the client.
+    tracks = [];
+  }
+
+  const response = await jsonCached(c, { tracks }, {
+    cacheControl: "private, max-age=120, stale-while-revalidate=600",
+  });
+  // Cache the materialized batch for ~12h (the day-stamped key rolls it over).
+  // The Cache API needs a cacheable response, so the stored copy gets a plain
+  // max-age; the client copy keeps the private short-cache headers above.
+  const toCache = new Response(response.clone().body, {
+    status: response.status,
+    headers: new Headers(response.headers),
+  });
+  toCache.headers.set("cache-control", "max-age=43200");
+  await cache.put(cacheRequest, toCache).catch(() => {});
+  return response;
 });
 
 app.get("/api/search-index", async (c) => {
