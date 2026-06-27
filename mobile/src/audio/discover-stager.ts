@@ -23,6 +23,9 @@ import type { PlayerSong } from "@/types/player";
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 
+// How many upcoming slots to warm ahead of the current track (linear playback).
+// Two keeps transitions gapless even when a song is short or the user skips fast.
+const PREFETCH_AHEAD = 2;
 let started = false;
 // Placeholder ids with a stage request in flight (dedupe). Keyed by id only; a
 // stale resolution is harmless because the .then/.catch re-read the live current
@@ -110,12 +113,16 @@ function evaluate(s: ReturnType<typeof usePlayerStore.getState>): void {
     consecutiveCurrentFailures = 0;
   }
 
-  // Prefetch one ahead (linear only — shuffle's next pick is random, so warming a
-  // specific slot would usually be wrong). Stage it while the current track plays
-  // so the transition is seamless.
+  // Prefetch the next few ahead (linear only — shuffle's next pick is random, so
+  // warming a specific slot would usually be wrong). Staging while the current track
+  // plays keeps transitions seamless even through short songs / quick skips; stage()
+  // dedupes in-flight ids and blacklists failed prefetches, so a deeper window can't
+  // double-fire or thrash.
   if (!s.shuffle) {
-    const upcoming = s.queue[s.currentIndex + 1] ?? null;
-    if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming, "prefetch");
+    for (let offset = 1; offset <= PREFETCH_AHEAD; offset += 1) {
+      const upcoming = s.queue[s.currentIndex + offset] ?? null;
+      if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming, "prefetch");
+    }
   }
 }
 
