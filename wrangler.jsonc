@@ -40,6 +40,7 @@
 		"enabled": true
 	},
 	"vars": {
+		"PLAYLISTS_EDITABLE": "1",
 		"AUTH_TRUST_HOST": "true",
 		"EMAIL_FROM": "noreply@fightingentropy.org",
 		"MAC_MINI_ORIGIN": "https://spotify.fightingentropy.org",
