@@ -2463,7 +2463,13 @@ async function resolveProviderDownload(
   } else if (provider === "qobuz") {
     for (const quality of qualities.qobuz) {
       try {
-        candidates.push(...flattenResolvedAudioDownload(await resolveQobuzDownload(env, songLinkPayload, quality, payload)));
+        const resolved = flattenResolvedAudioDownload(await resolveQobuzDownload(env, songLinkPayload, quality, payload));
+        if (resolved.length > 0) {
+          candidates.push(...resolved);
+          // One lossless Qobuz quality is enough — stop so we don't hit the
+          // rate-limited qbz-foss community endpoint again for the lower qualities.
+          break;
+        }
       } catch (error) {
         errors.push(error instanceof Error ? error.message : `qobuz quality ${quality} failed`);
       }
@@ -2502,6 +2508,10 @@ async function resolveSpotiFlacDownloadStack(
       candidates.push(...flattenResolvedAudioDownload(
         await resolveProviderDownload(env, provider, trackId, songLinkPayload, payload, qualities),
       ));
+      // First provider that yields a candidate wins — stop probing the rest
+      // (the dead encrypted spotbye hosts) to cut request pressure / rate-limit
+      // load. With Qobuz ordered first, this resolves in one qbz-foss hit.
+      if (candidates.length > 0) break;
     } catch (error) {
       errors.push(error instanceof Error ? `${provider}: ${error.message}` : `${provider} failed`);
     }
