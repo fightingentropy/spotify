@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { initAudio, restorePlaybackState, startSleepTimerWatchdog } from "@/audio/engine";
 import { useAuth } from "@/lib/auth";
+import { loadIdMap } from "@/lib/canonical-ids";
 import { useOfflineStore } from "@/store/offline";
 
 // Boots the audio engine once and restores cross-device playback state after auth
@@ -29,6 +30,14 @@ export function AudioBootstrap() {
     if (status !== "authenticated" || restoredRef.current) return;
     restoredRef.current = true;
     void restorePlaybackState(user?.id ?? status);
+  }, [status, user?.id]);
+
+  // Load the canonical id-map so like-state goes canonical-aware (like-once). It
+  // re-expands the in-flight liked set the moment it lands and is empty while the
+  // server's canonical-likes flag is off, so it's inert until that flips.
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    void loadIdMap(user?.id ?? status);
   }, [status, user?.id]);
 
   return null;

@@ -25,6 +25,9 @@ export type PlaylistEntry = {
   userId?: string;
   createdAt?: string;
   songsCount: number;
+  // True for D1-backed playlists the app can edit (native + converted folders).
+  // Undefined/false for still-unconverted mini folders (read-only) and pre-flag.
+  editable?: boolean;
 };
 
 type ApiCacheEntry<T = unknown> = {
@@ -585,7 +588,11 @@ export type PlaylistPayload = {
     imageUrl: string | null;
     userId: string;
     createdAt: string;
+    // True when served from D1 (editable). Absent for mini-served folders.
+    editable?: boolean;
   } | null;
   songs: PlayerSong[];
-  likedSongIds: string[];
+  // null when the owner's mini like set was unreachable — the client must SKIP
+  // its non-additive merge on null to avoid wiping hearts (see playlist/[id].tsx).
+  likedSongIds: string[] | null;
 };

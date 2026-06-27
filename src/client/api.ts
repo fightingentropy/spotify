@@ -469,7 +469,9 @@ export type LibraryPlaylistPayload = {
     createdAt: string;
   } | null;
   songs: PlayerSong[];
-  likedSongIds: string[];
+  // null when the server couldn't determine the like set (owner's mini unreachable
+  // for a converted folder); SongGrid skips its non-additive merge on null.
+  likedSongIds: string[] | null;
 };
 
 // A curated Spotify playlist streamed read-through (like Discover). Its tracks

@@ -81,11 +81,14 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
             <View className="mb-3 flex-row items-center justify-between px-1">
               <DownloadButton song={song} size={22} />
               <HeartButton song={song} size={24} />
-              <PressableScale onPress={() => setShowLyrics((v) => !v)} hitSlop={8} accessibilityLabel="Toggle lyrics">
-                <View>
-                  <MicVocal size={22} color={showLyrics ? colors.emerald : colors.iconIdle} />
-                </View>
-              </PressableScale>
+              {/* Lyrics toggle — only shown when the song actually has lyrics. */}
+              {song.lyricsUrl ? (
+                <PressableScale onPress={() => setShowLyrics((v) => !v)} hitSlop={8} accessibilityLabel="Toggle lyrics">
+                  <View>
+                    <MicVocal size={22} color={showLyrics ? colors.emerald : colors.iconIdle} />
+                  </View>
+                </PressableScale>
+              ) : null}
               <PressableScale onPress={openSleepTimer} hitSlop={8} accessibilityLabel="Sleep timer">
                 <View>
                   <Moon size={22} color={colors.iconIdle} />
@@ -100,7 +103,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
 
             {/* art / lyrics */}
             <View className="flex-1 items-center justify-center">
-              {showLyrics ? (
+              {showLyrics && song.lyricsUrl ? (
                 <View style={{ width: "100%", flex: 1 }}>
                   <LyricsView song={song} />
                 </View>

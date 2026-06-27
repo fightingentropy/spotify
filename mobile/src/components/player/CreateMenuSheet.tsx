@@ -1,9 +1,12 @@
 import { type ReactNode } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Alert, ScrollView, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 import Svg, { Circle, Path } from "react-native-svg";
 import { Blend, CodeXml, Folder, Music, SlidersVertical, Users } from "lucide-react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { Sheet } from "@/components/ui/Sheet";
+import { createPlaylist } from "@/lib/playlist-actions";
+import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 // The "Create" sheet, opened from the Create (+) tab. Mirrors Spotify's create
@@ -88,10 +91,34 @@ function OptionRow({ option, onClose }: { option: Option; onClose: () => void })
 }
 
 export function CreateMenuSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const router = useRouter();
+  const openNamePrompt = useUiStore((s) => s.openNamePrompt);
+
+  // "Playlist" is the only wired option: prompt for a name, create it in D1, then
+  // open the new (empty) playlist so the user can start adding songs.
+  const handleCreatePlaylist = () => {
+    openNamePrompt({
+      title: "Give your playlist a name",
+      initialValue: "",
+      confirmLabel: "Create",
+      placeholder: "My playlist",
+      onSubmit: async (name) => {
+        try {
+          const created = await createPlaylist(name);
+          router.push(`/playlist/${created.id}`);
+        } catch (error) {
+          Alert.alert("Couldn't create playlist", error instanceof Error ? error.message : "Please try again.");
+        }
+      },
+    });
+  };
+
+  const options = OPTIONS.map((o) => (o.key === "playlist" ? { ...o, onPress: handleCreatePlaylist } : o));
+
   return (
     <Sheet visible={visible} onClose={onClose} heightPct={0.8} zIndex={150}>
       <ScrollView contentContainerStyle={{ paddingTop: 6, paddingBottom: 28 }} showsVerticalScrollIndicator={false}>
-        {OPTIONS.map((o) => (
+        {options.map((o) => (
           <OptionRow key={o.key} option={o} onClose={onClose} />
         ))}
       </ScrollView>

@@ -3,6 +3,8 @@ import { QueueSheet } from "@/components/player/QueueSheet";
 import { TrackActionsMenu } from "@/components/player/TrackActionsMenu";
 import { SleepTimerSheet } from "@/components/player/SleepTimerSheet";
 import { CreateMenuSheet } from "@/components/player/CreateMenuSheet";
+import { AddToPlaylistSheet } from "@/components/playlist/AddToPlaylistSheet";
+import { PlaylistNamePrompt } from "@/components/playlist/PlaylistNamePrompt";
 import { LibraryActionsMenu } from "@/components/library/LibraryActionsMenu";
 import { LibrarySortMenu } from "@/components/library/LibrarySortMenu";
 import { SongSortMenu } from "@/components/song/SongSortMenu";
@@ -39,6 +41,8 @@ export function PlayerSheets() {
       <SongSortMenu context={songSortContext} onClose={closeSongSort} />
       <SleepTimerSheet visible={sleepTimerOpen} onClose={closeSleepTimer} />
       <CreateMenuSheet visible={createMenuOpen} onClose={closeCreateMenu} />
+      <AddToPlaylistSheet />
+      <PlaylistNamePrompt />
     </>
   );
 }

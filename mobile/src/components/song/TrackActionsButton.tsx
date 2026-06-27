@@ -14,11 +14,15 @@ export function TrackActionsButton({
   size = 20,
   showLike = true,
   style,
+  playlist,
 }: {
   song: PlayerSong;
   size?: number;
   showLike?: boolean;
   style?: StyleProp<ViewStyle>;
+  // When set (an editable playlist this row belongs to), the menu offers
+  // "Remove from this playlist".
+  playlist?: { id: string; name: string };
 }) {
   const openTrackActions = useUiStore((s) => s.openTrackActions);
   const { canLike } = useSongLike(song);
@@ -27,7 +31,7 @@ export function TrackActionsButton({
       accessibilityRole="button"
       accessibilityLabel={`More options for ${song.title}`}
       hitSlop={8}
-      onPress={() => openTrackActions({ song, canLike, showLike: showLike && !isRadioSong(song) })}
+      onPress={() => openTrackActions({ song, canLike, showLike: showLike && !isRadioSong(song), playlist })}
       style={style}
     >
       <View>

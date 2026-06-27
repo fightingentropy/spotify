@@ -18,11 +18,14 @@ function SongListItemComponent({
   onPress,
   showDownload = true,
   showActions = true,
+  playlist,
 }: {
   song: PlayerSong;
   onPress: () => void;
   showDownload?: boolean;
   showActions?: boolean;
+  // The editable playlist this row belongs to (enables "Remove from this playlist").
+  playlist?: { id: string; name: string };
 }) {
   const isActive = usePlayerStore(useCallback((s) => s.currentSong?.id === song.id, [song.id]));
   const isActiveAndPlaying = usePlayerStore(useCallback((s) => s.currentSong?.id === song.id && s.isPlaying, [song.id]));
@@ -54,7 +57,7 @@ function SongListItemComponent({
         </View>
       ) : null}
 
-      {showActions ? <TrackActionsButton song={song} size={20} /> : null}
+      {showActions ? <TrackActionsButton song={song} size={20} playlist={playlist} /> : null}
     </View>
   );
 }

@@ -242,6 +242,33 @@ const DUMMY_PASSWORD_HASH = "$2b$10$7tXHcDkbjQu2CAfr8lewqezc3JeBLP4fnqpxolFBCCxz
 
 let schemaPromise: Promise<void> | null = null;
 let songColumnsPromise: Promise<void> | null = null;
+let localOwnerUserPromise: Promise<void> | null = null;
+
+// Ensures the synthetic local-preview owner ("local-mac-mini") has a backing
+// User row so its editable-playlist writes satisfy the Playlist.userId foreign
+// key D1 enforces. Memoized to one write per isolate. Only ever called on
+// local-preview hosts (see the /api/* middleware), so it never runs in prod.
+async function ensureLocalOwnerUser(db: SqlTag): Promise<void> {
+  localOwnerUserPromise ??= (async () => {
+    await db`
+      INSERT INTO "User" ("id", "email", "name", "emailVerified", "image", "createdAt", "updatedAt")
+      VALUES (
+        ${LOCAL_MAC_MINI_AUTH_USER.id},
+        ${LOCAL_MAC_MINI_AUTH_USER.email},
+        ${LOCAL_MAC_MINI_AUTH_USER.name ?? "Library Owner"},
+        ${LOCAL_MAC_MINI_AUTH_USER.emailVerified ?? "owner"},
+        ${LOCAL_MAC_MINI_AUTH_USER.image ?? null},
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      )
+      ON CONFLICT ("id") DO NOTHING
+    `;
+  })().catch((error) => {
+    localOwnerUserPromise = null;
+    throw error;
+  });
+  await localOwnerUserPromise;
+}
 
 class ApiError extends Error {
   status: number;
@@ -275,6 +302,57 @@ async function ensureSchema(env: CloudflareEnv): Promise<void> {
   schemaPromise ??= (async () => {
     for (const statement of D1_SCHEMA_STATEMENTS) {
       await env.DB.prepare(statement).bind().run();
+    }
+    // Columns added to the existing Playlist table after its initial CREATE.
+    // Applied on the SAME memoized path everything awaits so the folder routing
+    // gate can read source/convertedAt without ever hitting "no such column" on a
+    // cold isolate. Idempotent: swallow "duplicate column" so re-runs are no-ops.
+    for (const statement of [
+      'ALTER TABLE "Playlist" ADD COLUMN "source" TEXT',
+      'ALTER TABLE "Playlist" ADD COLUMN "convertedAt" TEXT',
+    ]) {
+      try {
+        await env.DB.prepare(statement).bind().run();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.toLowerCase().includes("duplicate column")) throw error;
+      }
+    }
+    // D1 ENFORCES foreign keys. The original PlaylistSong.songId FK referenced
+    // Song, but editable-playlist membership stores ids that live in SongRef (or
+    // the mini's filesystem library), never Song — so that FK rejects every
+    // add-song / folder-seed insert with SQLITE_CONSTRAINT_FOREIGNKEY. Drop it by
+    // rebuilding the table (keeping the playlistId FK). Guarded by a PRAGMA check
+    // so it runs at most once; the table is dormant so the row copy is trivial.
+    // The atomic batch + catch tolerate a concurrent isolate running the same.
+    try {
+      const fkList = await env.DB.prepare(`PRAGMA foreign_key_list("PlaylistSong")`).all<{ table?: string }>();
+      if ((fkList.results ?? []).some((row) => row.table === "Song")) {
+        await env.DB.batch([
+          env.DB.prepare(
+            `CREATE TABLE IF NOT EXISTS "PlaylistSong_new" (
+              "id" TEXT NOT NULL PRIMARY KEY,
+              "playlistId" TEXT NOT NULL,
+              "songId" TEXT NOT NULL,
+              "order" INTEGER NOT NULL DEFAULT 0,
+              UNIQUE ("playlistId", "songId"),
+              FOREIGN KEY ("playlistId") REFERENCES "Playlist"("id") ON DELETE CASCADE ON UPDATE CASCADE
+            )`,
+          ),
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO "PlaylistSong_new" ("id","playlistId","songId","order")
+             SELECT "id","playlistId","songId","order" FROM "PlaylistSong"`,
+          ),
+          env.DB.prepare(`DROP TABLE "PlaylistSong"`),
+          env.DB.prepare(`ALTER TABLE "PlaylistSong_new" RENAME TO "PlaylistSong"`),
+          env.DB.prepare(
+            `CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order")`,
+          ),
+        ]);
+      }
+    } catch {
+      // A concurrent isolate likely ran the same migration; the post-condition
+      // (no songId FK) is what matters and the next request re-checks.
     }
   })().catch((error) => {
     schemaPromise = null;
@@ -3212,6 +3290,24 @@ app.use("*", async (c, next) => {
 });
 
 app.use("/api/*", async (c, next) => {
+  // When editable playlists are on, the worker (not the mini) owns two GET reads:
+  // the /api/library merge, and the detail read for any folder that's been
+  // converted to D1. Skip the proxy and fall through to the D1 handlers; an
+  // un-converted folder still proxies to the mini below.
+  if (playlistsEditableEnabled(c.env) && c.req.method.toUpperCase() === "GET") {
+    const path = macMiniProxyPathname(c);
+    if (path === "/api/library") {
+      await next();
+      return;
+    }
+    if (
+      path.startsWith("/api/playlist/local-folder-") &&
+      (await folderServesFromD1(c.env, path.slice("/api/playlist/".length)))
+    ) {
+      await next();
+      return;
+    }
+  }
   if (shouldProxyMusicRequest(c)) {
     const needsUser = isMacMiniMutation(c) || shouldForwardMacMiniUser(c);
     const user = needsUser ? await getMacMiniProxyUser(c) : null;
@@ -3226,7 +3322,14 @@ app.use("/api/*", async (c, next) => {
   await ensureSchema(c.env);
   const db = createD1SqlTag(c.env.DB);
   c.set("db", db);
-  c.set("user", (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c));
+  const resolvedUser = (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
+  // The synthetic local-owner identity only ever resolves on local-preview hosts
+  // (never prod). Back it with a real User row so its editable-playlist writes
+  // satisfy the Playlist.userId -> User foreign key D1 enforces. No-op in prod.
+  if (resolvedUser && resolvedUser.id === LOCAL_MAC_MINI_AUTH_USER.id) {
+    await ensureLocalOwnerUser(db);
+  }
+  c.set("user", resolvedUser);
   await next();
 });
 
@@ -3746,6 +3849,10 @@ app.get("/api/search-index", async (c) => {
 });
 
 app.get("/api/library", async (c) => {
+  // Editable playlists: merge D1 (native + converted folders) with the owner's
+  // still-unconverted mini folders. The proxy middleware already skipped the
+  // mini proxy for this path when the flag is on, so this is the live handler.
+  if (playlistsEditableEnabled(c.env)) return handleLibraryMerge(c);
   const user = c.get("user");
   return jsonCached(c, { playlists: await listPlaylists(c.get("db"), user?.id ?? null), userId: user?.id ?? null }, {
     cacheControl: "private, max-age=300, stale-while-revalidate=600",
@@ -4249,27 +4356,64 @@ app.get("/api/playlist/:id", async (c) => {
   const user = c.get("user");
   if (!user) return jsonError("Unauthorized", 401);
   await ensureSongColumns(db);
-  const playlists = await db<PlaylistRow>`
-    SELECT "id", "name", "imageUrl", "userId", "createdAt"
+  const playlists = await db<PlaylistRow & { source: string | null }>`
+    SELECT "id", "name", "imageUrl", "userId", "createdAt", "source"
     FROM "Playlist"
     WHERE "id" = ${id}
     LIMIT 1
   `;
   const playlist = playlists[0];
   if (!playlist) return jsonError("Playlist not found", 404);
-  if (playlist.userId !== user.id) return jsonError("Forbidden", 403);
+  if (!userOwnsPlaylist(c, user, playlist)) return jsonError("Forbidden", 403);
+  // LEFT JOIN both Song and SongRef + COALESCE: converted folders + in-app adds
+  // live in SongRef; any legacy native row lives in Song. Neither side silently
+  // drops a track.
   const songRows = await db<SongRow & { order: number }>`
-    SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt", ps."order"
+    SELECT
+      COALESCE(s1."id", s2."id") AS "id",
+      COALESCE(s1."title", s2."title") AS "title",
+      COALESCE(s1."artist", s2."artist") AS "artist",
+      COALESCE(s1."album", s2."album") AS "album",
+      COALESCE(s1."duration", s2."duration") AS "duration",
+      COALESCE(s1."imageUrl", s2."imageUrl") AS "imageUrl",
+      COALESCE(s1."audioUrl", s2."audioUrl") AS "audioUrl",
+      COALESCE(s1."lyricsUrl", s2."lyricsUrl") AS "lyricsUrl",
+      COALESCE(s1."audioBitDepth", s2."audioBitDepth") AS "audioBitDepth",
+      COALESCE(s1."audioSampleRate", s2."audioSampleRate") AS "audioSampleRate",
+      COALESCE(s1."userId", s2."userId") AS "userId",
+      COALESCE(s1."createdAt", s2."createdAt") AS "createdAt",
+      ps."order" AS "order"
     FROM "PlaylistSong" ps
-    INNER JOIN "Song" s ON s."id" = ps."songId"
+    LEFT JOIN "Song" s1 ON s1."id" = ps."songId"
+    LEFT JOIN "SongRef" s2 ON s2."id" = ps."songId"
     WHERE ps."playlistId" = ${id}
+      AND (s1."id" IS NOT NULL OR s2."id" IS NOT NULL)
     ORDER BY ps."order" ASC
   `;
+  // The owner's local-server hearts live on the mini (the D1 Like table is empty
+  // for them); native/uploaded-song hearts live in D1. Returning only one source
+  // would make the client's non-additive merge wipe the other, so UNION them for
+  // the owner. Non-owners just use their D1 likes.
+  let likedSongIds: string[] | null;
+  if (isLibraryOwner(c, user) && canUseMacMiniProxy(c.env)) {
+    const miniLiked = await likedSongIdsForOwnerFromMini(c, user); // null = mini UNREACHABLE
+    // Fail CLOSED: if the owner's mini like set is unreachable, return null (not
+    // []) so the client SKIPS its non-additive merge and keeps existing hearts.
+    // The songs still serve from D1, so the playlist loads — only the heart state
+    // is deferred to the next successful liked/library load (must-fix #6).
+    likedSongIds =
+      miniLiked === null ? null : Array.from(new Set([...miniLiked, ...(await listLikedSongIds(db, user.id))]));
+  } else {
+    likedSongIds = await listLikedSongIds(db, user.id);
+  }
   return jsonCached(c, {
     kind: "library",
-    playlist,
+    // editable=true: this detail came from D1 (a converted folder or native
+    // playlist), so the app may rename / add / remove. Unconverted mini folders
+    // are proxied straight to the mini and never reach here.
+    playlist: { ...playlist, editable: true },
     songs: songRows.map(songToPlayerSong),
-    likedSongIds: await listLikedSongIds(db, user.id),
+    likedSongIds,
   });
 });
 
@@ -4799,12 +4943,12 @@ app.post("/api/playlist/:id/reorder", async (c) => {
   const user = requireUser(c.get("user"));
   const id = c.req.param("id");
   const db = c.get("db");
-  const playlistRows = await db<{ id: string; userId: string }>`
-    SELECT "id", "userId" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+  const playlistRows = await db<{ id: string; userId: string; source: string | null }>`
+    SELECT "id", "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
   `;
   const playlist = playlistRows[0];
   if (!playlist) return jsonError("Playlist not found", 404);
-  if (playlist.userId !== user.id) return jsonError("Forbidden", 403);
+  if (!userOwnsPlaylist(c, user, playlist)) return jsonError("Forbidden", 403);
   const payload = await readJson<{ songIds?: unknown }>(c.req.raw);
   if (!Array.isArray(payload?.songIds)) return jsonError("songIds must be an array", 400);
   const requested = [...new Set(payload.songIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))];
@@ -4829,6 +4973,400 @@ app.post("/api/playlist/:id/reorder", async (c) => {
     `;
   }
   return c.json({ ok: true, songIds: finalOrder });
+});
+
+// ---------------------------------------------------------------------------
+// Editable playlists (convert-everything). All gated behind PLAYLISTS_EDITABLE
+// so the worker ships dark until the seed has run + the app update is live.
+// ---------------------------------------------------------------------------
+
+function playlistsEditableEnabled(env: CloudflareEnv): boolean {
+  const value = (env as unknown as Record<string, unknown>).PLAYLISTS_EDITABLE;
+  return value === "1" || value === "true" || value === true;
+}
+
+// Mirror the mini's isLocalLibraryOwner (local-music-server.ts:1206) so the
+// worker resolves "is this the library owner" identically: the local-preview
+// sentinel, or a session user matched against the SPOTIFY_LIBRARY_OWNER_* env
+// lists (default display name "Erlin"). The production owner is a real D1 user
+// with a UUID id — never the "local-mac-mini" sentinel — so every owner gate
+// MUST go through here, not `user.id === LOCAL_MAC_MINI_AUTH_USER.id`.
+function isLibraryOwner(c: Context<AppEnv>, user: AuthUser | null): boolean {
+  if (!user) return false;
+  if (user.id === LOCAL_MAC_MINI_AUTH_USER.id) return true;
+  const ids = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_USER_IDS");
+  const emails = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_EMAILS");
+  const names = envStringList(c.env, "SPOTIFY_LIBRARY_OWNER_NAMES");
+  const ownerNames = names.length > 0 ? names : ["Erlin"];
+  const email = user.email?.trim().toLowerCase() ?? "";
+  const name = user.name?.trim().toLowerCase() ?? "";
+  return (
+    ids.some((value) => value.trim() === user.id) ||
+    (!!email && emails.some((value) => value.trim().toLowerCase() === email)) ||
+    (!!name && ownerNames.some((value) => value.trim().toLowerCase() === name))
+  );
+}
+
+// A user owns a playlist if it's theirs by id, or it's an owner-owned folder
+// conversion (source='local-folder') and they're the library owner — so the
+// owner can always open/edit a converted folder regardless of which id seeded
+// the row (real owner uuid in prod vs the local-preview sentinel).
+function userOwnsPlaylist(
+  c: Context<AppEnv>,
+  user: AuthUser,
+  row: { userId: string; source: string | null },
+): boolean {
+  if (row.userId === user.id) return true;
+  return row.source === "local-folder" && isLibraryOwner(c, user);
+}
+
+// The mini derives a folder-playlist's membership from the first path segment of
+// each song's localPath (its top-level music folder). Root-level songs (no "/")
+// are not in any folder playlist.
+function topLevelFolder(localPath: string | null | undefined): string | null {
+  if (!localPath) return null;
+  const slash = localPath.indexOf("/");
+  return slash > 0 ? localPath.slice(0, slash) : null;
+}
+
+// Cached set of folder-playlist ids that are fully converted (source='local-folder'
+// AND convertedAt set). TTL-cached so the routing gate doesn't pay a D1 round-trip
+// per folder GET. On a D1 error it FAILS CLOSED — returns an EMPTY set so the
+// routing gate proxies the folder to the mini (which still has the files) rather
+// than serving a possibly-stale/empty D1 playlist (must-fix #7).
+let convertedFolderCache: { ids: Set<string>; at: number } | null = null;
+async function convertedFolderIds(env: CloudflareEnv): Promise<Set<string>> {
+  const now = Date.now();
+  if (convertedFolderCache && now - convertedFolderCache.at < 30_000) return convertedFolderCache.ids;
+  try {
+    await ensureSchema(env);
+    const result = await env.DB.prepare(
+      `SELECT "id" FROM "Playlist" WHERE "source" = 'local-folder' AND "convertedAt" IS NOT NULL`,
+    ).all<{ id: string }>();
+    const ids = new Set((result.results ?? []).map((row) => row.id));
+    convertedFolderCache = { ids, at: now };
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
+async function folderServesFromD1(env: CloudflareEnv, playlistId: string): Promise<boolean> {
+  if (!playlistsEditableEnabled(env)) return false;
+  return (await convertedFolderIds(env)).has(playlistId);
+}
+
+async function fetchMacMiniJson<T>(c: Context<AppEnv>, user: AuthUser, path: string): Promise<T | null> {
+  try {
+    const res = await fetch(new URL(path, getMacMiniOrigin(c.env)).toString(), {
+      headers: macMiniProxyHeaders(c, user),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+// The owner's likes live on the mini (the D1 Like table holds no local-server
+// ids). Returning the empty D1 set would make the client's non-additive
+// mergeInitial wipe every local-server heart, so source the owner's liked set
+// from the mini for any D1 playlist detail read.
+// Returns the owner's mini-side liked ids, or NULL when the mini's like set is
+// UNREACHABLE (fetch failed / malformed). Null must be propagated as "unknown" —
+// never collapsed to [] — so a transient mini outage can't make the client wipe
+// every local-server heart via its non-additive merge (must-fix #6).
+async function likedSongIdsForOwnerFromMini(c: Context<AppEnv>, user: AuthUser): Promise<string[] | null> {
+  const data = await fetchMacMiniJson<{ likedSongIds?: unknown }>(c, user, "/api/liked");
+  if (data == null || !Array.isArray(data.likedSongIds)) return null;
+  return (data.likedSongIds as unknown[]).filter((id): id is string => typeof id === "string");
+}
+
+async function upsertSongRef(db: SqlTag, userId: string, song: PlayerSong): Promise<void> {
+  await db`
+    INSERT INTO "SongRef" (
+      "id", "title", "artist", "album", "imageUrl", "audioUrl", "lyricsUrl",
+      "duration", "audioBitDepth", "audioSampleRate", "localPath", "userId", "createdAt", "updatedAt"
+    ) VALUES (
+      ${song.id}, ${song.title}, ${song.artist}, ${song.album ?? null}, ${song.imageUrl ?? ""},
+      ${song.audioUrl ?? ""}, ${song.lyricsUrl ?? null}, ${song.duration ?? null},
+      ${song.audioBitDepth ?? null}, ${song.audioSampleRate ?? null}, ${song.localPath ?? null},
+      ${userId}, ${song.createdAt ?? null}, CURRENT_TIMESTAMP
+    )
+    ON CONFLICT ("id") DO UPDATE SET
+      "title" = excluded."title", "artist" = excluded."artist", "album" = excluded."album",
+      "imageUrl" = excluded."imageUrl", "audioUrl" = excluded."audioUrl", "lyricsUrl" = excluded."lyricsUrl",
+      "duration" = excluded."duration", "audioBitDepth" = excluded."audioBitDepth",
+      "audioSampleRate" = excluded."audioSampleRate", "localPath" = excluded."localPath",
+      "updatedAt" = CURRENT_TIMESTAMP
+  `;
+}
+
+// /api/library merge — when PLAYLISTS_EDITABLE is on, the existing /api/library
+// route delegates here instead of returning D1-only (or proxying to the mini).
+// Merge: D1 playlists (native + fully-converted folders) win; the owner's
+// still-unconverted mini folders fill in. A half-written folder row (convertedAt
+// NULL) is EXCLUDED so it can't shadow the mini's full copy with an empty tile.
+// NOT a route (a second app.get for the same path is dead code in Hono).
+async function handleLibraryMerge(c: Context<AppEnv>): Promise<Response> {
+  const db = c.get("db");
+  const user = c.get("user");
+  if (!user) return jsonError("Unauthorized", 401);
+  const d1Rows = await db<{
+    id: string;
+    name: string;
+    imageUrl: string | null;
+    userId: string;
+    createdAt: string;
+    songsCount: number;
+  }>`
+    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", COUNT(ps."id") AS "songsCount"
+    FROM "Playlist" p
+    LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
+    WHERE p."userId" = ${user.id}
+      AND (p."source" IS NULL OR (p."source" = 'local-folder' AND p."convertedAt" IS NOT NULL))
+    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt"
+    ORDER BY p."createdAt" DESC
+  `;
+  // editable=true marks a D1-backed playlist the app can add/remove/rename. The
+  // mini's still-unconverted folders are read-only until the seed converts them.
+  const d1Playlists = d1Rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    imageUrl: row.imageUrl ?? null,
+    userId: row.userId,
+    createdAt: row.createdAt,
+    songsCount: Number(row.songsCount ?? 0),
+    editable: true,
+  }));
+  const d1Ids = new Set(d1Playlists.map((p) => p.id));
+  let miniPlaylists: typeof d1Playlists = [];
+  if (isLibraryOwner(c, user) && canUseMacMiniProxy(c.env)) {
+    // No query string forwarded: the merged mini set must be deterministic and
+    // not vary with client sort/cache-bust params the worker's D1 read ignores.
+    const data = await fetchMacMiniJson<{ playlists?: Omit<(typeof d1Playlists)[number], "editable">[] }>(
+      c,
+      user,
+      "/api/library",
+    );
+    if (data?.playlists) {
+      miniPlaylists = data.playlists.filter((p) => !d1Ids.has(p.id)).map((p) => ({ ...p, editable: false }));
+    }
+  }
+  const playlists = [...d1Playlists, ...miniPlaylists].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  return c.json({ playlists, userId: user.id });
+}
+
+app.post("/api/playlists", async (c) => {
+  const user = requireUser(c.get("user"));
+  const body = await readJson<{ name?: unknown; imageUrl?: unknown }>(c.req.raw);
+  const name = toStringValue(body?.name) || "New Playlist";
+  const imageUrl = toStringValue(body?.imageUrl) || null;
+  const id = crypto.randomUUID();
+  const db = c.get("db");
+  await db`
+    INSERT INTO "Playlist" ("id", "name", "imageUrl", "userId", "createdAt")
+    VALUES (${id}, ${name}, ${imageUrl}, ${user.id}, CURRENT_TIMESTAMP)
+  `;
+  return c.json({ id, name, imageUrl, userId: user.id, createdAt: new Date().toISOString(), songsCount: 0 }, 201);
+});
+
+app.patch("/api/playlist/:id", async (c) => {
+  const user = requireUser(c.get("user"));
+  const id = c.req.param("id");
+  const db = c.get("db");
+  const rows = await db<{ userId: string; source: string | null }>`
+    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+  `;
+  if (!rows[0]) return jsonError("Playlist not found", 404);
+  if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
+  const body = await readJson<{ name?: unknown; imageUrl?: unknown }>(c.req.raw);
+  const name = toStringValue(body?.name);
+  if (name) await db`UPDATE "Playlist" SET "name" = ${name} WHERE "id" = ${id}`;
+  if (typeof body?.imageUrl === "string") {
+    await db`UPDATE "Playlist" SET "imageUrl" = ${body.imageUrl} WHERE "id" = ${id}`;
+  }
+  return c.json({ ok: true });
+});
+
+app.delete("/api/playlist/:id", async (c) => {
+  const user = requireUser(c.get("user"));
+  const id = c.req.param("id");
+  const db = c.get("db");
+  const rows = await db<{ userId: string; source: string | null }>`
+    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+  `;
+  if (!rows[0]) return jsonError("Playlist not found", 404);
+  if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
+  // A folder-backed playlist is still real files on the mini — deleting it in-app
+  // must never delete those. Removing songs / renaming / reordering is allowed.
+  if (rows[0].source === "local-folder") {
+    return jsonError("Folder-backed playlists can't be deleted in-app", 400);
+  }
+  await db`DELETE FROM "PlaylistSong" WHERE "playlistId" = ${id}`;
+  await db`DELETE FROM "Playlist" WHERE "id" = ${id}`;
+  return c.json({ ok: true });
+});
+
+app.post("/api/playlist/:id/songs", async (c) => {
+  const user = requireUser(c.get("user"));
+  const id = c.req.param("id");
+  const db = c.get("db");
+  const rows = await db<{ userId: string; source: string | null }>`
+    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+  `;
+  if (!rows[0]) return jsonError("Playlist not found", 404);
+  if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
+  const body = await readJson<{ song?: unknown; songId?: unknown }>(c.req.raw);
+  const song = coercePlayerSongPayload(body?.song);
+  const songId = (song?.id || toStringValue(body?.songId)).trim();
+  if (!songId) return jsonError("song or songId is required", 400);
+  if (song) {
+    await upsertSongRef(db, user.id, song);
+  } else {
+    // Add-by-id only: the detail read LEFT JOINs Song + SongRef and filters out
+    // rows backed by neither, so a bare id that resolves nowhere would insert a
+    // PlaylistSong that silently never appears. Reject it loudly instead of
+    // succeeding-then-vanishing — callers must pass the full song object.
+    const known = await db<{ id: string }>`
+      SELECT "id" FROM "Song" WHERE "id" = ${songId}
+      UNION ALL SELECT "id" FROM "SongRef" WHERE "id" = ${songId}
+      LIMIT 1
+    `;
+    if (!known[0]) return jsonError("Unknown song — pass the full song object", 400);
+  }
+  // Race-safe append: MAX(order)+1 in one statement; idempotent on re-add.
+  await db`
+    INSERT INTO "PlaylistSong" ("id", "playlistId", "songId", "order")
+    SELECT ${crypto.randomUUID()}, ${id}, ${songId}, COALESCE(MAX("order"), -1) + 1
+    FROM "PlaylistSong" WHERE "playlistId" = ${id}
+    ON CONFLICT ("playlistId", "songId") DO NOTHING
+  `;
+  return c.json({ ok: true });
+});
+
+app.delete("/api/playlist/:id/songs/:songId", async (c) => {
+  const user = requireUser(c.get("user"));
+  const id = c.req.param("id");
+  const songId = c.req.param("songId");
+  const db = c.get("db");
+  const rows = await db<{ userId: string; source: string | null }>`
+    SELECT "userId", "source" FROM "Playlist" WHERE "id" = ${id} LIMIT 1
+  `;
+  if (!rows[0]) return jsonError("Playlist not found", 404);
+  if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
+  await db`DELETE FROM "PlaylistSong" WHERE "playlistId" = ${id} AND "songId" = ${songId}`;
+  return c.json({ ok: true });
+});
+
+// Owner-only, idempotent, re-runnable seed: mirror every mini folder playlist into
+// editable D1 playlists. Membership stores the EXACT per-file song.id the mini
+// serves today (NOT canonicalId) so no phone download is ever re-keyed, and one
+// row per file (no canonical dedup) so a folder never shrinks.
+app.post("/api/admin/convert-folders", async (c) => {
+  const user = requireUser(c.get("user"));
+  // Owner-only. Run this in PRODUCTION as the logged-in owner so Playlist.userId
+  // is the owner's real D1 id (the detail read checks ownership against it).
+  if (!isLibraryOwner(c, user)) return jsonError("Forbidden", 403);
+  if (!canUseMacMiniProxy(c.env)) return jsonError("Mac mini not configured", 503);
+  const db = c.get("db");
+  await ensureSchema(c.env);
+
+  const lib = await fetchMacMiniJson<{
+    playlists?: { id: string; name: string; imageUrl?: string | null; createdAt?: string }[];
+  }>(c, user, "/api/library");
+  const songs = await fetchMacMiniJson<PlayerSong[]>(c, user, "/api/songs");
+  if (!lib?.playlists || !Array.isArray(songs)) return jsonError("Mac mini read failed", 502);
+
+  const folderById = new Map(lib.playlists.map((p) => [p.name, p] as const));
+  // Group songs by their top-level folder, preserving the mini's (sorted) order so
+  // PlaylistSong.order matches the mini's folder read exactly.
+  const groups = new Map<string, PlayerSong[]>();
+  for (const song of songs) {
+    const folder = topLevelFolder(song.localPath);
+    if (!folder) continue;
+    const list = groups.get(folder);
+    if (list) list.push(song);
+    else groups.set(folder, [song]);
+  }
+
+  // Bound each D1 batch well under the 30s whole-batch cap. A folder under this
+  // size rebuilds in ONE atomic batch; a larger one spans batches but still only
+  // flips convertedAt in the FINAL batch, so a crash mid-rebuild leaves it
+  // proxying to the mini (never an empty D1 playlist) and a re-run heals it.
+  const SONG_CHUNK = 400;
+  const songStatements = (id: string, song: PlayerSong, order: number) => [
+    c.env.DB.prepare(
+      `INSERT INTO "SongRef" ("id","title","artist","album","imageUrl","audioUrl","lyricsUrl","duration","audioBitDepth","audioSampleRate","localPath","userId","createdAt","updatedAt")
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+       ON CONFLICT ("id") DO UPDATE SET "title"=excluded."title","artist"=excluded."artist","album"=excluded."album","imageUrl"=excluded."imageUrl","audioUrl"=excluded."audioUrl","lyricsUrl"=excluded."lyricsUrl","duration"=excluded."duration","audioBitDepth"=excluded."audioBitDepth","audioSampleRate"=excluded."audioSampleRate","localPath"=excluded."localPath","updatedAt"=CURRENT_TIMESTAMP`,
+    ).bind(
+      song.id,
+      song.title,
+      song.artist,
+      song.album ?? null,
+      song.imageUrl ?? "",
+      song.audioUrl ?? "",
+      song.lyricsUrl ?? null,
+      song.duration ?? null,
+      song.audioBitDepth ?? null,
+      song.audioSampleRate ?? null,
+      song.localPath ?? null,
+      user.id,
+      song.createdAt ?? null,
+    ),
+    c.env.DB.prepare(
+      `INSERT INTO "PlaylistSong" ("id","playlistId","songId","order") VALUES (?,?,?,?)
+       ON CONFLICT ("playlistId","songId") DO NOTHING`,
+    ).bind(crypto.randomUUID(), id, song.id, order),
+  ];
+
+  const results: { id: string; name: string; count: number; expected: number; ok: boolean }[] = [];
+  for (const [name, rawMembers] of groups) {
+    const folder = folderById.get(name);
+    if (!folder) continue; // not in the live library list (race) — re-run will catch it
+    const id = folder.id;
+    const now = new Date().toISOString();
+    // Per-file ids are unique per file; dedupe defensively so `order` is
+    // contiguous and the verify count matches the distinct membership.
+    const seen = new Set<string>();
+    const members = rawMembers.filter((song) => (seen.has(song.id) ? false : (seen.add(song.id), true)));
+    const imageUrl = folder.imageUrl ?? members.find((s) => s.imageUrl)?.imageUrl ?? null;
+    const createdAt = folder.createdAt ?? now;
+
+    // Build the batches. Batch 0 resets the row + clears membership (convertedAt
+    // NULL); song inserts chunk across batches; the LAST batch sets convertedAt.
+    const head = [
+      c.env.DB.prepare(`UPDATE "Playlist" SET "convertedAt" = NULL WHERE "id" = ?`).bind(id),
+      c.env.DB
+        .prepare(
+          `INSERT INTO "Playlist" ("id","name","imageUrl","userId","createdAt","source","convertedAt")
+           VALUES (?,?,?,?,?, 'local-folder', NULL)
+           ON CONFLICT ("id") DO UPDATE SET "name"=excluded."name", "imageUrl"=excluded."imageUrl", "source"='local-folder', "convertedAt"=NULL`,
+        )
+        .bind(id, name, imageUrl, user.id, createdAt),
+      c.env.DB.prepare(`DELETE FROM "PlaylistSong" WHERE "playlistId" = ?`).bind(id),
+    ];
+    const batches: ReturnType<typeof c.env.DB.prepare>[][] = [];
+    for (let i = 0; i < Math.max(members.length, 1); i += SONG_CHUNK) {
+      const statements = i === 0 ? head : [];
+      members.slice(i, i + SONG_CHUNK).forEach((song, j) => statements.push(...songStatements(id, song, i + j)));
+      batches.push(statements);
+    }
+    batches[batches.length - 1].push(
+      c.env.DB.prepare(`UPDATE "Playlist" SET "convertedAt" = ? WHERE "id" = ?`).bind(now, id),
+    );
+    for (const statements of batches) await c.env.DB.batch(statements);
+
+    const expected = members.length;
+    const countRows = await db<{ n: number }>`SELECT COUNT(*) AS "n" FROM "PlaylistSong" WHERE "playlistId" = ${id}`;
+    const count = Number(countRows[0]?.n ?? 0);
+    results.push({ id, name, count, expected, ok: count === expected });
+  }
+
+  convertedFolderCache = null; // force the routing gate to re-read the new converted set
+  const allOk = results.every((r) => r.ok);
+  return c.json({ ok: allOk, converted: results.length, results }, allOk ? 200 : 207);
 });
 
 // Profile avatars are served without auth: plain <img> loads from the native

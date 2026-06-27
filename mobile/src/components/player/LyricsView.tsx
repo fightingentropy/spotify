@@ -24,6 +24,10 @@ import type { PlayerSong } from "@/types/player";
 // Highlight slightly ahead of the audio clock so the line lands on the beat
 // instead of trailing it (progress ticks at ~4Hz).
 const SYNC_LOOKAHEAD_SEC = 0.25;
+// Tapping a line seeks a hair before its timestamp so you catch the verse from
+// its first word — fast-rapped lines fly by in well under a second, and the
+// native seek/resume costs a moment too. Never backs past the previous line.
+const TAP_SEEK_LEAD_SEC = 0.45;
 // How long after the user scrolls before auto-centering resumes.
 const USER_SCROLL_HOLD_MS = 2_600;
 
@@ -208,7 +212,11 @@ function SyncedLyrics({ lines, greekPhonetics }: { lines: LrcLine[]; greekPhonet
               // Let the highlight follow the seek immediately rather than
               // waiting out the user-scroll hold from this tap.
               userScrollUntil.current = 0;
-              void seekTo(line.time);
+              // Land a touch early so the first word isn't already gone, but
+              // never before the previous line's start.
+              const prev = i > 0 ? lines[i - 1] : undefined;
+              const floor = prev && prev.time >= 0 ? prev.time : 0;
+              void seekTo(Math.max(floor, line.time - TAP_SEEK_LEAD_SEC));
             }}
           >
             <Text className="text-[21px] font-bold leading-7" style={{ color: isActive ? colors.emerald : colors.dim }}>

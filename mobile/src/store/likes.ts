@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { patchLikeApiCache } from "@/lib/api";
+import { expandLikedSet, onIdMapChange } from "@/lib/canonical-ids";
 import { promoteStagedSong } from "@/lib/discover-keep";
 import { impactLight } from "@/lib/haptics";
 import { apiFetch } from "@/lib/http";
@@ -23,7 +24,11 @@ type LikesState = {
   likedSongIds: Record<string, true>;
   pending: Record<string, true>;
   hydrated: boolean;
+  // The raw (un-expanded) server liked set from the last merge, so we can
+  // re-expand it the moment the canonical id-map loads or changes.
+  rawRemoteLiked: string[];
   mergeInitial: (ids: string[]) => void;
+  reexpand: () => void;
   resetRemote: () => void;
   toggleLike: (songId: string, nextLiked: boolean, song?: PlayerSong) => Promise<LikeToggleResult>;
 };
@@ -79,8 +84,12 @@ export const useLikesStore = create<LikesState>((set, get) => ({
   likedSongIds: readLocalLikedSongIds(),
   pending: {},
   hydrated: false,
+  rawRemoteLiked: [],
   mergeInitial: (ids) => {
-    const list = Array.isArray(ids) ? ids : [];
+    const raw = Array.isArray(ids) ? ids : [];
+    // Canonical like-once: also light every retired copy id of each liked
+    // (anchor) song. Identity while the id-map is empty (flag off / not loaded).
+    const list = expandLikedSet(raw);
     const current = get().likedSongIds;
     const pending = get().pending;
     const next: Record<string, true> = {};
@@ -107,8 +116,11 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     const nextKeys = Object.keys(next);
     const changed = currentKeys.length !== nextKeys.length || nextKeys.some((id) => !current[id]);
 
-    if (changed) set({ likedSongIds: next, hydrated: true });
-    else if (!get().hydrated) set({ hydrated: true });
+    if (changed) set({ likedSongIds: next, hydrated: true, rawRemoteLiked: raw });
+    else if (!get().hydrated || get().rawRemoteLiked !== raw) set({ hydrated: true, rawRemoteLiked: raw });
+  },
+  reexpand: () => {
+    get().mergeInitial(get().rawRemoteLiked);
   },
   resetRemote: () => {
     const current = get().likedSongIds;

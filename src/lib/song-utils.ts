@@ -10,6 +10,12 @@ export function normalizeCoverImageUrl(url: string | null | undefined): string {
 export function normalizeMediaUrl(url: string | null | undefined): string {
   if (!url) return "";
   if (url.startsWith("/api/files/")) {
+    // Signed mini media URLs carry an HMAC (spotify_sig=) computed over the
+    // percent-ENCODED pathname. Decoding would change the path and invalidate the
+    // signature for filenames containing # % + ? & (→ 403 on stream/artwork), so
+    // pass any signed URL through byte-for-byte. A valid signature already
+    // guarantees the URL is exactly what the mini intended.
+    if (url.includes("spotify_sig=")) return url;
     const encoded = url.slice("/api/files/".length);
     let decoded = encoded;
     for (let i = 0; i < 2; i++) {

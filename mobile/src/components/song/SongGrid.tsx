@@ -22,6 +22,7 @@ export function SongGrid({
   initialMode = "grid",
   contentBottomInset = layout.mobileNavHeight + layout.mobilePlayerHeight + 24,
   contextKey,
+  playlistContext,
 }: {
   songs: PlayerSong[];
   header?: ReactElement | null;
@@ -33,6 +34,9 @@ export function SongGrid({
   // Tags playback started from a row tap with the collection it came from, so
   // that collection's Play button stays in sync (Pause/resume vs restart).
   contextKey?: string;
+  // The editable playlist these rows belong to — enables per-row "Remove from
+  // this playlist". Pass a STABLE object (useMemo) so list rows stay memoized.
+  playlistContext?: { id: string; name: string };
 }) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const numColumns = mode === "grid" ? 2 : 1;
@@ -47,9 +51,9 @@ export function SongGrid({
           </View>
         );
       }
-      return <SongListItem song={item} onPress={onPress} />;
+      return <SongListItem song={item} onPress={onPress} playlist={playlistContext} />;
     },
-    [mode, numColumns, songs, contextKey],
+    [mode, numColumns, songs, contextKey, playlistContext],
   );
 
   const toggleBar = showToggle ? (

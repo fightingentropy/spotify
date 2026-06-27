@@ -40,6 +40,11 @@ type LocalSongEntry = {
   relativePath: string;
   size: number;
   mtimeMs: number;
+  // Inode identity. Two entries with the same (dev, ino) are hard links to ONE
+  // physical file — the guaranteed-safe signal that they are the same song
+  // (different rips never share an inode). Drives canonical-id assignment.
+  ino: number;
+  dev: number;
 };
 
 type LibrarySnapshot = {
@@ -73,6 +78,10 @@ type PersistentSongCache = {
       size: number;
       mtimeMs: number;
       sidecarMtimeMs?: number;
+      // Persisted so the cached-snapshot path can regroup by inode without a
+      // re-stat. Optional for forward-compat; the v4 bump guarantees presence.
+      ino?: number;
+      dev?: number;
       song: PlayerSong;
     }
   >;
@@ -119,7 +128,9 @@ const LYRICS_EXTENSIONS = new Set([".lrc", ".txt"]);
 // v3: forces a one-time full rescan so cover/lyrics sidecars created by the
 // backfill scripts get discovered (cached entries only re-check the audio
 // file and its .spotify.json mtimes, not newly-appearing sidecar files).
-const SCAN_CACHE_VERSION = 3;
+// v4: persists (ino, dev) per entry so content-canonical ids can be assigned
+// from the cached-snapshot path without re-statting every file.
+const SCAN_CACHE_VERSION = 4;
 const LIKES_CACHE_VERSION = 1;
 const ARTWORK_CACHE_VERSION = 2;
 const LOCAL_USER = {
@@ -959,7 +970,49 @@ async function writePersistentCache(source: LibrarySource, cache: PersistentSong
   await rename(tempPath, source.cachePath);
 }
 
-function buildLibrarySnapshot(entries: LocalSongEntry[], scannedAt = Date.now()): LibrarySnapshot {
+// Assigns every entry a content-canonical id derived from its inode group's
+// anchor. Files that are hard links of one song share an inode, so they collapse
+// onto a single canonical id WITHOUT changing each file's own `song.id`. The
+// anchor (root-preferred path, else lexicographically-smallest) computes its
+// canonical id with the SAME formula + per-user-source prefixing as
+// songFromFile(), so the anchor's own id already equals the canonical id and
+// existing id lookups keep resolving — only collapsed duplicate copies pick up a
+// canonicalId that differs from their id. Different rips never share an inode, so
+// this never merges distinct songs.
+function assignCanonicalIds(source: LibrarySource, entries: LocalSongEntry[]): void {
+  const groups = new Map<string, LocalSongEntry[]>();
+  for (const entry of entries) {
+    // ino is always > 0 for a real file; a missing/zero ino (malformed cache)
+    // gets a per-path key so unrelated entries never group together.
+    const key = entry.ino > 0 ? `${entry.dev}:${entry.ino}` : `solo:${entry.relativePath}`;
+    const group = groups.get(key);
+    if (group) group.push(entry);
+    else groups.set(key, [entry]);
+  }
+  for (const group of groups.values()) {
+    let anchor = group[0];
+    for (const entry of group) {
+      const entryAtRoot = !entry.relativePath.includes("/");
+      const anchorAtRoot = !anchor.relativePath.includes("/");
+      if (entryAtRoot !== anchorAtRoot) {
+        if (entryAtRoot) anchor = entry; // prefer a root-level copy as the anchor
+      } else if (entry.relativePath.localeCompare(anchor.relativePath) < 0) {
+        anchor = entry; // tie-break: lexicographically-smallest path
+      }
+    }
+    const canonicalId = stableSongId(
+      source.shared ? anchor.relativePath : `${source.key}/${anchor.relativePath}`,
+    );
+    for (const entry of group) entry.song.canonicalId = canonicalId;
+  }
+}
+
+function buildLibrarySnapshot(
+  source: LibrarySource,
+  entries: LocalSongEntry[],
+  scannedAt = Date.now(),
+): LibrarySnapshot {
+  assignCanonicalIds(source, entries);
   const songs = entries
     .map((entry) => entry.song)
     .sort((left, right) => {
@@ -992,10 +1045,12 @@ async function readCachedLibrarySnapshot(source: LibrarySource): Promise<Library
       relativePath,
       size: cached.size,
       mtimeMs: cached.mtimeMs,
+      ino: typeof cached.ino === "number" ? cached.ino : 0,
+      dev: typeof cached.dev === "number" ? cached.dev : 0,
     });
   }
 
-  return entries.length ? buildLibrarySnapshot(entries) : null;
+  return entries.length ? buildLibrarySnapshot(source, entries) : null;
 }
 
 function cachedStatMatches(
@@ -1041,6 +1096,8 @@ async function scanLibrary(source: LibrarySource, usePersistentCache = true): Pr
         size: fileStat.size,
         mtimeMs: fileStat.mtimeMs,
         sidecarMtimeMs,
+        ino: fileStat.ino,
+        dev: fileStat.dev,
         song,
       };
 
@@ -1050,6 +1107,8 @@ async function scanLibrary(source: LibrarySource, usePersistentCache = true): Pr
         relativePath: file.relativePath,
         size: fileStat.size,
         mtimeMs: fileStat.mtimeMs,
+        ino: fileStat.ino,
+        dev: fileStat.dev,
       };
     } catch (error) {
       // A file can vanish between the directory walk and this stat (e.g. an
@@ -1069,7 +1128,7 @@ async function scanLibrary(source: LibrarySource, usePersistentCache = true): Pr
 
   await writePersistentCache(source, nextCache).catch(() => {});
 
-  return buildLibrarySnapshot(presentEntries);
+  return buildLibrarySnapshot(source, presentEntries);
 }
 
 function refreshLibrary(source: LibrarySource, usePersistentCache = true): Promise<LibrarySnapshot> {
@@ -1245,13 +1304,40 @@ function likesCachePath(source: LibrarySource): string {
   return resolve(dirname(source.cachePath), "local-music-likes.json");
 }
 
+// Folds the persisted likes set onto content-canonical ids at read time so a
+// like recorded under ANY physical copy lights the one logical song
+// (like-once-everywhere). Gated so the dark deploy keeps exact legacy behavior
+// until the new app ships and the flag is flipped alongside PLAYLISTS_EDITABLE.
+const CANONICAL_LIKES_ENABLED = process.env.SPOTIFY_CANONICAL_LIKES === "1";
+
+const canonicalIdOf = (song: PlayerSong): string => song.canonicalId ?? song.id;
+
 function visibleSongIds(songs: PlayerSong[]): Set<string> {
-  return new Set(songs.map((song) => song.id));
+  const ids = new Set<string>();
+  for (const song of songs) {
+    ids.add(song.id);
+    ids.add(canonicalIdOf(song));
+  }
+  return ids;
 }
 
 function filterVisibleLikedSongIds(ids: Iterable<string>, songs: PlayerSong[]): string[] {
   const visible = visibleSongIds(songs);
   return Array.from(new Set(ids)).filter((id) => visible.has(id));
+}
+
+// Maps every (possibly legacy) liked id onto its canonical id and keeps only
+// those whose canonical song is currently visible — collapsing duplicate copies
+// to a single liked id. Idempotent on an already-canonical set.
+function canonicalizeLikedIds(ids: Iterable<string>, songs: PlayerSong[]): string[] {
+  const toCanonical = new Map(songs.map((song) => [song.id, canonicalIdOf(song)] as const));
+  const visibleCanonical = new Set(songs.map(canonicalIdOf));
+  const out = new Set<string>();
+  for (const id of ids) {
+    const canonical = toCanonical.get(id) ?? id;
+    if (visibleCanonical.has(canonical)) out.add(canonical);
+  }
+  return Array.from(out);
 }
 
 async function writePersistentLikes(source: LibrarySource, likedSongIds: Iterable<string>): Promise<void> {
@@ -1315,7 +1401,9 @@ async function backfillLegacyLikesForSource(source: LibrarySource, songs: Player
 async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]): Promise<string[]> {
   const stored = await readPersistentLikes(source);
   if (stored !== null) {
-    return filterVisibleLikedSongIds(stored, songs);
+    return CANONICAL_LIKES_ENABLED
+      ? canonicalizeLikedIds(stored, songs)
+      : filterVisibleLikedSongIds(stored, songs);
   }
   // No cache yet: report the legacy default (all songs liked) WITHOUT writing on
   // this GET path. The shared source is backfilled at startup; per-user sources
@@ -1324,7 +1412,9 @@ async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]):
   if (!source.shared && !likesBackfilled.has(source.key)) {
     void backfillLegacyLikesForSource(source, songs).catch(() => {});
   }
-  return songs.map((song) => song.id);
+  return CANONICAL_LIKES_ENABLED
+    ? Array.from(new Set(songs.map(canonicalIdOf)))
+    : songs.map((song) => song.id);
 }
 
 async function setSongLikedForSource(
@@ -1341,7 +1431,9 @@ async function setSongLikedForSource(
     const liked = new Set(await likedSongIdsForSongs(source, songs));
     if (nextLiked) liked.add(songId);
     else liked.delete(songId);
-    const likedSongIds = filterVisibleLikedSongIds(liked, songs);
+    const likedSongIds = CANONICAL_LIKES_ENABLED
+      ? canonicalizeLikedIds(liked, songs)
+      : filterVisibleLikedSongIds(liked, songs);
     await writePersistentLikes(source, likedSongIds);
     // A successful explicit write satisfies the legacy backfill too.
     likesBackfilled.add(source.key);
@@ -2962,6 +3054,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
         createdAt: song.createdAt,
         source: song.source,
         localPath: song.localPath,
+        lyricsUrl: song.lyricsUrl,
       })),
     }, { cacheControl: "private, max-age=300, stale-while-revalidate=600" });
   }
@@ -3037,7 +3130,11 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const likedSongIds = await likedSongIdsForSongs(source, songs);
     const likedLookup = new Set(likedSongIds);
     return jsonCached(request, {
-      songs: songs.filter((song) => likedLookup.has(song.id)),
+      // With the canonical fold on, likedSongIds are canonical ids; return one
+      // song per liked id (the anchor) so collapsed copies don't duplicate.
+      songs: CANONICAL_LIKES_ENABLED
+        ? songs.filter((song) => canonicalIdOf(song) === song.id && likedLookup.has(song.id))
+        : songs.filter((song) => likedLookup.has(song.id)),
       likedSongIds,
     });
   }
@@ -3068,6 +3165,37 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     if (!source) return jsonCached(request, []);
     const snapshot = await getLibrary(source);
     return jsonCached(request, songsForRequest(snapshot.songs, request));
+  }
+
+  // Content-canonical id map: { legacyId: canonicalId } for every collapsed
+  // duplicate copy (song.id !== canonicalId). The app applies this once per
+  // map-version at launch to rekey downloads / likes / resume off retired copy
+  // ids onto the surviving canonical id. Always available (inert to old
+  // clients; the app aborts its remap if this fetch fails). `version` hashes the
+  // map CONTENTS so it is stable across no-op rescans and only changes when the
+  // mapping actually changes (so the app re-reconciles on a later anchor flip).
+  // Must be matched before the "/api/songs/" id catch-all below.
+  if (pathname === "/api/songs/id-map" && request.method === "GET") {
+    // Tie the id-map to the canonical-likes flag: while it's off the client must
+    // NOT expand likes (likes are still per-file), so hand back an empty map.
+    // Flipping the flag is what activates like-once on the client — no separate
+    // client flag, no app-ships-before-flag leak.
+    if (!CANONICAL_LIKES_ENABLED) return jsonCached(request, { version: "empty", map: {} });
+    const source = librarySourceForRequest(request);
+    if (!source) return jsonCached(request, { version: "empty", map: {} });
+    const snapshot = await getLibrary(source);
+    const songs = songsForRequest(snapshot.songs, request);
+    const map: Record<string, string> = {};
+    for (const song of songs) {
+      const canonical = song.canonicalId ?? song.id;
+      if (canonical !== song.id) map[song.id] = canonical;
+    }
+    const signature = Object.keys(map)
+      .sort()
+      .map((legacyId) => `${legacyId}:${map[legacyId]}`)
+      .join("|");
+    const version = signature ? createHash("sha1").update(signature).digest("hex").slice(0, 16) : "empty";
+    return jsonCached(request, { version, map }, { cacheControl: "private, max-age=60" });
   }
 
   if (pathname === "/api/songs" && request.method === "POST") {

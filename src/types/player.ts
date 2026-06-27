@@ -1,5 +1,10 @@
 export type PlayerSong = {
   id: string;
+  // Content-canonical id: shared by every physical copy of the same song (files
+  // that share an inode) so one logical song can be referenced from many
+  // playlists and liked once. Equals `id` for the anchor copy; only collapsed
+  // duplicate copies have a canonicalId that differs from their id.
+  canonicalId?: string;
   title: string;
   artist: string;
   album?: string;

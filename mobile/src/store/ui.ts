@@ -9,6 +9,18 @@ export type TrackActionsTarget = {
   song: PlayerSong;
   canLike: boolean;
   showLike: boolean;
+  // When the song is opened from an editable playlist, offer "Remove from this
+  // playlist". Carried so the global TrackActionsMenu can act without prop-drilling.
+  playlist?: { id: string; name: string };
+} | null;
+
+// A generic name-input dialog reused for Create playlist + Rename playlist.
+export type NamePromptTarget = {
+  title: string;
+  initialValue: string;
+  confirmLabel: string;
+  placeholder?: string;
+  onSubmit: (name: string) => void;
 } | null;
 
 // Long-press actions for a Your Library row (pin / unpin). `cover` is the same
@@ -33,6 +45,9 @@ type UiState = {
   songSortContext: string | null;
   trackActions: TrackActionsTarget;
   libraryActions: LibraryActionsTarget;
+  // The song being added to a playlist (drives AddToPlaylistSheet), or null.
+  addToPlaylistSong: PlayerSong | null;
+  namePrompt: NamePromptTarget;
   openNowPlaying: () => void;
   closeNowPlaying: () => void;
   openQueue: () => void;
@@ -51,6 +66,10 @@ type UiState = {
   closeTrackActions: () => void;
   openLibraryActions: (target: NonNullable<LibraryActionsTarget>) => void;
   closeLibraryActions: () => void;
+  openAddToPlaylist: (song: PlayerSong) => void;
+  closeAddToPlaylist: () => void;
+  openNamePrompt: (target: NonNullable<NamePromptTarget>) => void;
+  closeNamePrompt: () => void;
 };
 
 export const useUiStore = create<UiState>((set) => ({
@@ -63,6 +82,8 @@ export const useUiStore = create<UiState>((set) => ({
   songSortContext: null,
   trackActions: null,
   libraryActions: null,
+  addToPlaylistSong: null,
+  namePrompt: null,
   openNowPlaying: () => set({ nowPlayingOpen: true }),
   closeNowPlaying: () => set({ nowPlayingOpen: false }),
   openQueue: () => set({ queueOpen: true }),
@@ -81,4 +102,8 @@ export const useUiStore = create<UiState>((set) => ({
   closeTrackActions: () => set({ trackActions: null }),
   openLibraryActions: (target) => set({ libraryActions: target }),
   closeLibraryActions: () => set({ libraryActions: null }),
+  openAddToPlaylist: (song) => set({ addToPlaylistSong: song }),
+  closeAddToPlaylist: () => set({ addToPlaylistSong: null }),
+  openNamePrompt: (target) => set({ namePrompt: target }),
+  closeNamePrompt: () => set({ namePrompt: null }),
 }));

@@ -13,7 +13,9 @@ import { SongListItem } from "@/components/SongListItem";
 
 type SongGridProps = {
   songs: PlayerSong[];
-  likedSongIds?: string[];
+  // null when the server couldn't determine the like set (e.g. owner's mini
+  // unreachable for a converted folder) — must NOT trigger the non-additive merge.
+  likedSongIds?: string[] | null;
   hideIfUnliked?: boolean;
   canLike?: boolean;
   showLikeControls?: boolean;
@@ -131,6 +133,9 @@ export function SongGrid({
   // Only hydrate likes once on mount, not on every prop change
   const likedSongIdsRef = useRef<string[]>([]);
   useEffect(() => {
+    // Skip when the server sent no like set (null): merging is non-additive and
+    // would wipe every local-server heart until the next successful load.
+    if (!Array.isArray(likedSongIds)) return;
     if (!haveSameIds(likedSongIdsRef.current, likedSongIds)) {
       likedSongIdsRef.current = likedSongIds.slice();
       mergeInitial(likedSongIds);
@@ -139,7 +144,7 @@ export function SongGrid({
 
   const initialLookup = useMemo(() => {
     const map: Record<string, true> = {};
-    for (const id of likedSongIds) {
+    for (const id of likedSongIds ?? []) {
       if (typeof id === "string" && id.length > 0) {
         map[id] = true;
       }

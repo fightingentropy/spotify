@@ -1,22 +1,25 @@
-import { useEffect, useMemo } from "react";
-import { Text, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { Music, Pause, Play, Shuffle } from "lucide-react-native";
+import { MoreHorizontal, Music, Pause, Pencil, Play, Shuffle, Trash2 } from "lucide-react-native";
 import { BatchDownloadButton } from "@/components/song/BatchDownloadButton";
 import { SongGrid } from "@/components/song/SongGrid";
 import { SongSortBar } from "@/components/song/SongSortBar";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
+import { Sheet } from "@/components/ui/Sheet";
 import { EmptyState, ErrorText } from "@/components/ui/States";
 import { type PlaylistPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { deletePlaylist, renamePlaylist } from "@/lib/playlist-actions";
 import { useArtworkColor } from "@/lib/useArtworkColor";
 import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 import { sortSongs, useSongSort } from "@/store/song-sort";
+import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 export default function PlaylistScreen() {
@@ -30,7 +33,11 @@ export default function PlaylistScreen() {
   );
   const mergeInitialLikes = useLikesStore((s) => s.mergeInitial);
   useEffect(() => {
-    mergeInitialLikes(data.likedSongIds);
+    // Only merge when the server actually sent a like set. A converted folder
+    // returns likedSongIds=null when the mini's like set is unreachable; merging
+    // (non-additive) on null/non-array would wipe every local-server heart, so
+    // skip it and keep the current hearts until a successful liked/library load.
+    if (Array.isArray(data.likedSongIds)) mergeInitialLikes(data.likedSongIds);
   }, [mergeInitialLikes, data.likedSongIds]);
 
   // Tag the queue with this playlist so the big Play button mirrors the player
@@ -52,6 +59,48 @@ export default function PlaylistScreen() {
   const tint = useArtworkColor(cover);
   const heroColor = tint ?? "#3f3f46";
   const showPause = isThisContext && isPlaying;
+
+  // Editable = D1-backed (a converted folder or a native playlist). Folder-backed
+  // playlists (local-folder-*) can be renamed + edited but NOT deleted in-app
+  // (that would mean deleting files on the server), so the worker rejects it.
+  const router = useRouter();
+  const openNamePrompt = useUiStore((s) => s.openNamePrompt);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const editable = !!data.playlist?.editable;
+  const canDelete = editable && !(typeof id === "string" && id.startsWith("local-folder-"));
+  // Stable so memoized song rows don't re-render every frame.
+  const playlistContext = useMemo(
+    () => (editable && typeof id === "string" ? { id, name } : undefined),
+    [editable, id, name],
+  );
+
+  const handleRename = () => {
+    if (typeof id !== "string") return;
+    openNamePrompt({
+      title: "Rename playlist",
+      initialValue: name,
+      confirmLabel: "Save",
+      onSubmit: (next) =>
+        void renamePlaylist(id, next).catch((err) =>
+          Alert.alert("Couldn't rename", err instanceof Error ? err.message : "Please try again."),
+        ),
+    });
+  };
+
+  const handleDelete = () => {
+    if (typeof id !== "string") return;
+    Alert.alert("Delete playlist?", `“${name}” will be removed from your library.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () =>
+          void deletePlaylist(id)
+            .then(() => router.back())
+            .catch((err) => Alert.alert("Couldn't delete", err instanceof Error ? err.message : "Please try again.")),
+      },
+    ]);
+  };
 
   // Spotify-style hero: a gradient tinted by the cover art, the large artwork, the
   // title + count, then the download · shuffle · play action row. Rendered as the
@@ -104,6 +153,13 @@ export default function PlaylistScreen() {
       >
         <View className="flex-row items-center" style={{ gap: 22 }}>
           {count > 0 ? <BatchDownloadButton songs={songs} scope={contextKey} size={30} /> : null}
+          {editable ? (
+            <PressableScale onPress={() => setMenuOpen(true)} hitSlop={8} accessibilityLabel="Playlist options">
+              <View>
+                <MoreHorizontal size={26} color={colors.iconIdle} />
+              </View>
+            </PressableScale>
+          ) : null}
           <PressableScale onPress={toggleShuffle} hitSlop={8} accessibilityLabel="Toggle shuffle">
             <View>
               <Shuffle size={26} color={shuffle ? colors.emerald : colors.iconIdle} />
@@ -148,8 +204,47 @@ export default function PlaylistScreen() {
         initialMode="list"
         showToggle={false}
         contextKey={contextKey}
+        playlistContext={playlistContext}
         emptyComponent={loading ? null : <EmptyState title="This playlist is empty" />}
       />
+      <Sheet visible={menuOpen} onClose={() => setMenuOpen(false)} heightPct={0.4} zIndex={200}>
+        <View className="border-b px-5 pb-3 pt-1" style={{ borderColor: colors.line }}>
+          <Text numberOfLines={1} className="text-base font-semibold" style={{ color: colors.foreground }}>
+            {name}
+          </Text>
+          <Text className="text-sm" style={{ color: colors.muted }}>
+            {count} {count === 1 ? "song" : "songs"}
+          </Text>
+        </View>
+        <PressableScale
+          scaleTo={1}
+          onPress={() => {
+            setMenuOpen(false);
+            handleRename();
+          }}
+          className="flex-row items-center gap-4 px-5 py-4"
+        >
+          <Pencil size={22} color={colors.foreground} />
+          <Text className="text-base" style={{ color: colors.foreground }}>
+            Rename
+          </Text>
+        </PressableScale>
+        {canDelete ? (
+          <PressableScale
+            scaleTo={1}
+            onPress={() => {
+              setMenuOpen(false);
+              handleDelete();
+            }}
+            className="flex-row items-center gap-4 px-5 py-4"
+          >
+            <Trash2 size={22} color="#ef4444" />
+            <Text className="text-base" style={{ color: "#ef4444" }}>
+              Delete playlist
+            </Text>
+          </PressableScale>
+        ) : null}
+      </Sheet>
     </View>
   );
 }

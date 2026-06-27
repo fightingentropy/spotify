@@ -69,8 +69,7 @@ CREATE TABLE IF NOT EXISTS "PlaylistSong" (
   "songId" TEXT NOT NULL,
   "order" INTEGER NOT NULL DEFAULT 0,
   UNIQUE ("playlistId", "songId"),
-  FOREIGN KEY ("playlistId") REFERENCES "Playlist"("id") ON DELETE CASCADE ON UPDATE CASCADE,
-  FOREIGN KEY ("songId") REFERENCES "Song"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  FOREIGN KEY ("playlistId") REFERENCES "Playlist"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS "Like" (
@@ -126,6 +125,24 @@ CREATE INDEX IF NOT EXISTS "idx_session_userId" ON "Session" ("userId");
 CREATE INDEX IF NOT EXISTS "idx_ratelimit_resetAt" ON "RateLimit" ("resetAt");
 CREATE INDEX IF NOT EXISTS "idx_playevent_userId_createdAt" ON "PlayEvent" ("userId", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "idx_playevent_userId_songId" ON "PlayEvent" ("userId", "songId");
+
+CREATE TABLE IF NOT EXISTS "SongRef" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "title" TEXT NOT NULL,
+  "artist" TEXT NOT NULL,
+  "album" TEXT,
+  "imageUrl" TEXT NOT NULL DEFAULT '',
+  "audioUrl" TEXT NOT NULL DEFAULT '',
+  "lyricsUrl" TEXT,
+  "duration" REAL,
+  "audioBitDepth" INTEGER,
+  "audioSampleRate" INTEGER,
+  "localPath" TEXT,
+  "userId" TEXT NOT NULL,
+  "createdAt" TEXT,
+  "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "idx_songref_userId" ON "SongRef" ("userId");
 `;
 
 export const D1_SCHEMA_STATEMENTS = D1_SCHEMA_SQL
