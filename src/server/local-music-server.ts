@@ -31,6 +31,13 @@ import {
   fetchPublicHttpUrl,
 } from "../lib/safe-fetch";
 import type { PlayerSong } from "../types/player";
+import {
+  DEFAULT_YOUTUBE_PREVIEW_CONFIG,
+  downloadYouTubePreviewAudioResilient,
+  fetchYouTubeMusicPlaylist,
+  resolveYouTubePreviewMatch,
+  type YouTubePreviewConfig,
+} from "./youtube-preview";
 
 const execFileAsync = promisify(execFile);
 
@@ -101,6 +108,11 @@ type LocalSidecar = {
   coverFile?: string;
   lyricsFile?: string;
   updatedAt?: string;
+  // Pins the song's id independent of its file path. Written by the YouTube
+  // refetch flow so replacing a wrong-version .flac with the correct .opus keeps
+  // the same id — the owner's like (mini-side) and any playlist rows reference
+  // the id, so a path-derived id change would orphan them. See songFromFile.
+  songId?: string;
 };
 
 type KnownFileStat = {
@@ -857,11 +869,15 @@ async function songFromFile(
   fileStat: Stats,
   directoryCache: Map<string, Promise<string[]>>,
 ): Promise<PlayerSong> {
-  const id = stableSongId(source.shared ? relativePath : `${source.key}/${relativePath}`);
   const fileName = basename(absolutePath);
   const stem = fileName.replace(/\.[^.]+$/, "");
   const fallback = titleFromFileName(fileName);
   const sidecar = await readSidecar(absolutePath);
+  // A pinned songId keeps a song's identity stable across a FILE change (the
+  // YouTube-refetch flow rewrites a wrong-version .flac as the correct .opus);
+  // otherwise the path-derived hash changes and orphans the like / playlist rows.
+  const id =
+    sidecar.songId?.trim() || stableSongId(source.shared ? relativePath : `${source.key}/${relativePath}`);
   let metadata: IAudioMetadata | null = null;
 
   try {
@@ -2027,7 +2043,14 @@ type DiscoverStageItem = {
   album?: string;
   imageUrl?: string;
   durationMs?: number;
-  resolved: DiscoverResolved;
+  // Lossless (Add path): the Worker ships a resolved Spotiflac descriptor.
+  resolved?: DiscoverResolved;
+  // Preview/play path: stage a YouTube Opus copy on the mini instead (no resolver).
+  // Preview entries are lossy and must be re-staged via the resolver before promote.
+  preview?: boolean;
+  // When set (YouTube Music mix tracks), the preview stages THIS exact video's
+  // Opus directly — no title/artist search — since we already know the videoId.
+  youtubeVideoId?: string;
 };
 
 type DiscoverStagingEntry = {
@@ -2043,6 +2066,10 @@ type DiscoverStagingEntry = {
   durationMs?: number;
   firstSeenAt: number;
   lastSeenAt: number; // last time this track appeared in a Top-50 sync
+  // false => YouTube Opus preview (lossy). Such an entry is playable but must be
+  // re-staged via the lossless resolver before it can be promoted into the
+  // library. Absent/true => lossless (resolver) — safe to promote.
+  lossless?: boolean;
 };
 
 type DiscoverManifest = {
@@ -2094,6 +2121,72 @@ function withDiscoverManifestLock<T>(task: () => Promise<T>): Promise<T> {
     () => {},
   );
   return run;
+}
+
+// yt-dlp installs into prefixes that launchd's minimal PATH omits, so probe known
+// locations (mirrors ffmpegPath()). ~/.local/bin is checked FIRST because that's
+// where scripts/install-mini-yt-dlp.sh drops the self-updating standalone binary
+// (`yt-dlp -U` weekly) — YouTube breaks extraction often, so the auto-updated copy
+// must win over a possibly-stale Homebrew one.
+function ytDlpPath(): string {
+  const fromEnv = process.env.YT_DLP_PATH?.trim();
+  if (fromEnv) return fromEnv;
+  for (const candidate of [
+    `${homedir()}/.local/bin/yt-dlp`,
+    "/opt/homebrew/bin/yt-dlp",
+    "/usr/local/bin/yt-dlp",
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "yt-dlp";
+}
+
+// Premium cookies (YouTube Music subscriber session) unlock itag 774 (~257k opus).
+// Prefer an explicit env path; otherwise use the standard mini location if present.
+// Absent → anonymous (~131k opus). install-mini-yt-dlp.sh refreshes this file.
+function youtubeCookiesFile(): string | undefined {
+  const fromEnv = process.env.YOUTUBE_COOKIES_FILE?.trim();
+  if (fromEnv) return fromEnv;
+  const standard = `${homedir()}/.config/spotify/youtube-cookies.txt`;
+  return existsSync(standard) ? standard : undefined;
+}
+
+function youtubePreviewConfig(): YouTubePreviewConfig {
+  return {
+    ...DEFAULT_YOUTUBE_PREVIEW_CONFIG,
+    ytDlpPath: ytDlpPath(),
+    ffmpegLocation: dirname(ffmpegPath()),
+    cookiesFile: youtubeCookiesFile(),
+    // yt-dlp shells out to deno (Homebrew) to solve YouTube's n-challenge; under
+    // launchd the server PATH omits it, so add the likely bin dirs explicitly.
+    extraPath: [dirname(ytDlpPath()), dirname(ffmpegPath()), "/opt/homebrew/bin", `${homedir()}/.local/bin`],
+  };
+}
+
+// Resolve a Smart Shuffle rec to a YouTube video and stage its Opus audio. Returns
+// null (caller falls back / skips) when no confident match exists — never stages
+// the wrong track. Keeps native Opus (~140k anon); no lossy re-encode.
+async function fetchYouTubePreviewAudio(item: DiscoverStageItem): Promise<{ bytes: Buffer; ext: string } | null> {
+  const config = youtubePreviewConfig();
+  // YouTube Music mix tracks already carry their videoId — download that exact
+  // video (no search, more accurate + cheaper). Smart Shuffle recs have only a
+  // title/artist, so they match-then-download.
+  let videoId = item.youtubeVideoId;
+  if (!videoId) {
+    const match = await resolveYouTubePreviewMatch(
+      { title: item.title, artist: item.artist, durationMs: item.durationMs },
+      config,
+    ).catch(() => null);
+    if (!match) return null;
+    videoId = match.videoId;
+  }
+  try {
+    const audio = await downloadYouTubePreviewAudioResilient(videoId, config);
+    if (!audio.bytes.byteLength || audio.bytes.byteLength > MAX_AUDIO_BYTES) return null;
+    return audio;
+  } catch {
+    return null;
+  }
 }
 
 // Walk the resolved descriptor's candidates (best first) materializing/fetching
@@ -2182,17 +2275,25 @@ async function writeDiscoverStagedFile(
     durationMs: item.durationMs,
     firstSeenAt: now,
     lastSeenAt: now,
+    lossless: !item.preview,
   };
 }
 
 async function stageDiscoverTrack(source: LibrarySource, item: DiscoverStageItem): Promise<DiscoverStagingEntry | null> {
   const manifest = await readDiscoverManifest(source);
   const existing = manifest.entries[item.trackId];
-  if (existing && existsSync(resolve(source.root, existing.stagedRelPath))) return existing;
+  const existingUsable = existing && existsSync(resolve(source.root, existing.stagedRelPath));
+  // Reuse a staged copy when it satisfies the request. A lossy preview does NOT
+  // satisfy a lossless (Add) request, so fall through and re-stage as FLAC.
+  if (existingUsable && (item.preview || existing.lossless !== false)) return existing;
   if (discoverInFlight.has(item.trackId)) return null;
   discoverInFlight.add(item.trackId);
   try {
-    const audio = await fetchDiscoverCandidateAudio(item.resolved);
+    const audio = item.preview
+      ? await fetchYouTubePreviewAudio(item)
+      : item.resolved
+        ? await fetchDiscoverCandidateAudio(item.resolved)
+        : null;
     if (!audio) return null;
     const entry = await writeDiscoverStagedFile(source, item, audio);
     return withDiscoverManifestLock(async () => {
@@ -2289,8 +2390,21 @@ function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
   const trackId = typeof value.trackId === "string" ? value.trackId.trim() : "";
   const title = typeof value.title === "string" ? value.title.trim() : "";
   const artist = typeof value.artist === "string" ? value.artist.trim() : "";
+  const preview = value.preview === true;
   const resolved = value.resolved;
-  if (!trackId || !title || !artist || !resolved || typeof resolved !== "object") return null;
+  const youtubeVideoId = typeof value.youtubeVideoId === "string" ? value.youtubeVideoId.trim() : "";
+  // A direct-videoId preview (YouTube Music mix) needs only a trackId + videoId —
+  // we download that exact video, so a clean artist isn't required. Everything else
+  // still needs a title + artist to search/label.
+  if (!trackId) return null;
+  if (youtubeVideoId) {
+    if (!title) return null;
+  } else if (!title || !artist) {
+    return null;
+  }
+  // A lossless (Add) item must carry a resolver descriptor; a preview item
+  // resolves on the mini via YouTube and needs none.
+  if (!preview && (!resolved || typeof resolved !== "object")) return null;
   return {
     trackId,
     title,
@@ -2298,7 +2412,9 @@ function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
     album: typeof value.album === "string" ? value.album.trim() : undefined,
     imageUrl: typeof value.imageUrl === "string" ? value.imageUrl.trim() : undefined,
     durationMs: typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : undefined,
-    resolved: resolved as DiscoverResolved,
+    preview,
+    resolved: resolved && typeof resolved === "object" ? (resolved as DiscoverResolved) : undefined,
+    youtubeVideoId: youtubeVideoId || undefined,
   };
 }
 
@@ -2358,10 +2474,94 @@ async function handleDiscoverStageNow(request: Request): Promise<Response> {
   const source = librarySourceForRequest(request);
   if (!source || !source.shared) return forbiddenLibraryResponse();
   const item = normalizeDiscoverStageItem(await readJsonBody<unknown>(request));
-  if (!item) return json({ error: "trackId, title, artist, and resolved are required" }, { status: 400 });
+  if (!item) return json({ error: "trackId, title, artist, and (resolved or preview) are required" }, { status: 400 });
   const entry = await stageDiscoverTrack(source, item);
   if (!entry) return json({ error: "Could not stage this track" }, { status: 502 });
   return json(signDiscoverSong(discoverEntryToSong(entry)));
+}
+
+// A yt-dlp flat-playlist fetch costs ~5-15s, so cache the parsed mix in memory and
+// only re-run yt-dlp every YT_PLAYLIST_CACHE_TTL_MS. The mix "auto-updates", but a
+// short staleness is invisible for a Discover surface — and this keeps repeat opens
+// (and the Home card's worker round-trip) instant. The staged-status overlay is
+// still computed fresh per request from the live manifest; only the track LIST is
+// cached.
+const YT_PLAYLIST_CACHE_TTL_MS = 30 * 60 * 1000;
+const ytPlaylistCache = new Map<string, { at: number; mix: Awaited<ReturnType<typeof fetchYouTubeMusicPlaylist>> }>();
+async function fetchYouTubeMusicPlaylistCached(
+  listId: string,
+): Promise<Awaited<ReturnType<typeof fetchYouTubeMusicPlaylist>>> {
+  const hit = ytPlaylistCache.get(listId);
+  if (hit && Date.now() - hit.at < YT_PLAYLIST_CACHE_TTL_MS) return hit.mix;
+  const mix = await fetchYouTubeMusicPlaylist(listId, youtubePreviewConfig());
+  // Only cache a non-empty result — never poison the cache with a transient
+  // empty/failed fetch (the caller treats empty as a 502).
+  if (mix.entries.length) ytPlaylistCache.set(listId, { at: Date.now(), mix });
+  return mix;
+}
+
+// A YouTube Music mix (e.g. a "Discover Mix" RDTMAK5uy_* auto-mix) surfaced as a
+// read-through playlist. Fetched live via yt-dlp with the owner's Premium cookies,
+// so it's their personalized, auto-updating mix. Each track is a placeholder that
+// stages its YouTube Opus preview on demand by videoId — nothing is written to the
+// library. Owner/shared library only.
+async function handleYouTubeMusicPlaylist(request: Request, listId: string): Promise<Response> {
+  const userId = currentUserIdForRequest(request);
+  if (!userId) return json({ error: "Unauthorized" }, { status: 401 });
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return forbiddenLibraryResponse();
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(listId)) return notFound("Playlist not found");
+
+  let mix: Awaited<ReturnType<typeof fetchYouTubeMusicPlaylist>>;
+  try {
+    mix = await fetchYouTubeMusicPlaylistCached(listId);
+  } catch {
+    return json({ error: "Couldn't load this mix" }, { status: 502 });
+  }
+  if (!mix.entries.length) return json({ error: "This mix is empty right now" }, { status: 502 });
+
+  const manifest = await readDiscoverManifest(source);
+  const songs: PlayerSong[] = mix.entries.map((entry) => {
+    const trackId = `yt:${entry.videoId}`;
+    const cached = manifest.entries[trackId];
+    // Already staged (played before) → an instantly-playable real song.
+    if (cached && existsSync(resolve(source.root, cached.stagedRelPath))) {
+      return signDiscoverSong({ ...discoverEntryToSong(cached), youtubeVideoId: entry.videoId });
+    }
+    // Not staged → a placeholder the discover-stager materializes on play (by
+    // videoId). Empty audioUrl keeps the engine idle until the swap.
+    return {
+      id: `discover:${trackId}`,
+      title: entry.title,
+      artist: entry.artist,
+      imageUrl: entry.imageUrl,
+      audioUrl: "",
+      source: "server",
+      discoverTrackId: trackId,
+      youtubeVideoId: entry.videoId,
+    };
+  });
+
+  return jsonCached(
+    request,
+    {
+      kind: "curated",
+      playlist: {
+        id: `yt-mix-${listId}`,
+        name: mix.title || "Discover Mix",
+        // Prefer a TRACK thumbnail (i.ytimg.com/vi/<id> — stable, always 200) over
+        // the playlist-level s_p thumbnail, which yt-dlp sometimes reports at a size
+        // that 404s (e.g. maxresdefault for a mix that only has mq/sd) → a broken
+        // cover. The first track's art is a fine, reliable mix cover.
+        imageUrl: songs.find((song) => song.imageUrl)?.imageUrl || mix.imageUrl || null,
+        userId,
+        createdAt: new Date().toISOString(),
+      },
+      songs,
+      likedSongIds: [],
+    },
+    { cacheControl: "private, max-age=1800, stale-while-revalidate=3600" },
+  );
 }
 
 async function handleDiscoverPromote(request: Request): Promise<Response> {
@@ -2384,6 +2584,20 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
       if (existing) return json(signDiscoverSong(existing.song));
     }
     return notFound("Staged track not found");
+  }
+
+  // A YouTube preview is lossy — never promote it into the FLAC library. The
+  // client must re-stage this track via the lossless resolver first (POST
+  // /api/discover/stage WITHOUT preview), which overwrites the entry as
+  // lossless; promote then succeeds.
+  if (entry.lossless === false) {
+    return json(
+      {
+        error: "preview_not_lossless",
+        message: "Re-stage this track losslessly before adding it to the library.",
+      },
+      { status: 409 },
+    );
   }
 
   // Already owned (same title+artist already in the library)? Keep that, drop the staging copy.
@@ -2435,6 +2649,153 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
   await removeDiscoverEntry(source, trackId);
   if (!scanned) return json({ error: "Promoted song could not be scanned" }, { status: 500 });
   return json(signDiscoverSong(scanned.song));
+}
+
+// Refetch the CORRECT (studio) version of a library song from YouTube and replace
+// its audio file in place. The wrong-version file is backed up to a scan-ignored
+// ".wrong-version" folder (reversible). The new file keeps the song's ORIGINAL id
+// via a pinned sidecar, so the owner's like + any playlist rows stay valid and the
+// song is served live as the new copy. Owner/shared library only.
+async function handleRefetchYouTube(source: LibrarySource, id: string, request: Request): Promise<Response> {
+  if (!source.shared) return forbiddenLibraryResponse();
+  const snapshot = await getLibrary(source);
+  const entry = snapshot.entriesById.get(id);
+  if (!entry) return notFound("Song not found");
+
+  const body = await readJsonBody<{ title?: unknown; artist?: unknown }>(request);
+  const title = (typeof body?.title === "string" && body.title.trim()) || entry.song.title;
+  const artist = (typeof body?.artist === "string" && body.artist.trim()) || entry.song.artist;
+  if (!title || !artist) return json({ error: "title and artist are required" }, { status: 400 });
+
+  // Deliberately NO duration: the current file is the WRONG version, so its length
+  // would bias the match toward another wrong cut. The matcher's studio/Topic
+  // preference + artist gate pick the canonical version.
+  const config = youtubePreviewConfig();
+  const match = await resolveYouTubePreviewMatch({ title, artist }, config).catch(() => null);
+  if (!match) {
+    return json(
+      { error: "no_youtube_match", message: "Couldn't find a confident YouTube match for this track." },
+      { status: 404 },
+    );
+  }
+
+  let audio: { bytes: Buffer; ext: string } | null = null;
+  try {
+    audio = await downloadYouTubePreviewAudioResilient(match.videoId, config);
+  } catch {
+    audio = null;
+  }
+  if (!audio || !audio.bytes.byteLength || audio.bytes.byteLength > MAX_AUDIO_BYTES) {
+    return json({ error: "download_failed", message: "Couldn't download audio from YouTube." }, { status: 502 });
+  }
+
+  try {
+    await replaceLibraryAudioInPlace(source, entry, id, audio, { title, artist });
+  } catch (err) {
+    console.error("[refetch-youtube] replace failed", err);
+    return json(
+      { error: "refetch_replace_failed", message: err instanceof Error ? err.message : "Couldn't replace the file." },
+      { status: 500 },
+    );
+  }
+
+  const next = await getLibrary(source, true);
+  const updated = next.entriesById.get(id);
+  if (!updated) {
+    return json({ error: "refetch_rescan_failed", message: "Replaced the file but couldn't rescan it." }, { status: 500 });
+  }
+  return json(songForRequest(updated.song, request));
+}
+
+// Best-effort: if the old file has embedded artwork but no cover sibling, extract
+// it to "<stem>.cover.<ext>" so the new (art-less) .opus keeps the album art.
+// Returns the cover filename it wrote (for the sidecar), or undefined.
+async function preserveEmbeddedCover(oldAbs: string, dir: string, stem: string): Promise<string | undefined> {
+  const lowerStem = stem.toLowerCase();
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const hasCover = names.some(
+    (name) =>
+      name.toLowerCase().startsWith(`${lowerStem}.cover.`) ||
+      (IMAGE_EXTENSIONS.has(extname(name).toLowerCase()) && name.replace(/\.[^.]+$/, "").toLowerCase() === lowerStem),
+  );
+  if (hasCover) return undefined;
+  const parsed = await parseFile(oldAbs, { duration: false, skipCovers: false }).catch(() => null);
+  const pic = parsed?.common.picture?.[0];
+  if (!pic?.data?.length) return undefined;
+  const ext = (pic.format || "").includes("png") ? ".png" : ".jpg";
+  const coverName = `${stem}.cover${ext}`;
+  await writeFile(resolve(dir, coverName), Buffer.from(pic.data));
+  return coverName;
+}
+
+async function replaceLibraryAudioInPlace(
+  source: LibrarySource,
+  entry: LocalSongEntry,
+  pinnedId: string,
+  audio: { bytes: Buffer; ext: string },
+  meta: { title: string; artist: string },
+): Promise<void> {
+  const oldAbs = entry.absolutePath;
+  const dir = dirname(oldAbs);
+  const stem = basename(oldAbs, extname(oldAbs));
+  const lowerExt = audio.ext.toLowerCase();
+  // Only write a container the scanner actually indexes — never write bytes under a
+  // mismatched/unknown extension (e.g. raw .webm), which would make the song vanish
+  // from the library. The Opus formats yt-dlp -x produces (.opus/.m4a/.ogg) qualify.
+  if (!AUDIO_EXTENSIONS.has(lowerExt)) {
+    throw new Error(`refetch produced an unsupported audio format: ${lowerExt || "unknown"}`);
+  }
+  const newAbs = resolve(dir, `${stem}${lowerExt}`);
+
+  // 1) Preserve album art before touching the old file — but only when there is no
+  // usable cover already (a valid sidecar ref or a same-stem sibling), to avoid
+  // writing an orphaned extract.
+  const sidecar = await readSidecar(oldAbs);
+  const sidecarCoverValid = !!sidecar.coverFile && existsSync(resolve(dir, sidecar.coverFile));
+  const coverName = sidecarCoverValid ? undefined : await preserveEmbeddedCover(oldAbs, dir, stem).catch(() => undefined);
+
+  // 2) Write the new audio to a temp file FIRST and validate it parses. A failed or
+  // corrupt download must never destroy the existing file — at this point the old
+  // file is still fully intact, so any throw here leaves the library unchanged.
+  const tempPath = `${newAbs}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(tempPath, audio.bytes);
+  try {
+    const probe = await parseFile(tempPath, { duration: true, skipCovers: true });
+    if (!probe.format.duration || probe.format.duration <= 1) {
+      throw new Error("downloaded audio is too short or unreadable");
+    }
+  } catch (err) {
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw err instanceof Error ? err : new Error("downloaded audio failed validation");
+  }
+
+  // 3) Back up the wrong-version audio to a scan-ignored ".wrong-version" dir
+  // (reversible; a dot-dir is skipped by the scanner — Trash auto-empties here).
+  const backupDir = resolve(dir, ".wrong-version");
+  await mkdir(backupDir, { recursive: true });
+  const backupPath = await uniquePath(resolve(backupDir, basename(oldAbs)));
+  await rename(oldAbs, backupPath);
+
+  // 4) Pin the id in the (stem-shared) sidecar BEFORE swapping the audio in, so a
+  // crash can never leave the new audio present with an un-pinned sidecar — which
+  // would mint a fresh path-hash id and orphan the like / playlist rows.
+  sidecar.version = sidecar.version ?? 1;
+  sidecar.songId = pinnedId;
+  sidecar.title = meta.title;
+  sidecar.artist = meta.artist;
+  if (coverName && !sidecar.coverFile) sidecar.coverFile = coverName;
+  sidecar.updatedAt = new Date().toISOString();
+  await writeSidecar(newAbs, sidecar);
+
+  // 5) Atomically move the validated audio into place (same dir → atomic rename).
+  // If this last step fails, restore the original so the song is never left missing.
+  try {
+    await rename(tempPath, newAbs);
+  } catch (err) {
+    await rename(backupPath, oldAbs).catch(() => {});
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 async function handleSongUpload(source: LibrarySource, request: Request): Promise<Response> {
@@ -3147,6 +3508,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     return handleLicensedSourceMaterialize(request);
   }
 
+  if (pathname.startsWith("/api/youtube/playlists/") && request.method === "GET") {
+    return handleYouTubeMusicPlaylist(request, safeDecode(pathname.slice("/api/youtube/playlists/".length)));
+  }
+
   if (pathname === "/api/discover/staging" && request.method === "GET") {
     return handleDiscoverStagingStatus(request);
   }
@@ -3217,6 +3582,12 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
       const source = librarySourceForRequest(request);
       if (!source) return forbiddenLibraryResponse();
       return request.method === "POST" ? handleFetchLyrics(source, id, request) : methodNotAllowed();
+    }
+    if (rest.endsWith("/refetch-youtube")) {
+      const id = safeDecode(rest.slice(0, -"/refetch-youtube".length));
+      const source = librarySourceForRequest(request);
+      if (!source) return forbiddenLibraryResponse();
+      return request.method === "POST" ? handleRefetchYouTube(source, id, request) : methodNotAllowed();
     }
     const id = safeDecode(rest);
     if (request.method === "GET") {

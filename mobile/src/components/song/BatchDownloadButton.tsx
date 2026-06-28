@@ -1,9 +1,11 @@
+import { useMemo } from "react";
 import { ArrowDownCircle } from "lucide-react-native";
 import { View } from "react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { colors } from "@/theme";
 import { type DownloadScope, useBatchDownload, useOfflineStore } from "@/store/offline";
+import { isDiscoverTrack } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
 
 // "Download all" affordance for a playlist / Liked Songs. Outline arrow when
@@ -18,17 +20,25 @@ export function BatchDownloadButton({
   scope: DownloadScope;
   size?: number;
 }) {
-  const agg = useBatchDownload(songs);
+  // Discover tracks (Top 50 / YouTube Discover Mix) can't be downloaded directly —
+  // they stream from the .discover staging cache and must be promoted into the
+  // library first (see DownloadButton). Drop them so "Download all" never queues a
+  // broken empty-URL / lossy-staging download; if the whole playlist is Discover,
+  // render nothing.
+  const downloadable = useMemo(() => songs.filter((song) => !isDiscoverTrack(song)), [songs]);
+  const agg = useBatchDownload(downloadable);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
   const unpinScope = useOfflineStore((s) => s.unpinScope);
 
   const onPress = () => {
     if (agg.status === "downloading") {
-      for (const s of songs) void unpinScope(s.id, scope);
+      for (const s of downloadable) void unpinScope(s.id, scope);
     } else if (agg.status !== "ready") {
-      void queueDownloads(songs, scope);
+      void queueDownloads(downloadable, scope);
     }
   };
+
+  if (downloadable.length === 0) return null;
 
   return (
     <PressableScale

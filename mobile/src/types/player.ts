@@ -27,6 +27,9 @@ export type PlayerSong = {
   // discoverTrackId is the Spotify track id used for that promote call.
   staged?: boolean;
   discoverTrackId?: string;
+  // A YouTube Music mix track: stages its preview Opus directly by this videoId
+  // (no title/artist search). Marks the queue entry for cheap preview staging.
+  youtubeVideoId?: string;
   // Initial-insert sugar marking a Smart Shuffle recommendation interleaved into
   // the queue. Authoritative rec-membership lives in the player store's in-memory
   // `recommendedIds` Set (the id changes on staging, which would drop this flag),

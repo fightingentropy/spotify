@@ -16,6 +16,16 @@ export function isPodcastSong(song: PlayerSong | null | undefined): boolean {
   return song.source === "podcast" || song.id.startsWith("podcast:");
 }
 
+// A Discover track (Top 50 chart / YouTube Discover Mix) playing read-through from
+// the hidden .discover staging cache — NOT a library song. It can't be downloaded
+// directly (an un-played placeholder has no audioUrl; a played one points at the
+// transient, TTL-pruned staging path / a lossy YouTube-mix Opus). To keep one, the
+// user likes / adds it, which PROMOTES it into the library first; download is then
+// available there. So download affordances are hidden for these.
+export function isDiscoverTrack(song: PlayerSong | null | undefined): boolean {
+  return Boolean(song?.discoverTrackId);
+}
+
 export type SongKind = "podcast" | "radio" | "music";
 
 // The "kind" of a queue item. Everything that isn't a podcast or a radio

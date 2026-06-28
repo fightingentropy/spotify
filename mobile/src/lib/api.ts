@@ -78,6 +78,7 @@ function isPersistableApiUrl(url: string): boolean {
   return (
     path === "/api/home" ||
     path === "/api/discover/trending" ||
+    path === "/api/discover/playlists" ||
     path === "/api/search-index" ||
     path === "/api/library" ||
     path === "/api/liked" ||
@@ -565,6 +566,13 @@ export type DiscoverTrack = {
 
 export type DiscoverPayload = {
   tracks: DiscoverTrack[];
+};
+
+// The Home "Discover" first row as clickable, auto-updating playlists (Top 50 +
+// the YouTube Music Discover Mix) instead of a scroll of individual tracks. Each
+// opens /api/playlist/:id like any other playlist.
+export type DiscoverPlaylistsPayload = {
+  playlists: PlaylistEntry[];
 };
 
 export type SearchIndexPayload = {

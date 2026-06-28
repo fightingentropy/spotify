@@ -1,6 +1,6 @@
 import { Alert } from "react-native";
 import { promoteStagedSong } from "@/lib/discover-keep";
-import { isUnstagedDiscoverSong, stageDiscoverSong } from "@/lib/discover-queue";
+import { stageDiscoverSong } from "@/lib/discover-queue";
 import { addSongToPlaylist } from "@/lib/playlist-actions";
 import { addBlocked } from "@/store/smart-shuffle-blocklist";
 import { useLikesStore } from "@/store/likes";
@@ -29,12 +29,16 @@ export async function addRecommendationToContext(song: PlayerSong, _index?: numb
   if (addInFlight.has(guardKey)) return;
   addInFlight.add(guardKey);
   try {
-    // Stage-on-demand: an unplayed rec is a placeholder, so materialize it first
-    // (same endpoint the stager / a tile tap uses), swap the real source into the
-    // queue, then promote — so Add works ahead of playback, like Spotify.
+    // Add commits the rec to the LOSSLESS library, so always (re)stage it via the
+    // resolver first: a rec played from the queue is a lossy YouTube preview, and
+    // an unplayed one is a bare placeholder. A lossless stage overwrites a preview
+    // with FLAC (or returns the existing FLAC fast); the mini refuses to promote a
+    // lossy preview (409 preview_not_lossless), so this re-stage is what keeps the
+    // library FLAC-only. (Add therefore depends on the resolver, like before; only
+    // playback was decoupled from it.)
     let target = song;
-    if (isUnstagedDiscoverSong(song)) {
-      target = await stageDiscoverSong(song);
+    if (song.discoverTrackId) {
+      target = await stageDiscoverSong(song, { preview: false });
       usePlayerStore.getState().replaceStagedSong(song.id, target);
     }
 

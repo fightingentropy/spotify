@@ -51,8 +51,13 @@ function stage(song: PlayerSong, intent: "current" | "prefetch"): void {
   // transient state — otherwise a slow prior-queue rejection could re-poison
   // prefetchFailed after the new-queue reset cleared it.
   const epoch = usePlayerStore.getState().queueToken;
+  // Smart Shuffle recs AND YouTube Music mix tracks preview from YouTube (cheap,
+  // resolver-independent); the curated Discover/Top-50 row stays lossless. Rec
+  // membership lives in recommendedIds (the placeholder id is still current here,
+  // before the staged-id swap); a mix track carries its own youtubeVideoId.
+  const preview = usePlayerStore.getState().recommendedIds.has(id) || Boolean(song.youtubeVideoId);
   inFlight.add(id);
-  void stageDiscoverSong(song)
+  void stageDiscoverSong(song, { preview })
     .then((real) => {
       const state = usePlayerStore.getState();
       const fresh = state.queueToken === epoch;

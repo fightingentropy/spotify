@@ -1,8 +1,9 @@
 import { Alert, Text, View } from "react-native";
-import { Heart, ListEnd, ListPlus, ListStart, ListX } from "lucide-react-native";
+import { Heart, ListEnd, ListPlus, ListStart, ListX, RefreshCw } from "lucide-react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { Sheet } from "@/components/ui/Sheet";
 import { removeSongFromPlaylist } from "@/lib/playlist-actions";
+import { refetchSongFromYouTube } from "@/lib/youtube-refetch-actions";
 import { colors } from "@/theme";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
@@ -22,12 +23,22 @@ export function TrackActionsMenu({ visible, onClose }: { visible: boolean; onClo
   const song = target?.song;
   const playlist = target?.playlist;
 
-  const Row = ({ icon, label, onPress }: { icon: React.ReactNode; label: string; onPress: () => void }) => (
+  const Row = ({
+    icon,
+    label,
+    onPress,
+    closeOnPress = true,
+  }: {
+    icon: React.ReactNode;
+    label: string;
+    onPress: () => void;
+    closeOnPress?: boolean;
+  }) => (
     <PressableScale
       scaleTo={1}
       onPress={() => {
         onPress();
-        onClose();
+        if (closeOnPress) onClose();
       }}
       className="flex-row items-center gap-4 px-5 py-4"
     >
@@ -58,6 +69,29 @@ export function TrackActionsMenu({ visible, onClose }: { visible: boolean; onClo
               label="Add to playlist"
               onPress={() => openAddToPlaylist(song)}
             />
+            {song.source === "server" && song.id.startsWith("local-server:") ? (
+              <Row
+                icon={<RefreshCw size={22} color={colors.foreground} />}
+                label="Refetch correct version (YouTube)"
+                closeOnPress={false}
+                onPress={() =>
+                  Alert.alert(
+                    "Refetch correct version?",
+                    `Replace "${song.title}" with the correct version from YouTube. The current file is backed up to a ".wrong-version" folder so it's recoverable.`,
+                    [
+                      { text: "Cancel", style: "cancel", onPress: () => onClose() },
+                      {
+                        text: "Refetch",
+                        onPress: () => {
+                          onClose();
+                          void refetchSongFromYouTube(song);
+                        },
+                      },
+                    ],
+                  )
+                }
+              />
+            ) : null}
             {target?.showLike && target.canLike ? (
               <Row
                 icon={<Heart size={22} color={liked ? colors.emerald : colors.foreground} fill={liked ? colors.emerald : "transparent"} />}

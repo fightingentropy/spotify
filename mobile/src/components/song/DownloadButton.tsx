@@ -3,7 +3,7 @@ import { type StyleProp, View, type ViewStyle } from "react-native";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { colors } from "@/theme";
-import { isRadioSong } from "@/lib/player-song";
+import { isDiscoverTrack, isRadioSong } from "@/lib/player-song";
 import { type DownloadScope, getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
@@ -28,7 +28,9 @@ export function DownloadButton({
   const progress = useOfflineStore((s) => s.progress[key]);
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
   const unpinScope = useOfflineStore((s) => s.unpinScope);
-  if (isRadioSong(song)) return null;
+  // Radio is live; a Discover track must be promoted into the library before it can
+  // be downloaded (a placeholder has no audioUrl; a staged copy is lossy/transient).
+  if (isRadioSong(song) || isDiscoverTrack(song)) return null;
 
   const status = record?.status;
   const songScope: DownloadScope = scope ?? `song:${song.id}`;

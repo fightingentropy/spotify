@@ -111,6 +111,10 @@ type BatchDownloadPayload = {
 
 type SongPayload = {
   mode?: unknown;
+  // Discover staging: when true, stage a cheap YouTube Opus preview (play/skip)
+  // instead of resolving a lossless source. The lossless resolver is reserved
+  // for the Add-to-library path so the library stays FLAC-only.
+  preview?: unknown;
   title?: unknown;
   artist?: unknown;
   album?: unknown;
@@ -3709,6 +3713,76 @@ async function markDiscoverStaged(
   });
 }
 
+// The YouTube Music auto-updating "Discover Mix" surfaced as a Home playlist card —
+// personalized to the library owner's Premium account (the mini fetches it with the
+// owner's cookies). Playlist id is "yt-mix-<listId>"; tracks stream as Opus preview.
+const YT_DISCOVER_MIX_LIST_ID = "RDTMAK5uy_n_5IN6hzAOwdCnM8D8rzrs3vDl12UcZpA";
+
+// Convert a Discover chart track (with staged status) into a player song — a real,
+// instantly-playable song when staged, else a placeholder the discover-stager
+// materializes on play. Mirrors the mobile discoverTrackToPlayerSong so the Top-50
+// playlist detail renders + plays exactly like the old Discover row (lossless).
+function discoverStagedToPlayerSong(track: DiscoverStagedTrack): PlayerSong {
+  const duration = track.durationMs ? Math.round(track.durationMs / 1000) : undefined;
+  if (track.staged && track.audioUrl && track.audioId) {
+    return {
+      id: track.audioId,
+      title: track.title,
+      artist: track.artist,
+      album: track.album || undefined,
+      imageUrl: track.imageUrl,
+      audioUrl: track.audioUrl,
+      duration,
+      source: "server",
+      staged: true,
+      discoverTrackId: track.id,
+    };
+  }
+  return {
+    id: `discover:${track.id}`,
+    title: track.title,
+    artist: track.artist,
+    album: track.album || undefined,
+    imageUrl: track.imageUrl,
+    audioUrl: "",
+    duration,
+    source: "server",
+    discoverTrackId: track.id,
+  };
+}
+
+// Build the Home "Discover Mix" card from the mini's YT playlist. Best-effort: a
+// short timeout keeps Home fast, and on a miss the card still shows with a fallback
+// name so opening it can retry the live fetch.
+async function youtubeDiscoverMixCard(
+  env: CloudflareEnv,
+): Promise<{ id: string; name: string; imageUrl: string; songsCount: number; resolved: boolean }> {
+  const fallback = { id: `yt-mix-${YT_DISCOVER_MIX_LIST_ID}`, name: "Discover Mix", imageUrl: "", songsCount: 0, resolved: false };
+  try {
+    const res = await macMiniDiscoverFetch(
+      env,
+      `/api/youtube/playlists/${YT_DISCOVER_MIX_LIST_ID}`,
+      "GET",
+      undefined,
+      12_000,
+    );
+    if (!res.ok) return fallback;
+    const body = (await res.json()) as { playlist?: { name?: string; imageUrl?: string | null }; songs?: unknown[] };
+    const songsCount = Array.isArray(body.songs) ? body.songs.length : 0;
+    return {
+      id: fallback.id,
+      name: body.playlist?.name || "Discover Mix",
+      imageUrl: body.playlist?.imageUrl || "",
+      songsCount,
+      // Resolved when we actually got the mix back (tracks present): the card then
+      // has a real cover + count and is safe to cache for longer.
+      resolved: songsCount > 0,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 type CuratedPlaylist = { id: string; name: string; description: string; imageUrl: string };
 
 // Curated playlists surfaced in the app (the Home "Featured playlists" row and
@@ -3786,6 +3860,32 @@ app.get("/api/discover/trending", async (c) => {
   return jsonCached(c, { tracks }, { cacheControl: "private, max-age=30, stale-while-revalidate=300" });
 });
 
+// The Home "Discover" first row as clickable, auto-updating PLAYLISTS (instead of a
+// horizontal scroll of individual tracks): Top 50 (lossless chart) + the YouTube
+// Music Discover Mix (Opus preview, owner's Premium). Each card opens
+// /api/playlist/:id ("discover-top50" / "yt-mix-<listId>").
+app.get("/api/discover/playlists", async (c) => {
+  const playlists: Array<{ id: string; name: string; imageUrl: string; songsCount: number }> = [];
+  // Run the two cards concurrently so the mix's worst-case mini round-trip doesn't
+  // stack on top of the Top-50 fetch.
+  const [top, mix] = await Promise.all([
+    fetchTop50DiscoverTracks(c.env).catch(() => [] as DiscoverTrendingTrack[]),
+    isMacMiniMusicConfigured(c.env) ? youtubeDiscoverMixCard(c.env) : Promise.resolve(null),
+  ]);
+  playlists.push({ id: "discover-top50", name: "Top 50", imageUrl: top[0]?.imageUrl || "", songsCount: top.length });
+  if (mix) {
+    const { resolved, ...card } = mix;
+    playlists.push(card);
+    // If the mix card fell back (mini cold / slow), cache only briefly so the next
+    // load picks up the now-warm mini cache (with the real cover); cache longer once
+    // it resolved.
+    if (!resolved) {
+      return jsonCached(c, { playlists }, { cacheControl: "private, max-age=30, stale-while-revalidate=120" });
+    }
+  }
+  return jsonCached(c, { playlists }, { cacheControl: "private, max-age=600, stale-while-revalidate=3600" });
+});
+
 // Curated playlists for the Home "Featured playlists" row and the Library
 // Playlists section. Cards only — opening one hits /api/playlist/:id, which
 // streams the tracks read-through (see the curated branch there).
@@ -3802,14 +3902,24 @@ app.get("/api/playlists/featured", async (c) => {
 app.post("/api/discover/stage", async (c) => {
   requireUser(c.get("user"));
   if (!isMacMiniMusicConfigured(c.env)) return jsonError("Discover streaming is not available", 503);
-  const payload = await readJson<SongPayload & { trackId?: unknown }>(c.req.raw);
+  const payload = await readJson<SongPayload & { trackId?: unknown; youtubeVideoId?: unknown }>(c.req.raw);
   if (!payload) return jsonError("Invalid JSON body", 400);
+  // A YouTube Music mix track carries its exact videoId (no Spotify id). The mini
+  // stages THAT video's Opus directly — always a preview, never resolver-backed.
+  const youtubeVideoId = toStringValue(payload.youtubeVideoId);
   const trackId = parseSpotifyTrackId(toStringValue(payload.spotifyUrl)) || toStringValue(payload.trackId);
   if (!trackId) return jsonError("Invalid Spotify track URL or ID", 400);
   const title = toStringValue(payload.title);
   const artist = toStringValue(payload.artist);
-  if (!title || !artist) return jsonError("Title and artist are required", 400);
-  const resolved = await resolveStreamUrl(c.env, payload);
+  // A direct-videoId mix track needs only a title (artist is best-effort); a
+  // Spotify-keyed track needs both to search/label.
+  if (!title || (!artist && !youtubeVideoId)) return jsonError("Title and artist are required", 400);
+  // Preview (play/skip): the mini stages a YouTube Opus copy itself — skip the
+  // expensive, outage-prone lossless resolver entirely. Lossless (Add): resolve
+  // a FLAC descriptor as before. The mini enforces that a preview can't be
+  // promoted into the library (409 preview_not_lossless).
+  const preview = payload.preview === true || Boolean(youtubeVideoId);
+  const resolved = preview ? undefined : await resolveStreamUrl(c.env, payload);
   const res = await macMiniDiscoverFetch(
     c.env,
     "/api/discover/stage",
@@ -3821,7 +3931,8 @@ app.post("/api/discover/stage", async (c) => {
       album: toStringValue(payload.album),
       imageUrl: toStringValue(payload.imageUrl),
       durationMs: toNumberValue(payload.durationMs) ?? undefined,
-      resolved,
+      ...(preview ? { preview: true } : { resolved }),
+      ...(youtubeVideoId ? { youtubeVideoId } : {}),
     },
     120_000,
   );
@@ -4494,6 +4605,50 @@ app.get("/api/playlist/:id", async (c) => {
     );
   }
 
+  // The Top 50 chart as an openable playlist (the Home "Top 50" card). Same data as
+  // /api/discover/trending, shaped as a playlist of player songs so the detail
+  // screen renders + plays it like any other playlist (lossless, via discover
+  // staging). Public read-through, before the auth gate — like curated.
+  if (id === "discover-top50") {
+    const tracks = await markDiscoverStaged(c.env, await fetchTop50DiscoverTracks(c.env));
+    return jsonCached(
+      c,
+      {
+        kind: "curated",
+        playlist: {
+          id,
+          name: "Top 50",
+          imageUrl: tracks[0]?.imageUrl || "",
+          description: "The most-played tracks globally, refreshed daily.",
+        },
+        songs: tracks.map(discoverStagedToPlayerSong),
+        likedSongIds: [],
+      },
+      { cacheControl: "private, max-age=30, stale-while-revalidate=300" },
+    );
+  }
+
+  // A YouTube Music mix (the auto-updating "Discover Mix"). Fetched + shaped on the
+  // mini (it has yt-dlp + the owner's Premium cookies); stream-only Opus preview.
+  // The mini returns an already-playlist-shaped body — proxy it straight through.
+  // Unlike curated / discover-top50 (genuinely public: a public Spotify playlist /
+  // the global chart), this mix is the OWNER's personalized recommendations and the
+  // proxy fetches it AS the owner — so it MUST require an authenticated caller, else
+  // any anonymous request would receive the owner's mix + replayable signed media.
+  if (id.startsWith("yt-mix-")) {
+    if (!c.get("user")) return jsonError("Unauthorized", 401);
+    if (!isMacMiniMusicConfigured(c.env)) return jsonError("This mix isn't available", 503);
+    const listId = id.slice("yt-mix-".length);
+    const res = await macMiniDiscoverFetch(
+      c.env,
+      `/api/youtube/playlists/${encodeURIComponent(listId)}`,
+      "GET",
+      undefined,
+      60_000,
+    );
+    return new Response(await res.text(), { status: res.status, headers: { "content-type": "application/json" } });
+  }
+
   const db = c.get("db");
   const user = c.get("user");
   if (!user) return jsonError("Unauthorized", 401);
@@ -5043,6 +5198,87 @@ app.post("/api/songs/:id/assets", async (c) => {
   return c.json(songToPlayerSong(rows[0]));
 });
 
+// Best-effort refresh of any D1 metadata copy of a local song after its file was
+// replaced on the mini (id unchanged — pinned). Covers an editable-playlist
+// SongRef / legacy Song row; a 0-row no-op when the owner's song lives only on the
+// mini. Wrapped per-statement so a missing table/column can't fail the request.
+async function refreshLocalSongRowAudio(db: SqlTag, userId: string, song: PlayerSong): Promise<void> {
+  const audioUrl = song.audioUrl ?? "";
+  const duration = song.duration ?? null;
+  const imageUrl = song.imageUrl ?? "";
+  const bitDepth = song.audioBitDepth ?? null;
+  const sampleRate = song.audioSampleRate ?? null;
+  try {
+    await db`
+      UPDATE "SongRef" SET "audioUrl" = ${audioUrl}, "duration" = ${duration}, "imageUrl" = ${imageUrl},
+        "audioBitDepth" = ${bitDepth}, "audioSampleRate" = ${sampleRate}, "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${song.id} AND "userId" = ${userId}`;
+  } catch {
+    /* table/columns may not exist — ignore */
+  }
+  try {
+    await db`
+      UPDATE "Song" SET "audioUrl" = ${audioUrl}, "duration" = ${duration}, "imageUrl" = ${imageUrl},
+        "audioBitDepth" = ${bitDepth}, "audioSampleRate" = ${sampleRate}
+      WHERE "id" = ${song.id} AND "userId" = ${userId}`;
+  } catch {
+    /* ignore */
+  }
+}
+
+// Refetch the correct (studio) version of a library song from YouTube as Opus and
+// replace its file on the mini. The mini keeps the song's id stable (pinned
+// sidecar) so the owner's like + playlist rows survive; the mini also enforces
+// shared-library ownership (non-owners get 403). We just refresh any D1 copy.
+app.post("/api/songs/:id/refetch-youtube", async (c) => {
+  const user = requireUser(c.get("user"));
+  const id = c.req.param("id");
+  // Only mini library songs can be refetched (defense-in-depth: don't proxy junk to
+  // the mini, and make the contract explicit alongside the mini's ownership check).
+  if (!id.startsWith("local-server:")) return jsonError("This song can't be refetched", 400);
+  const payload = await readJson<{ title?: unknown; artist?: unknown }>(c.req.raw);
+  const headers = macMiniProxyHeaders(c, user);
+  headers.set("content-type", "application/json");
+  headers.set("accept", "application/json");
+  let res: Response;
+  try {
+    res = await fetch(
+      new URL(`/api/songs/${encodeURIComponent(id)}/refetch-youtube`, getMacMiniOrigin(c.env)).toString(),
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ title: toStringValue(payload?.title), artist: toStringValue(payload?.artist) }),
+        signal: AbortSignal.timeout(150_000),
+      },
+    );
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      return jsonError("The music server took too long to refetch this song", 504);
+    }
+    return jsonError("Couldn't reach the music server", 502);
+  }
+  const text = await res.text().catch(() => "");
+  if (!res.ok) {
+    return new Response(text || JSON.stringify({ error: "refetch_failed" }), {
+      status: res.status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  let song: PlayerSong;
+  try {
+    song = JSON.parse(text) as PlayerSong;
+  } catch {
+    return jsonError("Malformed response from the music server", 502);
+  }
+  // The client swaps the live queue audio from this response — reject a structurally
+  // invalid song rather than letting a silent no-op masquerade as success.
+  if (!song || typeof song.id !== "string" || typeof song.audioUrl !== "string" || !song.audioUrl) {
+    return jsonError("The music server returned an invalid song", 502);
+  }
+  await refreshLocalSongRowAudio(c.get("db"), user.id, song);
+  return c.json(song);
+});
+
 app.get("/api/likes", async (c) => {
   const user = c.get("user");
   if (!user) return jsonCached(c, { likes: [], likedSongIds: [] });
@@ -5361,6 +5597,15 @@ app.post("/api/playlist/:id/songs", async (c) => {
   if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
   const body = await readJson<{ song?: unknown; songId?: unknown }>(c.req.raw);
   const song = coercePlayerSongPayload(body?.song);
+  // Defense-in-depth for the FLAC-only library invariant: a Discover / preview track
+  // plays from the hidden `.discover` staging cache (a lossy YouTube-mix Opus, or a
+  // chart track not yet promoted). It must be promoted via /api/discover/promote
+  // before owning a library row — persisting a staging-path SongRef would put a lossy
+  // reference in the library AND leave a dead entry once the cache is TTL-pruned. The
+  // mobile add path promotes first; reject here in case any client doesn't.
+  if (song && song.audioUrl.includes(".discover")) {
+    return jsonError("Promote this track before adding it to a playlist", 409);
+  }
   const songId = (song?.id || toStringValue(body?.songId)).trim();
   if (!songId) return jsonError("song or songId is required", 400);
   if (song) {

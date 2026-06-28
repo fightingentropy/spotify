@@ -1,13 +1,14 @@
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 import { ScrollView, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { EmailVerificationBanner } from "@/components/EmailVerificationBanner";
 import { ProfileButton } from "@/components/profile/ProfileButton";
 import { ScrollerTile } from "@/components/song/ScrollerTile";
+import { PlaylistScrollerTile } from "@/components/playlist/PlaylistScrollerTile";
 import { ErrorText } from "@/components/ui/States";
 import {
-  type DiscoverPayload,
-  type DiscoverTrack,
+  type DiscoverPlaylistsPayload,
   type HomePayload,
   type StatsHomePayload,
   useApiData,
@@ -15,7 +16,6 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { playSongs } from "@/audio/actions";
-import { discoverTrackToPlayerSong } from "@/lib/discover-queue";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import { colors } from "@/theme";
@@ -38,6 +38,7 @@ function HScroller({ children }: { children: React.ReactNode }) {
 }
 
 export default function HomeScreen() {
+  const router = useRouter();
   const { user, status } = useAuth();
   const scope = user?.id ?? status;
 
@@ -56,17 +57,16 @@ export default function HomeScreen() {
     { recentlyPlayed: [], mostPlayed: [] },
     { enabled: status !== "loading", keepPreviousData: true },
   );
-  const { data: discoverData } = useApiData<DiscoverPayload>(
-    "/api/discover/trending",
-    { tracks: [] },
+  // The Discover first row is now auto-updating PLAYLISTS (Top 50 + the YouTube
+  // Music Discover Mix), not individual tracks. Each card opens its detail screen.
+  const { data: discoverData } = useApiData<DiscoverPlaylistsPayload>(
+    "/api/discover/playlists",
+    { playlists: [] },
     { enabled: status !== "loading", keepPreviousData: true },
   );
+  const discoverPlaylists = discoverData.playlists;
 
   const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
-  const currentDiscoverTrackId = usePlayerStore((s) => s.currentSong?.discoverTrackId ?? null);
-  // The active Discover track is still "loading" while it's an un-staged
-  // placeholder (no real src yet) — the stager is materializing it in the background.
-  const currentSongHasAudio = usePlayerStore((s) => Boolean(s.currentSong?.audioUrl));
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const toggle = usePlayerStore((s) => s.toggle);
 
@@ -82,24 +82,6 @@ export default function HomeScreen() {
     }
     playSongs(songs, index);
   };
-
-  const handleDiscover = useCallback(
-    (track: DiscoverTrack) => {
-      // Already the current Discover track → toggle play/pause.
-      if (currentDiscoverTrackId && currentDiscoverTrackId === track.id) {
-        toggle();
-        return;
-      }
-      // Queue the WHOLE Discover row, starting at the tapped track, so there's a
-      // real "up next". Already-staged tracks play instantly; the rest enter as
-      // placeholders and the DiscoverQueueStager materializes each on demand as it
-      // becomes current (and prefetches one ahead). Nothing is added to the library.
-      const tracks = discoverData.tracks;
-      const index = tracks.findIndex((t) => t.id === track.id);
-      playSongs(tracks.map(discoverTrackToPlayerSong), index >= 0 ? index : 0);
-    },
-    [currentDiscoverTrackId, discoverData.tracks, toggle],
-  );
 
   if ((loading && homeData.likedSongIds.length === 0) || status === "loading") {
     return (
@@ -120,26 +102,19 @@ export default function HomeScreen() {
         <EmailVerificationBanner />
         {error ? <View className="mb-4"><ErrorText>{error}</ErrorText></View> : null}
 
-        {discoverData.tracks.length > 0 ? (
+        {discoverPlaylists.length > 0 ? (
           <View className="mb-9">
             <SectionTitle>Discover</SectionTitle>
             <HScroller>
-              {discoverData.tracks.map((track) => {
-                const active = currentDiscoverTrackId === track.id;
-                return (
-                  <ScrollerTile
-                    key={track.id}
-                    title={track.title}
-                    artist={track.artist}
-                    imageUrl={track.imageUrl}
-                    subtitle={undefined}
-                    active={active}
-                    isPlaying={active && isPlaying}
-                    loading={active && isPlaying && !currentSongHasAudio}
-                    onPress={() => handleDiscover(track)}
-                  />
-                );
-              })}
+              {discoverPlaylists.map((pl) => (
+                <PlaylistScrollerTile
+                  key={pl.id}
+                  name={pl.name}
+                  subtitle={pl.songsCount > 0 ? `Playlist • ${pl.songsCount} songs` : "Playlist"}
+                  imageUrl={pl.imageUrl}
+                  onPress={() => router.push(`/playlist/${pl.id}`)}
+                />
+              ))}
             </HScroller>
           </View>
         ) : null}
@@ -189,7 +164,7 @@ export default function HomeScreen() {
           </View>
         ) : null}
 
-        {discoverData.tracks.length === 0 && recentlyPlayed.length === 0 && mostPlayed.length === 0 ? (
+        {discoverPlaylists.length === 0 && recentlyPlayed.length === 0 && mostPlayed.length === 0 ? (
           <View className="pt-20">
             <Text className="text-center" style={{ color: colors.muted }}>
               Your library is empty. Start playing something to see it here.

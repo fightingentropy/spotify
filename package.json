@@ -17,6 +17,7 @@
     "mini:install-caddy": "bash scripts/install-mini-caddy.sh",
     "mini:install-dns-watch": "bash scripts/install-mini-dns-watch.sh",
     "mini:install-server": "bash scripts/install-mini-server.sh",
+    "mini:install-yt-dlp": "bash scripts/install-mini-yt-dlp.sh",
     "mini:sync-music": "bash scripts/sync-mini-music.sh",
     "mini:check": "bash scripts/check-mini.sh",
     "deploy": "vite build && wrangler deploy",

@@ -6,8 +6,10 @@ import { Sheet } from "@/components/ui/Sheet";
 import { type LibraryPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { addSongToPlaylist, createPlaylist } from "@/lib/playlist-actions";
+import { promoteStagedSong } from "@/lib/discover-keep";
 import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
+import type { PlayerSong } from "@/types/player";
 
 // Opened from the track-actions "Add to playlist" row (ui.addToPlaylistSong).
 // Lists the user's editable (D1-backed) playlists + a "New playlist" shortcut.
@@ -25,12 +27,28 @@ export function AddToPlaylistSheet() {
   );
   const editable = data.playlists.filter((p) => p.editable);
 
+  // A Discover track (Top 50 / YouTube Discover Mix) isn't in the library yet — it
+  // plays from the hidden .discover staging cache. Promote it FIRST (exactly like
+  // the like path), so we add the real, scanned library song. A lossless chart
+  // track promotes cleanly; a stream-only YouTube-mix track is rejected by the mini
+  // (409 preview_not_lossless), so adding it would otherwise write a lossy /
+  // soon-to-be-pruned .discover reference into the library — abort with a message
+  // instead. Keeps the library FLAC-only.
+  const resolveAddable = async (current: PlayerSong): Promise<PlayerSong> => {
+    if (!current.discoverTrackId) return current;
+    const promoted = await promoteStagedSong(current);
+    if (!promoted) {
+      throw new Error("This track streams from a mix and can't be saved to a playlist.");
+    }
+    return promoted;
+  };
+
   const add = async (playlistId: string) => {
     const current = song;
     close();
     if (!current) return;
     try {
-      await addSongToPlaylist(playlistId, current);
+      await addSongToPlaylist(playlistId, await resolveAddable(current));
     } catch (error) {
       Alert.alert("Couldn't add to playlist", error instanceof Error ? error.message : "Please try again.");
     }
@@ -46,8 +64,9 @@ export function AddToPlaylistSheet() {
       placeholder: "Playlist name",
       onSubmit: async (name) => {
         try {
+          const addable = current ? await resolveAddable(current) : null;
           const created = await createPlaylist(name);
-          if (current) await addSongToPlaylist(created.id, current);
+          if (addable) await addSongToPlaylist(created.id, addable);
         } catch (error) {
           Alert.alert("Couldn't create playlist", error instanceof Error ? error.message : "Please try again.");
         }

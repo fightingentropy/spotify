@@ -58,22 +58,45 @@ export function isUnstagedDiscoverSong(song: PlayerSong | null | undefined): boo
 // on-demand endpoint a tile tap uses. The response carries a real audioUrl + a
 // stable id; we re-attach `discoverTrackId` so the now-playing highlight survives
 // the swap even if the server response omits it. Throws on failure.
-export async function stageDiscoverSong(song: PlayerSong): Promise<PlayerSong> {
+// `preview: true` stages a cheap YouTube Opus copy on the mini (play/skip) instead
+// of resolving a lossless source — used for Smart Shuffle recs. Omit it (the
+// default) for the curated Discover row and for the Add-to-library path, which
+// need the lossless resolver so the library stays FLAC-only.
+export async function stageDiscoverSong(
+  song: PlayerSong,
+  opts?: { preview?: boolean },
+): Promise<PlayerSong> {
   const trackId = song.discoverTrackId;
   if (!trackId) throw new Error("Not a discover track");
+  // A YouTube Music mix track carries its exact videoId — the mini stages THAT
+  // video's Opus directly (always a preview; there's no Spotify id to resolve). A
+  // chart track goes through the Spotify-keyed path (lossless unless preview).
+  const body = song.youtubeVideoId
+    ? {
+        trackId,
+        youtubeVideoId: song.youtubeVideoId,
+        preview: true,
+        title: song.title,
+        artist: song.artist,
+        album: song.album,
+        durationMs: song.duration ? Math.round(song.duration * 1000) : undefined,
+        imageUrl: song.imageUrl,
+      }
+    : {
+        spotifyUrl: `https://open.spotify.com/track/${trackId}`,
+        region: "US",
+        title: song.title,
+        artist: song.artist,
+        album: song.album,
+        durationMs: song.duration ? Math.round(song.duration * 1000) : undefined,
+        imageUrl: song.imageUrl,
+        qualityProfile: "max",
+        ...(opts?.preview ? { preview: true } : {}),
+      };
   const res = await apiFetch("/api/discover/stage", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      spotifyUrl: `https://open.spotify.com/track/${trackId}`,
-      region: "US",
-      title: song.title,
-      artist: song.artist,
-      album: song.album,
-      durationMs: song.duration ? Math.round(song.duration * 1000) : undefined,
-      imageUrl: song.imageUrl,
-      qualityProfile: "max",
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
