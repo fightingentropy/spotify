@@ -2586,6 +2586,22 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
     return notFound("Staged track not found");
   }
 
+  // Already owned (same title+artist already in the library)? Keep that, drop the
+  // staging copy. Checked BEFORE the lossless guard below so liking / adding a
+  // PREVIEW of a song you already own resolves to the owned FLAC instantly — no
+  // pointless lossless re-stage (a full resolver round-trip + FLAC download) of a
+  // track that's already in the library.
+  const snapshot = await getLibrary(source);
+  const duplicate = snapshot.songs
+    .map((song) => snapshot.entriesById.get(song.id))
+    .find((candidate): candidate is LocalSongEntry =>
+      Boolean(candidate && trackKey(candidate.song.title, candidate.song.artist) === trackKey(entry.title, entry.artist)),
+    );
+  if (duplicate) {
+    await removeDiscoverEntry(source, trackId);
+    return json(signDiscoverSong(duplicate.song));
+  }
+
   // A YouTube preview is lossy — never promote it into the FLAC library. The
   // client must re-stage this track via the lossless resolver first (POST
   // /api/discover/stage WITHOUT preview), which overwrites the entry as
@@ -2598,18 +2614,6 @@ async function handleDiscoverPromote(request: Request): Promise<Response> {
       },
       { status: 409 },
     );
-  }
-
-  // Already owned (same title+artist already in the library)? Keep that, drop the staging copy.
-  const snapshot = await getLibrary(source);
-  const duplicate = snapshot.songs
-    .map((song) => snapshot.entriesById.get(song.id))
-    .find((candidate): candidate is LocalSongEntry =>
-      Boolean(candidate && trackKey(candidate.song.title, candidate.song.artist) === trackKey(entry.title, entry.artist)),
-    );
-  if (duplicate) {
-    await removeDiscoverEntry(source, trackId);
-    return json(signDiscoverSong(duplicate.song));
   }
 
   const stagedAudioPath = resolve(source.root, entry.stagedRelPath);

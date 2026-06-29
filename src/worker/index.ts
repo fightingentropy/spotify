@@ -470,6 +470,14 @@ function coercePlayerSongPayload(value: unknown): PlayerSong | null {
   const duration = toNumberValue(payload.duration);
   const audioBitDepth = toNumberValue(payload.audioBitDepth);
   const audioSampleRate = toNumberValue(payload.audioSampleRate);
+  // Staging identity must survive the round-trip (play events → "Recently played",
+  // playback-state restore). Dropping discoverTrackId here made a re-played catalog/
+  // Discover track un-promotable: liking it found no track id, so the keep targeted
+  // the throwaway "discover:" placeholder id and silently reverted. Keep the fields
+  // the stager/promote path depends on.
+  const discoverTrackId = toStringValue(payload.discoverTrackId);
+  const youtubeVideoId = toStringValue(payload.youtubeVideoId);
+  const preview = payload.preview === true;
   return {
     id,
     title,
@@ -486,6 +494,9 @@ function coercePlayerSongPayload(value: unknown): PlayerSong | null {
     createdAt: createdAt || new Date().toISOString(),
     source: source ? (source as PlayerSong["source"]) : undefined,
     localPath: localPath || undefined,
+    discoverTrackId: discoverTrackId || undefined,
+    youtubeVideoId: youtubeVideoId || undefined,
+    preview: preview || undefined,
   };
 }
 
