@@ -579,6 +579,13 @@ export type SearchIndexPayload = {
   songs: PlayerSong[];
 };
 
+// Catalog search results (songs NOT in the library) from /api/search/catalog —
+// Spotify-sourced, Discover-style placeholders that preview on tap and promote to
+// lossless on a keep. Query-specific + transient, so deliberately NOT persisted.
+export type SearchCatalogPayload = {
+  results: PlayerSong[];
+};
+
 export type LibraryPayload = {
   playlists: PlaylistEntry[];
   userId: string | null;

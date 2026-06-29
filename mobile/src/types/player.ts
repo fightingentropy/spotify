@@ -30,6 +30,10 @@ export type PlayerSong = {
   // A YouTube Music mix track: stages its preview Opus directly by this videoId
   // (no title/artist search). Marks the queue entry for cheap preview staging.
   youtubeVideoId?: string;
+  // A catalog search result that isn't in the library: stage a cheap YouTube Opus
+  // PREVIEW on play (resolver-independent) rather than the full lossless source.
+  // A "keep" action (like / add-to-playlist) still promotes it to lossless FLAC.
+  preview?: boolean;
   // Initial-insert sugar marking a Smart Shuffle recommendation interleaved into
   // the queue. Authoritative rec-membership lives in the player store's in-memory
   // `recommendedIds` Set (the id changes on staging, which would drop this flag),

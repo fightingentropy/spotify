@@ -499,6 +499,28 @@ function collectSearchCandidates(value: unknown, out: SearchCandidate[], depth =
   }
 }
 
+// Narrow a search payload to just its TRACK-results section before harvesting, so a
+// free-text list search doesn't scoop up unrelated tracks from the "top results"
+// carousel or album/artist sub-sections (which is fine for a single best-match
+// resolve, but pollutes a results list). Returns the `tracksV2` (or `tracks`) node
+// nearest the root; null when the shape doesn't expose one, so the caller can fall
+// back to a generic walk.
+function findTrackResultsSection(value: unknown, depth = 0): unknown {
+  if (depth > 8) return null;
+  const object = toObject(value);
+  if (!object) return null;
+  if (object.tracksV2 && typeof object.tracksV2 === "object") return object.tracksV2;
+  // Plain `tracks` only when it's a section wrapper, not a track object itself.
+  if (object.tracks && typeof object.tracks === "object" && !("uri" in object)) return object.tracks;
+  for (const child of Object.values(object)) {
+    if (child && typeof child === "object") {
+      const found = findTrackResultsSection(child, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // Pick the best candidate whose normalized title matches the query AND whose
 // artist tokens overlap the query artist — the guard against resolving to a wrong
 // (but similarly-named) track. Among the matches it prefers the most canonical: a
@@ -650,6 +672,121 @@ export async function searchSpotifyTrackId(
   }
 
   return null;
+}
+
+// Free-text catalog search → a ranked LIST of track candidates (deduped by id).
+// Mirrors searchSpotifyTrackId's surface fallback chain (Pathfinder searchTracks →
+// searchDesktop → public /v1/search), but returns the whole list for a
+// search-results view instead of collapsing to the single best match. There is no
+// title/artist guard here: the caller typed free text, so Spotify's own relevance
+// ordering is exactly what we want to surface. Returns [] on total failure.
+export async function searchSpotifyTracks(
+  query: string,
+  spotifyCookie?: string,
+  limit = 24,
+): Promise<SpotifyBatchTrack[]> {
+  const searchTerm = toStringValue(query).trim();
+  if (!searchTerm) return [];
+
+  // Relevance guard: even scoped to the tracks section, Spotify mixes in related /
+  // popular tracks. Keep only results whose title or artist actually contains one of
+  // the query's meaningful tokens (drop short/stopword tokens so "die with a smile"
+  // keys on die/smile, "sabrina carpenter" on sabrina/carpenter). An all-stopword or
+  // very short query keeps everything rather than filtering to nothing.
+  const STOPWORDS = new Set([
+    "the", "and", "for", "you", "with", "that", "this", "from", "feat", "ft", "a", "an", "of", "to", "in", "on", "my",
+  ]);
+  const queryTokens = searchTerm
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 3 && !STOPWORDS.has(token));
+  const isRelevant = (candidate: SearchCandidate): boolean => {
+    if (queryTokens.length === 0) return true;
+    const haystack = `${candidate.name} ${candidate.artists.join(" ")}`.toLowerCase();
+    return queryTokens.some((token) => haystack.includes(token));
+  };
+
+  const dedupe = (candidates: SearchCandidate[]): SpotifyBatchTrack[] => {
+    const seen = new Set<string>();
+    const out: SpotifyBatchTrack[] = [];
+    for (const candidate of candidates) {
+      if (!candidate.id || seen.has(candidate.id) || !isRelevant(candidate)) continue;
+      seen.add(candidate.id);
+      out.push(candidateToTrack(candidate));
+      if (out.length >= limit) break;
+    }
+    return out;
+  };
+
+  // (1) Pathfinder searchTracks, then (2) searchDesktop — same persisted queries the
+  // single-match resolver uses, so no extra hashes to maintain.
+  for (const surface of [
+    { name: "searchTracks" as const, query: PATHFINDER_QUERIES.searchTracks, extra: { includePreReleases: false } },
+    { name: "searchDesktop" as const, query: PATHFINDER_QUERIES.searchDesktop, extra: {} },
+  ]) {
+    try {
+      const payload = await pathfinderQuery(
+        surface.name,
+        { searchTerm, offset: 0, limit, numberOfTopResults: 5, includeAudiobooks: false, ...surface.extra },
+        surface.query,
+        spotifyCookie,
+      );
+      const data = toObject(payload.data);
+      const candidates: SearchCandidate[] = [];
+      // Harvest only the track-results section so unrelated "top results" carousel
+      // entries don't leak in; fall back to a full walk if the shape changed.
+      collectSearchCandidates(findTrackResultsSection(data) ?? data, candidates);
+      const tracks = dedupe(candidates);
+      if (tracks.length > 0) return tracks;
+    } catch {
+      // try the next surface
+    }
+  }
+
+  // (3) Last resort: public /v1/search (heavily rate-limited).
+  try {
+    const accessToken = await fetchSpotifyAccessToken(spotifyCookie);
+    const params = new URLSearchParams({ q: searchTerm, type: "track", limit: String(limit) });
+    const response = await fetchWithTimeout(`${SPOTIFY_SEARCH_URL}?${params.toString()}`, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+        "user-agent": DEFAULT_USER_AGENT,
+      },
+    });
+    if (response?.ok) {
+      const payload = toObject(await response.json().catch(() => null));
+      const items = Array.isArray(toObject(payload?.tracks)?.items) ? toObject(payload?.tracks)?.items : [];
+      const candidates: SearchCandidate[] = (items as unknown[])
+        .map((entry) => {
+          const data = toObject(entry);
+          const id = parseTrackIdFromUri(toStringValue(data?.uri)) || toStringValue(data?.id);
+          const name = toStringValue(data?.name);
+          if (!id || !name) return null;
+          const artistRows = Array.isArray(data?.artists) ? data.artists : [];
+          const artists = artistRows.map((row) => toStringValue(toObject(row)?.name)).filter(Boolean);
+          const albumValue = toObject(data?.album);
+          const images = Array.isArray(albumValue?.images) ? albumValue.images : [];
+          const imageUrl = toStringValue(toObject(images[0])?.url);
+          const durationMs = toFiniteNumber(data?.duration_ms) ?? 0;
+          return {
+            id,
+            name,
+            artists: artists.length > 0 ? artists : ["Unknown Artist"],
+            album: toStringValue(albumValue?.name) || undefined,
+            imageUrl: imageUrl || undefined,
+            durationMs: durationMs > 0 ? durationMs : undefined,
+          } as SearchCandidate;
+        })
+        .filter((candidate): candidate is SearchCandidate => candidate !== null);
+      const tracks = dedupe(candidates);
+      if (tracks.length > 0) return tracks;
+    }
+  } catch {
+    // give up
+  }
+
+  return [];
 }
 
 async function fetchPaginatedTracks(options: {

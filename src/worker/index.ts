@@ -48,6 +48,7 @@ import {
   fetchSpotifyTrackMetadata,
   scrapeSpotifyTrackIdsFromHtml,
   searchSpotifyTrackId,
+  searchSpotifyTracks,
   type SpotifyBatchTrack,
 } from "@/lib/spotify-pathfinder";
 import { fetchLastFmSimilarTracks } from "@/lib/recommendations";
@@ -4099,6 +4100,56 @@ app.get("/api/search-index", async (c) => {
   return jsonCached(c, { songs: await listSearchSongs(c.get("db"), user?.id ?? null) }, {
     cacheControl: "private, max-age=300, stale-while-revalidate=600",
   });
+});
+
+// Catalog search: find songs that AREN'T in the library yet, via Spotify. The
+// library search (/api/search-index, filtered on-device) covers what you own; this
+// covers everything else. Each result is a Discover-style placeholder keyed by its
+// Spotify track id, so the existing staging pipeline handles it for free — tapping
+// it previews a cheap YouTube Opus (preview: true, resolver-independent), and a
+// like / add-to-playlist promotes it to lossless FLAC (keeping the library FLAC-only).
+// Auth-gated: it spends the owner's Spotify search surface + the staging infra.
+app.get("/api/search/catalog", async (c) => {
+  if (!c.get("user")) return jsonError("Unauthorized", 401);
+  const q = (c.req.query("q") || "").trim();
+  if (q.length < 2) return jsonCached(c, { results: [] }, { cacheControl: "private, max-age=30" });
+
+  let results: PlayerSong[] = [];
+  try {
+    const spotifyCookie = envString(c.env, "SPOTIFY_SP_DC");
+    const hits = await searchSpotifyTracks(q, spotifyCookie || undefined, 24);
+    // Dedupe by id AND by normalized title+artist: Spotify lists the same recording
+    // across many releases (single, album, deluxe, sped-up), so collapse those to the
+    // first (most-relevant) copy. A genuinely different version (Remix, edit) has a
+    // different title and survives. Keeps the list clean and avoids prefetch staging
+    // several copies of one song.
+    const seenIds = new Set<string>();
+    const seenKeys = new Set<string>();
+    const resolved: DiscoverTrendingTrack[] = [];
+    for (const hit of hits) {
+      if (!hit.id || seenIds.has(hit.id)) continue;
+      const key = smartShuffleKey(hit.name, hit.artists.join(", "));
+      if (seenKeys.has(key)) continue;
+      seenIds.add(hit.id);
+      seenKeys.add(key);
+      resolved.push({
+        id: hit.id,
+        title: hit.name,
+        artist: hit.artists.join(", "),
+        album: hit.album || "",
+        imageUrl: hit.imageUrl || "/apple-icon.png",
+        durationMs: typeof hit.durationMs === "number" && hit.durationMs > 0 ? hit.durationMs : null,
+        spotifyUrl: `https://open.spotify.com/track/${hit.id}`,
+      });
+    }
+    // Flag already-staged tracks so a previously-previewed one plays instantly.
+    const staged = await markDiscoverStaged(c.env, resolved);
+    results = staged.map((track) => ({ ...discoverStagedToPlayerSong(track), preview: true }));
+  } catch {
+    results = [];
+  }
+
+  return jsonCached(c, { results }, { cacheControl: "private, max-age=60, stale-while-revalidate=120" });
 });
 
 app.get("/api/library", async (c) => {
