@@ -39,4 +39,8 @@ export type PlayerSong = {
   // `recommendedIds` Set (the id changes on staging, which would drop this flag),
   // so this is only a convenience on the freshly-built PlayerSong before insert.
   recommended?: boolean;
+  // ISO timestamp of WHEN this song was liked (set only on /api/liked responses).
+  // Lets the "Date added" sort mean recently-liked, not the FLAC's file date.
+  // Absent for legacy likes / everywhere else → those fall back to createdAt.
+  likedAt?: string;
 };

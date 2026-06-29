@@ -85,8 +85,13 @@ function fieldCompare(key: SongSortKey, a: PlayerSong, b: PlayerSong): number {
       return cmpStr(a.album ?? "", b.album ?? "");
     case "duration":
       return (a.duration ?? 0) - (b.duration ?? 0);
-    case "added":
-      return (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0);
+    case "added": {
+      // Prefer when the song was LIKED (set on /api/liked) over the FLAC's file
+      // date, so "Date added" in Liked Songs means recently-liked. Falls back to
+      // createdAt for playlists/library and legacy likes without a timestamp.
+      const added = (s: PlayerSong) => Date.parse(s.likedAt ?? s.createdAt ?? "") || 0;
+      return added(a) - added(b);
+    }
     default:
       return 0;
   }

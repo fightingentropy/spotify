@@ -98,6 +98,14 @@ type PersistentLikesCache = {
   version: 1;
   root: string;
   likedSongIds: string[];
+  // id -> epoch ms when the song was liked. Optional + additive: legacy caches
+  // (and the 1358 likes that predate this) simply omit it, and those fall back to
+  // file createdAt for ordering. NEW likes get a real timestamp so "Liked Songs"
+  // can show most-recently-liked first (like Spotify's "Recently added"), instead
+  // of library scan order where a song sat at the top forever. Version stays 1 on
+  // purpose — bumping it would invalidate the existing cache and trip the
+  // "everything is liked" legacy backfill, nuking real unlikes.
+  likedAt?: Record<string, number>;
 };
 
 type LocalSidecar = {
@@ -1356,13 +1364,28 @@ function canonicalizeLikedIds(ids: Iterable<string>, songs: PlayerSong[]): strin
   return Array.from(out);
 }
 
-async function writePersistentLikes(source: LibrarySource, likedSongIds: Iterable<string>): Promise<void> {
+async function writePersistentLikes(
+  source: LibrarySource,
+  likedSongIds: Iterable<string>,
+  likedAt?: Record<string, number>,
+): Promise<void> {
   const path = likesCachePath(source);
+  const ids = Array.from(new Set(likedSongIds));
   const cache: PersistentLikesCache = {
     version: LIKES_CACHE_VERSION,
     root: source.root,
-    likedSongIds: Array.from(new Set(likedSongIds)),
+    likedSongIds: ids,
   };
+  if (likedAt) {
+    // Keep only timestamps for ids that are still liked, so unlikes don't leave
+    // the map growing forever. Omit the field entirely when empty.
+    const idSet = new Set(ids);
+    const pruned: Record<string, number> = {};
+    for (const [id, ts] of Object.entries(likedAt)) {
+      if (idSet.has(id) && Number.isFinite(ts)) pruned[id] = ts;
+    }
+    if (Object.keys(pruned).length > 0) cache.likedAt = pruned;
+  }
   await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(cache)}\n`, "utf8");
@@ -1397,6 +1420,28 @@ async function readPersistentLikes(source: LibrarySource): Promise<string[] | nu
     }
   } catch {}
   return null;
+}
+
+// Reads the per-like timestamps (id -> epoch ms). Side-effect-free; returns {}
+// when absent (legacy caches) so callers fall back to file createdAt for order.
+async function readPersistentLikeTimes(source: LibrarySource): Promise<Record<string, number>> {
+  try {
+    const raw = await readFile(likesCachePath(source), "utf8");
+    const parsed = JSON.parse(raw) as Partial<PersistentLikesCache> | null;
+    if (
+      parsed?.version === LIKES_CACHE_VERSION &&
+      parsed.root === source.root &&
+      parsed.likedAt &&
+      typeof parsed.likedAt === "object"
+    ) {
+      const out: Record<string, number> = {};
+      for (const [id, ts] of Object.entries(parsed.likedAt)) {
+        if (typeof ts === "number" && Number.isFinite(ts)) out[id] = ts;
+      }
+      return out;
+    }
+  } catch {}
+  return {};
 }
 
 // One-time migration: if a source has no likes cache yet, seed it with the
@@ -1445,12 +1490,23 @@ async function setSongLikedForSource(
   // each other (the previous version re-read and wrote without a lock).
   return withLikeWriteLock(source, async () => {
     const liked = new Set(await likedSongIdsForSongs(source, songs));
-    if (nextLiked) liked.add(songId);
-    else liked.delete(songId);
+    const likedAt = await readPersistentLikeTimes(source);
+    // Stamp under the same id the cache stores (canonical when the fold is on),
+    // so ordering can look the timestamp up by either the raw or canonical id.
+    const likedSong = songs.find((s) => s.id === songId || canonicalIdOf(s) === songId);
+    const storedId = CANONICAL_LIKES_ENABLED && likedSong ? canonicalIdOf(likedSong) : songId;
+    if (nextLiked) {
+      liked.add(songId);
+      likedAt[storedId] = Date.now();
+    } else {
+      liked.delete(songId);
+      delete likedAt[storedId];
+      delete likedAt[songId];
+    }
     const likedSongIds = CANONICAL_LIKES_ENABLED
       ? canonicalizeLikedIds(liked, songs)
       : filterVisibleLikedSongIds(liked, songs);
-    await writePersistentLikes(source, likedSongIds);
+    await writePersistentLikes(source, likedSongIds, likedAt);
     // A successful explicit write satisfies the legacy backfill too.
     likesBackfilled.add(source.key);
     return likedSongIds;
@@ -3494,14 +3550,31 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const songs = songsForRequest(snapshot.songs, request);
     const likedSongIds = await likedSongIdsForSongs(source, songs);
     const likedLookup = new Set(likedSongIds);
-    return jsonCached(request, {
-      // With the canonical fold on, likedSongIds are canonical ids; return one
-      // song per liked id (the anchor) so collapsed copies don't duplicate.
-      songs: CANONICAL_LIKES_ENABLED
+    const likeTimes = await readPersistentLikeTimes(source);
+    const likeTimeOf = (song: PlayerSong): number | undefined =>
+      likeTimes[song.id] ?? likeTimes[canonicalIdOf(song)];
+    // With the canonical fold on, likedSongIds are canonical ids; return one
+    // song per liked id (the anchor) so collapsed copies don't duplicate.
+    const likedSongs = (
+      CANONICAL_LIKES_ENABLED
         ? songs.filter((song) => canonicalIdOf(song) === song.id && likedLookup.has(song.id))
-        : songs.filter((song) => likedLookup.has(song.id)),
-      likedSongIds,
+        : songs.filter((song) => likedLookup.has(song.id))
+    ).map((song) => {
+      const ts = likeTimeOf(song);
+      // Surface the like time so the client can order by recently-liked. Legacy
+      // likes have none → likedAt stays undefined and they fall back to createdAt.
+      return ts ? { ...song, likedAt: new Date(ts).toISOString() } : song;
     });
+    // Default to most-recently-liked first (Spotify's "Recently added"): real
+    // like timestamps win; the 1358 legacy likes order by file createdAt beneath.
+    const orderKey = (song: PlayerSong): number => {
+      const ts = likeTimeOf(song);
+      if (typeof ts === "number") return ts;
+      const parsed = Date.parse(song.createdAt ?? "");
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    likedSongs.sort((a, b) => orderKey(b) - orderKey(a));
+    return jsonCached(request, { songs: likedSongs, likedSongIds });
   }
 
   if (pathname === "/api/likes") {

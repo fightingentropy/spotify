@@ -36,4 +36,8 @@ export type PlayerSong = {
   // PREVIEW on play (resolver-independent) rather than the full lossless source.
   // A "keep" action (like / add-to-playlist) still promotes it to lossless FLAC.
   preview?: boolean;
+  // ISO timestamp of WHEN this song was liked, set only on /api/liked responses.
+  // Lets "Liked Songs" sort by recently-liked (not the FLAC's file date). Absent
+  // for legacy likes and everywhere else (those fall back to createdAt).
+  likedAt?: string;
 };
