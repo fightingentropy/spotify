@@ -7,6 +7,7 @@ import AudioEngine, {
   type RemoteEvent,
   type SeekedEvent,
   type TimeEvent,
+  type WaitingEvent,
 } from "../../modules/audio-engine";
 import { toAbsoluteApiUrl } from "@/lib/config";
 import { isUnstagedDiscoverSong } from "@/lib/discover-queue";
@@ -38,6 +39,12 @@ import type { PlayerSong } from "@/types/player";
 
 const PREFETCH_LEAD_S = 8; // start warming the next track this far before the fade
 const NOW_PLAYING_THROTTLE_MS = 1000; // lock-screen scrubber refresh cadence
+// A streamed track that can't buffer leaves AVPlayer in .waitingToPlayAtSpecifiedRate
+// indefinitely WITHOUT ever firing an error — so the onError circuit-breaker never
+// trips and playback wedges on "loading". If the active deck sits buffering this
+// long without once reaching "playing", treat it as un-streamable and fall back to
+// the downloaded subset (the exact "connected but slow" gap between online + offline).
+const STALL_TIMEOUT_MS = 12000;
 
 type StoreState = ReturnType<typeof usePlayerStore.getState>;
 type NextTrack = { index: number; song: PlayerSong; fromFuture: boolean };
@@ -69,6 +76,67 @@ let offlinePlayback = false;
 function skipToDownloaded(): boolean {
   const isDownloaded = useOfflineStore.getState().isDownloaded;
   return usePlayerStore.getState().skipToPlayable((song) => isDownloaded(song.id));
+}
+
+// --- stall watchdog ---------------------------------------------------------
+// AVPlayer buffers a slow stream silently (no error), so a "connected but slow"
+// network leaves us stuck on "loading" forever — unlike fully-offline, where the
+// queue is pre-filtered to downloads, or fully-online, where the stream resolves.
+// We arm a timer when the active deck reports it's waiting-to-play and disarm it
+// the instant it actually plays; if it never plays, we treat the track as
+// un-streamable and skip to a downloaded one (which plays from the phone).
+let stallTimer: ReturnType<typeof setTimeout> | null = null;
+let stallSongId: string | null = null;
+
+function clearStallWatchdog(): void {
+  if (stallTimer != null) {
+    clearTimeout(stallTimer);
+    stallTimer = null;
+  }
+  stallSongId = null;
+}
+
+function armStallWatchdog(song: PlayerSong): void {
+  if (stallTimer != null && stallSongId === song.id) return; // already watching this track
+  clearStallWatchdog();
+  stallSongId = song.id;
+  stallTimer = setTimeout(onStallTimeout, STALL_TIMEOUT_MS);
+}
+
+function onStallTimeout(): void {
+  const watchedId = stallSongId;
+  stallTimer = null;
+  stallSongId = null;
+  const s = usePlayerStore.getState();
+  const song = s.currentSong;
+  // The world may have moved on while we waited: paused, or a different track is
+  // current now. onPlaying disarms the moment audio flows, so reaching here means
+  // this exact track never started.
+  if (!song || !s.isPlaying || song.id !== watchedId) return;
+  if (isOwnHandledSong(song) || isPodcastSong(song)) return; // local/radio/podcast own their buffering
+
+  // A 12s silent buffer is effectively "can't stream this." Mirror onError's
+  // offline-fallback: prefer the downloaded subset so auto-advance lands on a
+  // track that plays from the phone instead of hanging again. The shared
+  // consecutive-error budget backstops a queue with nothing downloaded.
+  consecutiveErrors += 1;
+  if (consecutiveErrors >= MAX_CONSECUTIVE_AUDIO_ERRORS) {
+    consecutiveErrors = 0;
+    s.pause(); // stop — don't churn a fully un-streamable queue forever
+    return;
+  }
+  offlinePlayback = true;
+  if (skipToDownloaded()) return;
+  s.next(); // nothing downloaded — try the next track (may stream, or trips the breaker)
+}
+
+function onWaiting(e: WaitingEvent): void {
+  if (e.deck !== activeDeck) return; // only the deck driving playback matters
+  const s = usePlayerStore.getState();
+  const song = s.currentSong;
+  if (!song || !s.isPlaying) return; // not trying to play → a paused buffer isn't a stall
+  if (isOwnHandledSong(song) || isPodcastSong(song)) return;
+  armStallWatchdog(song);
 }
 
 // throttles
@@ -143,6 +211,7 @@ function computeNext(s: StoreState): NextTrack | null {
 
 // --- track loading (hard cut: user skip / select / initial) -----------------
 async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<void> {
+  clearStallWatchdog(); // new track boundary — drop any watchdog from the prior one
   // Unstaged Discover placeholder (empty audioUrl): there's nothing to load yet.
   // Stop the previous track, surface this one's metadata on the lock screen, and
   // idle until the stager swaps in the real source — which re-enters hardLoad with
@@ -428,6 +497,7 @@ async function onError(e: ErrorEvent): Promise<void> {
     return;
   }
 
+  clearStallWatchdog(); // a hard error supersedes the stall watchdog's own recovery
   const s = usePlayerStore.getState();
   const song = s.currentSong;
   if (!song) return;
@@ -471,6 +541,7 @@ async function onError(e: ErrorEvent): Promise<void> {
 
 function onPlaying(e: PlayingEvent): void {
   if (e.deck === activeDeck) {
+    clearStallWatchdog(); // audio is flowing — this deck isn't stalled
     consecutiveErrors = 0;
     erroredKeyRetry = null;
     // A non-downloaded track actually playing means streaming works again →
@@ -521,6 +592,7 @@ function subscribeToStore(): void {
     if (songChanged) {
       void hardLoad(state.currentSong, state.isPlaying);
     } else if (state.isPlaying !== prev.isPlaying) {
+      if (!state.isPlaying) clearStallWatchdog(); // user paused → a buffer isn't a stall
       void syncPlayState(state.isPlaying);
       void publishPlaybackState(true);
     }
@@ -535,6 +607,7 @@ function subscribeToStore(): void {
     // "engaged" inside publishPlaybackState, so a cold-launch restore's own
     // setQueue can't publish over newer cross-device state.
     if (state.queue !== prev.queue) {
+      clearStallWatchdog();
       offlinePlayback = false;
       void publishPlaybackState(true);
     }
@@ -560,6 +633,7 @@ export async function initNativeAudio(): Promise<void> {
   AudioEngine.addListener("ended", (e) => void onEnded(e));
   AudioEngine.addListener("error", (e) => void onError(e));
   AudioEngine.addListener("playing", onPlaying);
+  AudioEngine.addListener("waiting", onWaiting);
   AudioEngine.addListener("seeked", onSeeked);
   AudioEngine.addListener("crossfadeComplete", onCrossfadeComplete);
   AudioEngine.addListener("remote", onRemote);
