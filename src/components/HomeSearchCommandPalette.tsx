@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search } from "lucide-react";
+import { Clock3, Search } from "lucide-react";
+import { rankLibrarySongs } from "@spotify/shared/library-search";
+import { useRecentSearches } from "@/client/recent-searches";
 import { warmPlaybackSong } from "@/client/playback-warm";
-import { useApiData, withAccountScope, type SearchIndexPayload } from "@/client/api";
+import { useApiData, withAccountScope, type SearchCatalogPayload, type SearchIndexPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
@@ -19,6 +21,7 @@ type HomeSearchCommandPaletteProps = {
 
 export function HomeSearchCommandPalette({ className }: HomeSearchCommandPaletteProps) {
   const { user, status } = useAuth();
+  const { recentSearches, remember, clear } = useRecentSearches(user?.id ?? status);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
@@ -38,13 +41,24 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       user?.id ?? status,
     ),
     { songs: [] },
-    { enabled: open && status !== "loading" && libraryQuery.length > 0, keepPreviousData: true },
+    { enabled: open && status !== "loading" && libraryQuery.length > 0, keepPreviousData: false },
   );
-  const songs = libraryQuery.length > 0 ? data.songs : [];
+  const catalog = useApiData<SearchCatalogPayload>(
+    withAccountScope(`/api/search/catalog?q=${encodeURIComponent(libraryQuery)}`, user?.id ?? status),
+    { results: [] },
+    { enabled: open && status === "authenticated" && libraryQuery.length >= 2, keepPreviousData: false },
+  );
+  const currentQuery = libraryQuery === query.trim();
+  const songs = libraryQuery.length > 0 && currentQuery ? data.songs : [];
 
   useModalDialogFocus(open, dialogRef);
 
-  const results = useMemo(() => dedupeSongsByTitleArtist(songs).slice(0, 20), [songs]);
+  const results = useMemo(() => {
+    const library = rankLibrarySongs(songs, libraryQuery);
+    // Keep provider order for new catalog recordings; local copies win dedupe.
+    const extra = currentQuery && catalog.data.query === libraryQuery ? catalog.data.results : [];
+    return dedupeSongsByTitleArtist([...library, ...extra]).slice(0, 35);
+  }, [songs, libraryQuery, currentQuery, catalog.data]);
 
   const resolvedResults = results;
 
@@ -103,6 +117,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       if (event.key === "Enter") {
         event.preventDefault();
         const selected = resolvedResults[activeIndex];
+        remember(query);
         if (!selected) return;
         requestImmediatePlayback(selected);
         setQueue(resolvedResults, activeIndex);
@@ -113,7 +128,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, open, resolvedResults, setQueue]);
+  }, [activeIndex, open, query, remember, resolvedResults, setQueue]);
 
   return (
     <div className={className}>
@@ -175,14 +190,26 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
               className="max-h-[60vh] overflow-y-auto p-2"
             >
               {query.trim().length === 0 ? (
-                <div className="px-3 py-10 text-center text-sm text-foreground/65">
-                  Start typing to search songs
+                <div className="px-3 py-4 text-sm text-foreground/65">
+                  {recentSearches.length > 0 ? (
+                    <>
+                      <div className="mb-2 flex items-center justify-between">
+                        <span>Recent searches</span>
+                        <button type="button" onClick={clear} className="px-2 py-2 text-xs hover:text-white">Clear</button>
+                      </div>
+                      {recentSearches.map((term) => (
+                        <button type="button" key={term} onClick={() => setQuery(term)} className="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 text-left hover:bg-white/10">
+                          <Clock3 size={16} /><span>{term}</span>
+                        </button>
+                      ))}
+                    </>
+                  ) : <p className="py-6 text-center">Search your library and the music catalog</p>}
                 </div>
-              ) : loading ? (
+              ) : (!currentQuery || loading || catalog.loading) && results.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
-                  Loading songs...
+                  Searching music…
                 </div>
-              ) : error ? (
+              ) : error && results.length === 0 ? (
                 <div className="px-3 py-10 text-center">
                   <PageError compact message={error} />
                 </div>
@@ -201,6 +228,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     onPointerEnter={() => warmPlaybackSong(song, true)}
                     onFocus={() => warmPlaybackSong(song, true)}
                     onClick={() => {
+                      remember(query);
                       requestImmediatePlayback(song);
                       setQueue(resolvedResults, index);
                       setOpen(false);
@@ -217,13 +245,26 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                         className="h-full w-full object-cover"
                       />
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">{song.title}</div>
                       <div className="truncate text-xs text-foreground/65">{song.artist}</div>
                     </div>
+                    {song.discoverTrackId && !songs.some((item) => item.id === song.id) ? (
+                      <span className="shrink-0 text-[11px] text-white/40">Catalog</span>
+                    ) : null}
                   </button>
                 ))
               )}
+              {query.trim().length >= 2 && currentQuery ? (
+                catalog.error ? (
+                  <div role="status" className="flex items-center justify-between gap-3 px-3 py-3 text-xs text-white/60">
+                    <span>Catalog search is unavailable. Your library results are above.</span>
+                    <button type="button" onClick={catalog.retry} className="shrink-0 px-2 py-2 text-white">Retry</button>
+                  </div>
+                ) : catalog.loading && results.length > 0 ? (
+                  <p role="status" className="px-3 py-3 text-xs text-white/60">Searching the catalog…</p>
+                ) : null
+              ) : null}
             </div>
           </div>
         </div>

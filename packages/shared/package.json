@@ -15,6 +15,9 @@
     "./playback-rate": "./src/playback-rate.ts",
     "./sleep-timer": "./src/sleep-timer.ts",
     "./shuffle": "./src/shuffle.ts",
-    "./library-search": "./src/library-search.ts"
+    "./library-search": "./src/library-search.ts",
+    "./recent-searches": "./src/recent-searches.ts",
+    "./queue-editing": "./src/queue-editing.ts",
+    "./playback-source": "./src/playback-source.ts"
   }
 }

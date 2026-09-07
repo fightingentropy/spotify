@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { FlatList, Text, View } from "react-native";
-import { Plus, Sparkles, X } from "lucide-react-native";
+import { ChevronDown, Plus, Sparkles, X } from "lucide-react-native";
+import { ReorderableQueueRow } from "@/components/player/ReorderableQueueRow";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { Sheet } from "@/components/ui/Sheet";
@@ -30,6 +31,10 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
   const recommendedIds = usePlayerStore((s) => s.recommendedIds);
   const advanceToIndex = usePlayerStore((s) => s.advanceToIndex);
   const removeFromQueue = usePlayerStore((s) => s.removeFromQueue);
+  const moveQueuedSong = usePlayerStore((s) => s.moveQueuedSong);
+  const lastRemoval = usePlayerStore((s) => s.lastQueueRemoval);
+  const undoRemoval = usePlayerStore((s) => s.undoQueueRemoval);
+  const [dragging, setDragging] = useState(false);
 
   const upcoming = useMemo(
     () =>
@@ -59,11 +64,8 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
       !isOnline &&
       !record?.audioPath &&
       !deviceLocal;
-    return (
-      <View
-        className="flex-row items-center gap-3 px-4"
-        style={{ minHeight: 60, opacity: unavailable ? 0.45 : 1 }}
-      >
+    const content = (
+      <>
         <PressableScale
           scaleTo={1}
           onPress={current || unavailable ? undefined : () => advanceToIndex(index)}
@@ -129,22 +131,34 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
             <X size={18} color={MONO_SECONDARY} />
           </PressableScale>
         )}
-      </View>
+      </>
     );
+    if (current) return <View className="flex-row items-center gap-3 px-4" style={{ minHeight: 64 }}>{content}</View>;
+    return <ReorderableQueueRow label={song.title} dimmed={unavailable} onDragging={setDragging} onMove={(offset) => {
+      const target = upcoming[Math.max(0, Math.min(upcoming.length - 1, upcoming.indexOf(index) + offset))];
+      if (usePlayerStore.getState().queue[index]?.id === song.id && target != null) moveQueuedSong(index, target, upcoming);
+    }}>{content}</ReorderableQueueRow>;
   };
 
   return (
-    <Sheet visible={visible} onClose={onClose} heightPct={0.8} zIndex={200}>
+    <Sheet visible={visible} onClose={onClose} heightPct={0.8} zIndex={200} dragToDismiss={false}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16 }}>
+        <Text style={{ color: MONO_ACTIVE, fontSize: 20, fontWeight: "600" }}>Queue</Text>
+        <PressableScale onPress={onClose} accessibilityRole="button" accessibilityLabel="Close queue" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}><ChevronDown size={22} color={MONO_PRIMARY} /></PressableScale>
+      </View>
+      {lastRemoval ? <View accessibilityLiveRegion="polite" style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, gap: 12 }}>
+        <Text numberOfLines={1} style={{ flex: 1, color: MONO_SECONDARY, fontSize: 13 }}>Removed {lastRemoval.song.title}</Text>
+        <PressableScale onPress={undoRemoval} accessibilityRole="button" accessibilityLabel={`Undo removing ${lastRemoval.song.title}`} style={{ minHeight: 44, justifyContent: "center" }}><Text style={{ color: MONO_ACTIVE, fontSize: 14, fontWeight: "600" }}>Undo</Text></PressableScale>
+      </View> : null}
       <FlatList
         data={upcoming}
         keyExtractor={(i) => String(i)}
         extraData={recommendedIds}
+        scrollEnabled={!dragging}
+        removeClippedSubviews={false}
         renderItem={({ item }) => renderRow(queue[item], item)}
         ListHeaderComponent={
           <View className="pb-2 pt-1">
-            <Text className="mb-3 px-4" style={{ color: MONO_ACTIVE, fontSize: 20, fontWeight: "600" }}>
-              Queue
-            </Text>
             {currentSong ? (
               <>
                 <Text

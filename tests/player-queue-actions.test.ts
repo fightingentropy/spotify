@@ -358,6 +358,62 @@ describe("removeFromQueue", () => {
   });
 });
 
+describe("queue editing", () => {
+  test("moving an upcoming track keeps the current song and play state", () => {
+    usePlayerStore.getState().setQueue(songs("a", "b", "c", "d"), 0);
+    usePlayerStore.getState().pause();
+    const current = usePlayerStore.getState().currentSong;
+    usePlayerStore.getState().moveQueuedSong(3, 1);
+    expect(queueIds()).toEqual(["a", "d", "b", "c"]);
+    expect(usePlayerStore.getState().currentSong).toBe(current);
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    usePlayerStore.getState().next();
+    expect(usePlayerStore.getState().currentSong?.id).toBe("d");
+  });
+
+  test("reordering follows the displayed shuffle order, including the redo stack", () => {
+    usePlayerStore.getState().setQueue(songs("a", "b", "c", "d"), 0);
+    usePlayerStore.setState({ shuffle: true, playHistory: [2], playFuture: [3], shuffleRemaining: [1, 2] });
+    usePlayerStore.getState().moveQueuedSong(2, 3, [3, 1, 2]);
+    expect(idsAt(usePlayerStore.getState().playHistory)).toEqual(["c"]);
+    for (const expected of ["c", "d", "b"]) {
+      usePlayerStore.getState().next();
+      expect(usePlayerStore.getState().currentSong?.id).toBe(expected);
+    }
+  });
+
+  test("undo restores the removed track without reversing playback or dropping an addition", () => {
+    usePlayerStore.getState().setQueue(songs("a", "b", "c", "d"), 0);
+    usePlayerStore.getState().removeFromQueue(1);
+    usePlayerStore.getState().next();
+    usePlayerStore.getState().addToQueue(song("e"));
+    usePlayerStore.getState().undoQueueRemoval();
+    expect(queueIds()).toEqual(["a", "b", "c", "d", "e"]);
+    expect(usePlayerStore.getState().currentSong?.id).toBe("c");
+    expect(usePlayerStore.getState().currentIndex).toBe(2);
+    expect(usePlayerStore.getState().isPlaying).toBe(true);
+  });
+
+  test("undo restores the same shuffle position and is cleared by a new queue", () => {
+    usePlayerStore.getState().setQueue(songs("a", "b", "c", "d"), 0);
+    usePlayerStore.setState({ shuffle: true, playFuture: [], shuffleRemaining: [3, 1, 2] });
+    usePlayerStore.getState().removeFromQueue(1);
+    usePlayerStore.getState().undoQueueRemoval();
+    expect(idsAt(usePlayerStore.getState().shuffleRemaining)).toEqual(["d", "b", "c"]);
+    usePlayerStore.getState().removeFromQueue(1);
+    usePlayerStore.getState().setQueue(songs("x", "y"), 0);
+    usePlayerStore.getState().undoQueueRemoval();
+    expect(queueIds()).toEqual(["x", "y"]);
+  });
+
+  test("rejects stale display orders and attempts to move the current song", () => {
+    usePlayerStore.getState().setQueue(songs("a", "b", "c"), 0);
+    usePlayerStore.getState().moveQueuedSong(2, 1, [1, 99]);
+    usePlayerStore.getState().moveQueuedSong(0, 1);
+    expect(queueIds()).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("getUpcomingPlaybackIndices", () => {
   const linear = (repeatMode: "off" | "all" = "off") => ({
     shuffle: false,

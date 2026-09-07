@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, TextInput, View, Text } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { ListMusic, Search as SearchIcon, UserRound } from "lucide-react-native";
-import { songMatchesLibraryQuery } from "@spotify/shared/library-search";
+import { rankLibrarySongs } from "@spotify/shared/library-search";
 import {
   catalogSearchPath,
   catalogSearchSectionOrder,
@@ -28,19 +28,9 @@ import { toggleSongInList } from "@/audio/actions";
 import { catalogRequestState, catalogSongKey, reconcileCatalogSongs } from "@/lib/catalog-reconciliation";
 import { useOnlineStatus } from "@/lib/use-connectivity";
 import { keyFor, useOfflineStore } from "@/store/offline";
+import { useRecentSearches } from "@/lib/recent-searches";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
-
-type SearchableSong = { song: PlayerSong; title: string; artist: string };
-
-function score({ title, artist }: SearchableSong, q: string): number {
-  if (title === q) return 100;
-  if (title.startsWith(q)) return 80;
-  if (artist.startsWith(q)) return 60;
-  if (title.includes(q)) return 40;
-  if (artist.includes(q)) return 20;
-  return 0;
-}
 
 // Collapse case/punctuation so a library hit and its Spotify-catalog twin
 // ("Revelries; Victoria Voss" vs "Revelries, Victoria Voss") dedupe to one row.
@@ -234,6 +224,7 @@ export default function SearchScreen() {
   const offlineRecords = useOfflineStore((state) => state.records);
   const accountScope = user?.id ?? "anonymous";
   const [query, setQuery] = useState("");
+  const { recentSearches, remember, clear } = useRecentSearches(accountScope);
   const [filter, setFilter] = useState<CatalogSearchFilter>("top");
   const debouncedQuery = useDebouncedValue(query.trim(), 350);
   const { data, loading } = useApiData<SearchIndexPayload>(
@@ -254,25 +245,10 @@ export default function SearchScreen() {
     [accountScope, offlineRecords],
   );
 
-  const localResults = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    const pool = isOnline
-      ? data.songs
-      : readyDownloadedSongs.filter((song) => songMatchesLibraryQuery(song, query));
-    return pool
-      .map((song) => ({
-        song,
-        s: score(
-          { song, title: song.title.toLowerCase(), artist: song.artist.toLowerCase() },
-          q,
-        ),
-      }))
-      .filter((entry) => entry.s > 0)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, 100)
-      .map((entry) => entry.song);
-  }, [data.songs, isOnline, query, readyDownloadedSongs]);
+  const localResults = useMemo(
+    () => query.trim() ? rankLibrarySongs(isOnline ? data.songs : readyDownloadedSongs, query).slice(0, 100) : [],
+    [data.songs, isOnline, query, readyDownloadedSongs],
+  );
   const visibleLocalResults = useMemo(
     () =>
       isOnline
@@ -293,7 +269,7 @@ export default function SearchScreen() {
       user?.id ?? status,
     ),
     { query: "", results: [], playlists: [], artists: [], providers: {} },
-    { enabled: catalogEnabled && status !== "loading", keepPreviousData: false },
+    { enabled: catalogEnabled && isOnline && status !== "loading", keepPreviousData: false },
   );
   const catalogState = catalogRequestState(
     query,
@@ -421,6 +397,7 @@ export default function SearchScreen() {
             <TextInput
               value={query}
               onChangeText={setQuery}
+              onSubmitEditing={() => remember(query)}
               placeholder="Songs, artists and playlists"
               placeholderTextColor={colors.muted}
               style={{
@@ -453,7 +430,22 @@ export default function SearchScreen() {
         ) : null}
       </View>
 
-      {loading && data.songs.length === 0 ? (
+      {!hasQuery && recentSearches.length > 0 ? (
+        <View style={{ paddingHorizontal: 20, paddingTop: 10 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ color: colors.muted, fontSize: 14 }}>Recent searches</Text>
+            <PressableScale onPress={clear} accessibilityRole="button" accessibilityLabel="Clear recent searches" style={{ padding: 12 }}>
+              <Text style={{ color: colors.muted, fontSize: 13 }}>Clear</Text>
+            </PressableScale>
+          </View>
+          {recentSearches.map((term) => (
+            <PressableScale key={term} onPress={() => setQuery(term)} accessibilityRole="button" accessibilityLabel={`Search ${term}`} style={{ minHeight: 46, justifyContent: "center" }}>
+              <Text style={{ color: colors.foreground, fontSize: 16 }}>{term}</Text>
+            </PressableScale>
+          ))}
+        </View>
+      ) : null}
+      {loading && data.songs.length === 0 && hasQuery ? (
         <View style={{ gap: 14, paddingHorizontal: 20, paddingTop: 8 }}>
           {Array.from({ length: 8 }).map((_, index) => (
             <View key={index} className="flex-row items-center gap-3">
@@ -491,12 +483,13 @@ export default function SearchScreen() {
               return (
                 <ArtistResultRow
                   artist={item.artist}
-                  onPress={() =>
+                  onPress={() => {
+                    remember(query);
                     router.push({
                       pathname: "/search/artist/[source]/[id]",
                       params: { source: item.artist.provider, id: item.artist.id },
-                    } as Href)
-                  }
+                    } as Href);
+                  }}
                 />
               );
             }
@@ -504,19 +497,20 @@ export default function SearchScreen() {
               return (
                 <PlaylistResultRow
                   playlist={item.playlist}
-                  onPress={() =>
+                  onPress={() => {
+                    remember(query);
                     router.push({
                       pathname: "/search/playlist/[source]/[id]",
                       params: { source: item.playlist.provider, id: item.playlist.id },
-                    } as Href)
-                  }
+                    } as Href);
+                  }}
                 />
               );
             }
             return (
               <SongListItem
                 song={item.song}
-                onPress={() => toggleSongInList(item.list, item.index)}
+                onPress={() => { remember(query); toggleSongInList(item.list, item.index); }}
                 showActions
               />
             );

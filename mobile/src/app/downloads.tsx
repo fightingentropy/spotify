@@ -3,7 +3,9 @@ import { View } from "react-native";
 import { SongGrid } from "@/components/song/SongGrid";
 import { SongSortBar } from "@/components/song/SongSortBar";
 import { EmptyState } from "@/components/ui/States";
-import { getOfflineAccountScope, hasUserDownloadScope, useOfflineStore } from "@/store/offline";
+import { DownloadActivity } from "@/components/DownloadActivity";
+import { useAuth } from "@/lib/auth";
+import { hasUserDownloadScope, useOfflineStore } from "@/store/offline";
 import { sortSongs, useSongSort } from "@/store/song-sort";
 import { colors } from "@/theme";
 import type { PlayerSong } from "@/types/player";
@@ -15,7 +17,8 @@ const DOWNLOADS_CONTEXT = "downloads";
 // resolution (swapping in file:// URLs) is also wired there.
 export default function DownloadsScreen() {
   const records = useOfflineStore((s) => s.records);
-  const scope = getOfflineAccountScope();
+  const { user, status } = useAuth();
+  const scope = user?.id ?? status;
 
   const rawSongs = useMemo(() => {
     const seen = new Set<string>();
@@ -37,7 +40,7 @@ export default function DownloadsScreen() {
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <SongGrid
         songs={songs}
-        header={songs.length > 0 ? <SongSortBar context={DOWNLOADS_CONTEXT} /> : undefined}
+        header={<View><DownloadActivity scope={scope} />{songs.length > 0 ? <SongSortBar context={DOWNLOADS_CONTEXT} /> : null}</View>}
         emptyComponent={<EmptyState title="No downloads yet" subtitle="Download songs to listen offline." />}
       />
     </View>

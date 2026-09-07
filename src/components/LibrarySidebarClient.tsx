@@ -25,7 +25,7 @@ export default function LibrarySidebarClient({
     } catch {}
     document.documentElement.style.setProperty(
       "--wf-left-sidebar-width",
-      collapsed ? "4rem" : "16rem",
+      collapsed ? "4rem" : "13.5rem",
     );
   }, [collapsed]);
 
@@ -33,7 +33,7 @@ export default function LibrarySidebarClient({
     <aside
       className={cn(
         "hidden lg:flex fixed top-14 bottom-0 left-0 z-40 border-r border-white/[0.08] bg-black text-white transition-[width] duration-200",
-        collapsed ? "w-16" : "w-64",
+        collapsed ? "w-16" : "w-[13.5rem]",
       )}
     >
       <div className={cn("flex-1 overflow-y-auto", collapsed ? "p-2" : "p-4")}>
@@ -105,59 +105,21 @@ export default function LibrarySidebarClient({
             {!collapsed && <div className="text-[16px] font-medium leading-6 text-white">All Songs</div>}
           </Link>
 
-          <Link
-            to="/radio"
-            title="Radio Stations"
-            className={cn(
-                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
-              collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
-            )}
-          >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
-              <RadioTower size={18} />
-            </div>
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="text-[16px] font-medium leading-6 text-white">Radio Stations</div>
-              </div>
-            )}
-          </Link>
-
-          <Link
-            to="/podcasts"
-            title="Podcasts"
-            className={cn(
-                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
-              collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
-            )}
-          >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
-              <Podcast size={18} />
-            </div>
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="text-[16px] font-medium leading-6 text-white">Podcasts</div>
-              </div>
-            )}
-          </Link>
-
-          <Link
-            to="/events"
-            title="Live Events"
-            className={cn(
-                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
-              collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
-            )}
-          >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
-              <Ticket size={18} />
-            </div>
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="text-[16px] font-medium leading-6 text-white">Live Events</div>
-              </div>
-            )}
-          </Link>
+          <details className="group/more mt-5 border-t border-white/[0.08] pt-3">
+            <summary title="More music" className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-2 text-[13px] text-white/50 hover:text-white [&::-webkit-details-marker]:hidden">
+              <span>{collapsed ? "More" : "More music"}</span>
+              {!collapsed ? <ChevronRight size={14} className="transition-transform group-open/more:rotate-90" /> : null}
+            </summary>
+            {[
+              { href: "/radio", label: "Radio", Icon: RadioTower },
+              { href: "/podcasts", label: "Podcasts", Icon: Podcast },
+              { href: "/events", label: "Live Events", Icon: Ticket },
+            ].map(({ href, label, Icon }) => (
+              <Link key={href} to={href} title={label} className={cn("flex min-h-11 items-center gap-3 rounded-lg px-3 text-[14px] text-white/60 transition hover:bg-white/[0.06] hover:text-white", collapsed && "justify-center px-0")}>
+                <Icon size={17} />{collapsed ? null : label}
+              </Link>
+            ))}
+          </details>
 
         </div>
       </div>

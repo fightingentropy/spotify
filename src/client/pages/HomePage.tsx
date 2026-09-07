@@ -131,7 +131,7 @@ export default function HomePage() {
         onFocus={() => warmSongSoon(displaySong)}
         onClick={() => handlePlayScrollerSong(songs, index)}
         className={cn(
-          "wf-song-card group w-[164px] shrink-0 cursor-pointer touch-manipulation text-left",
+          "wf-song-card group w-[164px] shrink-0 lg:w-[190px] cursor-pointer touch-manipulation text-left",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
         )}
       >
@@ -146,7 +146,7 @@ export default function HomePage() {
             networkSrc={displaySong.networkImageUrl}
             alt=""
             fill
-            sizes="160px"
+            sizes="(min-width: 1024px) 190px, 164px"
             className="wf-song-cover object-cover"
             loading={index < 6 ? "eager" : "lazy"}
           />
@@ -166,7 +166,7 @@ export default function HomePage() {
           </span>
         </div>
         <div className="min-h-12 min-w-0 px-px pt-[9px]">
-          <div className="truncate text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
+          <div className="line-clamp-2 text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
             {displaySong.title}
           </div>
           <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.62]">
@@ -184,20 +184,20 @@ export default function HomePage() {
     <Link
       key={playlist.id}
       to={`/playlist/${playlist.id}`}
-      className="wf-song-card group w-[164px] shrink-0 cursor-pointer touch-manipulation"
+      className="wf-song-card group w-[164px] shrink-0 lg:w-[190px] cursor-pointer touch-manipulation"
     >
       <div className="relative aspect-square overflow-hidden rounded-xl bg-white/[0.045]">
         <CoverImage
           src={playlist.imageUrl || undefined}
           alt={playlist.name}
           fill
-          sizes="160px"
+          sizes="(min-width: 1024px) 190px, 164px"
           className="wf-song-cover object-cover"
           loading="lazy"
         />
       </div>
       <div className="min-h-12 min-w-0 px-px pt-[9px]">
-        <div className="truncate text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
+        <div className="line-clamp-2 text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
           {playlist.name}
         </div>
         <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.58]">

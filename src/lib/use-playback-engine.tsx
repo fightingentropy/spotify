@@ -36,6 +36,8 @@ import {
 } from "@/client/playback-warm";
 import { normalizeAccountScope } from "@/client/api";
 import { prepareHistorySongForPlayback } from "@/client/discover-queue";
+import { playbackFailureMessage, refreshPlaybackSong } from "@/client/playback-recovery";
+import { mediaLinkExpired } from "@spotify/shared/playback-source";
 import {
   isEpisodeFinished,
   markEpisodeFinished,
@@ -240,7 +242,8 @@ export function usePlaybackEngine(): {
   // publish — so steady-state playback no longer re-renders PlayerBar at 4Hz.
   const lastTimeStateWriteRef = useRef<number>(0);
   const erroredSrcRetryRef = useRef<string | null>(null);
-  const refreshNotFoundCountRef = useRef<{ id: string | null; count: number }>({ id: null, count: 0 });
+  const recoveryInFlightRef = useRef<string | null>(null);
+  const recoverActiveAudioRef = useRef<(audio: HTMLAudioElement) => void>(() => {});
   const sleepTimerPrevSongIdRef = useRef<string | null>(null);
   const lastResumeAtRef = useRef<number>(0);
   const lastResumeSeededSongIdRef = useRef<string | null>(null);
@@ -324,7 +327,7 @@ export function usePlaybackEngine(): {
   }, [buildPlaybackStateSnapshot, queue]);
 
   const applyPlaybackStateSnapshot = useCallback((state: PlaybackStateSnapshot) => {
-    const restoredQueue = state.queue.filter(isPersistablePlayerSong);
+    const restoredQueue = state.queue.filter(isPersistablePlayerSong).map(prepareHistorySongForPlayback);
     const restoredSongId = state.queue[state.currentIndex]?.id ?? state.song.id;
     const idxFromSong = restoredQueue.findIndex((song) => song.id === restoredSongId);
     const idxFromStateSong = restoredQueue.findIndex((song) => song.id === state.song.id);
@@ -341,7 +344,7 @@ export function usePlaybackEngine(): {
     if (restoredQueue.length > 0) {
       setQueue(restoredQueue, idx);
     } else {
-      setSong(state.song);
+      setSong(prepareHistorySongForPlayback(state.song));
     }
     pause();
     savedSeekRef.current = { songId: restoredSongId, time: state.currentTime };
@@ -643,8 +646,10 @@ export function usePlaybackEngine(): {
 
   const resetPlaybackClock = useCallback((nextDuration = 0) => {
     resetPendingSeek();
-    currentTimeRef.current = 0;
-    setCurrentTime(0);
+    const pending = savedSeekRef.current;
+    const time = pending?.songId === usePlayerStore.getState().currentSong?.id ? pending?.time ?? 0 : 0;
+    currentTimeRef.current = time;
+    setCurrentTime(time);
     setDuration(finiteMediaDuration(nextDuration) ?? 0);
   }, [resetPendingSeek]);
 
@@ -665,10 +670,53 @@ export function usePlaybackEngine(): {
         if (errorName(error) === "AbortError") return false;
         if (requestId !== playRequestIdRef.current) return false;
         if (audio !== getActiveAudio() || !isPlayingRef.current) return false;
-        pause();
+        if (audio.error) {
+          recoverActiveAudioRef.current(audio);
+        } else {
+          const songId = usePlayerStore.getState().currentSong?.id;
+          if (songId) failPlayback(songId, errorName(error) === "NotAllowedError"
+            ? "The browser paused playback. Press Retry to start this song."
+            : playbackFailureMessage());
+        }
         return false;
       });
-  }, [getActiveAudio, pause]);
+  }, [getActiveAudio, failPlayback]);
+
+  const recoverActiveAudio = useCallback((audio: HTMLAudioElement) => {
+    const song = usePlayerStore.getState().currentSong;
+    if (audio !== getActiveAudio() || !song || isBrowserLocalSong(song) || isRadioSong(song)) return;
+    if (recoveryInFlightRef.current === song.id) return;
+    const scope = accountScopeRef.current;
+    const stop = (error?: unknown) => {
+      if (accountScopeRef.current !== scope || usePlayerStore.getState().currentSong?.id !== song.id) return;
+      isPlayingRef.current = false;
+      playRequestIdRef.current += 1;
+      audio.pause();
+      failPlayback(song.id, playbackFailureMessage(error));
+    };
+    if (erroredSrcRetryRef.current === song.id) { stop(); return; }
+    erroredSrcRetryRef.current = song.id;
+    recoveryInFlightRef.current = song.id;
+    const pending = savedSeekRef.current;
+    const time = pending?.songId === song.id ? pending.time : lastSeekTargetRef.current ?? audio.currentTime ?? currentTimeRef.current;
+    savedSeekRef.current = { songId: song.id, time };
+    cancelActiveCrossfade();
+    audio.pause();
+    notePlaybackNetworkFailure();
+    void refreshPlaybackSong(song).then((fresh) => {
+      if (accountScopeRef.current !== scope || usePlayerStore.getState().currentSong?.id !== song.id) return;
+      savedSeekRef.current = { songId: fresh.id, time };
+      lockedPlaybackSourceRef.current = null;
+      unloadAudioSource(audio);
+      usePlayerStore.getState().replaceStagedSong(song.id, fresh);
+      loadAudioSource(audio, fresh.audioUrl);
+      if (usePlayerStore.getState().isPlaying) void playAudio(audio);
+    }).catch(stop).finally(() => {
+      if (recoveryInFlightRef.current === song.id) recoveryInFlightRef.current = null;
+    });
+  }, [cancelActiveCrossfade, failPlayback, getActiveAudio, loadAudioSource, playAudio, unloadAudioSource]);
+
+  useEffect(() => { recoverActiveAudioRef.current = recoverActiveAudio; }, [recoverActiveAudio]);
 
   useEffect(() => {
     function onPlaybackGesture(event: Event) {
@@ -1090,56 +1138,19 @@ export function usePlaybackEngine(): {
   }, [accountScope, applyPlaybackStateSnapshot, authSettled, touchPlaybackStateTimestamp]);
 
   useEffect(() => {
-    if (!currentSongId || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast) return;
-
+    const song = usePlayerStore.getState().currentSong;
+    if (!song || currentSongIsBrowserLocal || currentSongIsRadio || currentSongIsPodcast) return;
+    // Temporary previews are absent from the library. The stager resolves them
+    // when Play is pressed; refreshing their library id would always return 404.
+    if (song.discoverTrackId && (!song.audioUrl || song.audioUrl.includes("/.discover/"))) return;
     let cancelled = false;
-    const songId = currentSongId;
-
-    function clearStaleCurrentSong() {
-      removeLocalPlaybackState();
-      setQueue([], 0);
-      pause();
-    }
-
-    async function refreshCurrentSong() {
-      try {
-        const response = await fetch(`/api/songs/${encodeURIComponent(songId)}`, {
-          cache: "no-store",
-        });
-        if (response.status === 401 || response.status === 403) {
-          // Auth genuinely lost — clear the queue and persisted resume state.
-          if (cancelled) return;
-          clearStaleCurrentSong();
-          return;
-        }
-        if (response.status === 404) {
-          // A single 404 can be transient (e.g. mid-deploy / proxy hiccup); only
-          // wipe the queue after two consecutive 404s for the same song.
-          if (cancelled) return;
-          const count = refreshNotFoundCountRef.current.id === songId
-            ? refreshNotFoundCountRef.current.count + 1
-            : 1;
-          refreshNotFoundCountRef.current = { id: songId, count };
-          if (count >= 2) {
-            refreshNotFoundCountRef.current = { id: null, count: 0 };
-            clearStaleCurrentSong();
-          }
-          return;
-        }
-        if (!response.ok) return;
-        const song = (await response.json()) as PlayerSong;
-        if (cancelled || !song?.id || song.id !== songId) return;
-        refreshNotFoundCountRef.current = { id: null, count: 0 };
-        replaceSong(song);
-      } catch {}
-    }
-
-    refreshCurrentSong();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsPodcast, currentSongIsRadio, pause, replaceSong, setQueue]);
+    void refreshPlaybackSong(song).then((fresh) => {
+      if (!cancelled) replaceSong(fresh);
+    }).catch((error) => {
+      if (!cancelled && mediaLinkExpired(song.audioUrl)) failPlayback(song.id, playbackFailureMessage(error));
+    });
+    return () => { cancelled = true; };
+  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsPodcast, currentSongIsRadio, failPlayback, replaceSong]);
 
   useEffect(() => {
     if (!currentSongId) {
@@ -1734,49 +1745,8 @@ export function usePlaybackEngine(): {
   }, [clearPlaybackError, getActiveAudio]);
 
   const handleActiveAudioError = useCallback((event: React.SyntheticEvent<HTMLAudioElement>) => {
-    const audio = event.currentTarget;
-    if (audio !== getActiveAudio() || !audio.error) return;
-    // Radio / browser-local sources have their own handling. Streaming podcasts
-    // (plain HTTP through the media proxy) deliberately fall through to the same
-    // retry path as music.
-    if (currentSongIsBrowserLocal || currentSongIsRadio) return;
-    notePlaybackNetworkFailure();
-
-    const state = audioSourceStateRef.current.get(audio);
-    const baseSrc = state?.src ?? audio.currentSrc ?? audio.src;
-    if (!baseSrc) return;
-
-    // Retry the same track once with a cache-busted URL. Don't
-    // touch HLS sources (managed by hls.js) — only retry plain element srcs.
-    if (!state?.hls && erroredSrcRetryRef.current !== baseSrc) {
-      erroredSrcRetryRef.current = baseSrc;
-      const sep = baseSrc.includes("?") ? "&" : "?";
-      const bustedSrc = `${baseSrc}${sep}__retry=${Date.now()}`;
-      try {
-        // Ignore the rejected play promise from the source we're replacing.
-        playRequestIdRef.current += 1;
-        audio.src = bustedSrc;
-        audioSourceStateRef.current.set(audio, { src: baseSrc, hls: null });
-        audio.load();
-        if (isPlayingRef.current) void playAudio(audio);
-        return;
-      } catch {}
-    }
-
-    // A missing file is not a request to change songs. Keep the selected song
-    // and queue intact, including when a paused/restored source fails to load.
-    cancelActiveCrossfade();
-    resetPendingSeek();
-    isPlayingRef.current = false;
-    playRequestIdRef.current += 1;
-    audio.pause();
-    const failedSong = usePlayerStore.getState().currentSong;
-    if (failedSong?.id === currentSongId) {
-      const retrySong = prepareHistorySongForPlayback(failedSong);
-      if (retrySong !== failedSong) replaceSong(retrySong);
-    }
-    if (currentSongId) failPlayback(currentSongId, "This song couldn’t load. Press play to retry.");
-  }, [currentSongId, currentSongIsBrowserLocal, currentSongIsRadio, getActiveAudio, cancelActiveCrossfade, resetPendingSeek, playAudio, failPlayback, replaceSong]);
+    if (event.currentTarget.error) recoverActiveAudioRef.current(event.currentTarget);
+  }, []);
 
   const handleTogglePlayback = useCallback(() => {
     if (isPlaying) {
@@ -1785,9 +1755,18 @@ export function usePlaybackEngine(): {
     }
     // Build/resume the Web Audio graph inside this user gesture (iOS requirement).
     ensureWebAudioGraph();
+    const audio = getActiveAudio();
+    if (audio && playbackSong?.audioUrl && (playbackError || mediaLinkExpired(playbackSong.audioUrl))) {
+      erroredSrcRetryRef.current = null;
+      clearPlaybackError();
+      play();
+      isPlayingRef.current = true;
+      recoverActiveAudioRef.current(audio);
+      return;
+    }
     requestImmediatePlayback(playbackSong);
     play();
-  }, [playbackSong, isPlaying, pause, play, ensureWebAudioGraph]);
+  }, [playbackSong, playbackError, isPlaying, pause, play, ensureWebAudioGraph, getActiveAudio, clearPlaybackError]);
 
   // Global keyboard shortcuts (always register to keep hook order stable)
   useEffect(() => {

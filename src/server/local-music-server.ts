@@ -52,7 +52,7 @@ import {
   slicePage,
   wantsLibraryPage,
 } from "../../packages/shared/src/cursor-page";
-import { songMatchesLibraryQuery } from "../../packages/shared/src/library-search";
+import { rankLibrarySongs } from "../../packages/shared/src/library-search";
 import {
   LOCAL_OWNER_EMAIL,
   LOCAL_OWNER_IMAGE_URL,
@@ -1620,12 +1620,13 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     }
     const snapshot = await getLibrary(source);
     const query = url.searchParams.get("q") || "";
-    const songs = songsForRequest(snapshot.songs, request)
-      .filter((song) => songMatchesLibraryQuery(song, query))
+    const songs = rankLibrarySongs(songsForRequest(snapshot.songs, request), query)
       .map((song) => ({
         id: song.id,
         title: song.title,
         artist: song.artist,
+        album: song.album,
+        duration: song.duration,
         imageUrl: song.imageUrl,
         audioUrl: song.audioUrl,
         createdAt: song.createdAt,

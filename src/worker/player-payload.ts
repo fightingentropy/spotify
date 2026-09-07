@@ -1,5 +1,6 @@
 import type { PlayerSong } from "@/types/player";
 import { toNumberValue, toObject, toStringValue } from "./values";
+import { discoverIdentity } from "@spotify/shared/playback-source";
 
 export function coercePlayerSongPayload(value: unknown): PlayerSong | null {
   const payload = toObject(value);
@@ -8,7 +9,8 @@ export function coercePlayerSongPayload(value: unknown): PlayerSong | null {
   const title = toStringValue(payload.title);
   const artist = toStringValue(payload.artist);
   const audioUrl = toStringValue(payload.audioUrl);
-  if (!id || !title || !artist || !audioUrl) return null;
+  const identity = discoverIdentity(payload, audioUrl);
+  if (!id || !title || !artist || (!audioUrl && !identity.discoverTrackId)) return null;
   const imageUrl = toStringValue(payload.imageUrl) || "/apple-icon.png";
   const lyricsUrl = toStringValue(payload.lyricsUrl);
   const description = toStringValue(payload.description);
@@ -25,9 +27,6 @@ export function coercePlayerSongPayload(value: unknown): PlayerSong | null {
   // Discover track un-promotable: liking it found no track id, so the keep targeted
   // the throwaway "discover:" placeholder id and silently reverted. Keep the fields
   // the stager/promote path depends on.
-  const discoverTrackId = toStringValue(payload.discoverTrackId);
-  const youtubeVideoId = toStringValue(payload.youtubeVideoId);
-  const preview = payload.preview === true;
   return {
     id,
     title,
@@ -44,8 +43,7 @@ export function coercePlayerSongPayload(value: unknown): PlayerSong | null {
     createdAt: createdAt || new Date().toISOString(),
     source: source ? (source as PlayerSong["source"]) : undefined,
     localPath: localPath || undefined,
-    discoverTrackId: discoverTrackId || undefined,
-    youtubeVideoId: youtubeVideoId || undefined,
-    preview: preview || undefined,
+    canonicalId: toStringValue(payload.canonicalId) || undefined,
+    ...identity,
   };
 }

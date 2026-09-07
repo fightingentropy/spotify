@@ -2,6 +2,7 @@ import { apiFetch } from "@/lib/http";
 import { isRadioSong } from "@/lib/player-song";
 import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
+import { discoverIdentity } from "@spotify/shared/playback-source";
 
 // Cross-device resume. Ported from src/lib/playback-state.ts +
 // src/client/playback-state.ts. localStorage → MMKV; fetch → apiFetch; the
@@ -71,7 +72,8 @@ function coercePlayerSong(value: unknown): PlayerSong | null {
   const title = toStringValue(payload.title);
   const artist = toStringValue(payload.artist);
   const audioUrl = toStringValue(payload.audioUrl);
-  if (!id || !title || !artist || !audioUrl) return null;
+  const identity = discoverIdentity(payload, audioUrl);
+  if (!id || !title || !artist || (!audioUrl && !identity.discoverTrackId)) return null;
   return {
     id,
     title,
@@ -88,6 +90,7 @@ function coercePlayerSong(value: unknown): PlayerSong | null {
     audioSampleRate: toNumberValue(payload.audioSampleRate) ?? undefined,
     source: (toStringValue(payload.source) as PlayerSong["source"]) || undefined,
     localPath: toStringValue(payload.localPath) || undefined,
+    ...identity,
   };
 }
 

@@ -66,6 +66,14 @@ export function getBlockedKeys(): string[] {
   return readBlocklist().keys;
 }
 
+export function removeBlocked(song: { id?: string; title: string; artist: string }): void {
+  const current = readBlocklist();
+  writeBlocklist({
+    keys: current.keys.filter((key) => key !== blockKey(song.title, song.artist)),
+    ids: current.ids.filter((id) => id !== song.id),
+  });
+}
+
 export function getBlockedIds(): string[] {
   return readBlocklist().ids;
 }

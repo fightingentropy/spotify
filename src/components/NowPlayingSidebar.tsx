@@ -18,7 +18,10 @@ export default function NowPlayingSidebar() {
   const podcastDescription = displaySong?.description?.trim() ?? "";
 
   const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem("spotify_right_sidebar_collapsed") === "1",
+    () => {
+      try { return localStorage.getItem("spotify_now_playing_sidebar_open") !== "1"; }
+      catch { return true; }
+    },
   );
   const [showLyrics, setShowLyrics] = useState(false);
   const [playbackPosition, setPlaybackPosition] = useState(0);
@@ -33,7 +36,7 @@ export default function NowPlayingSidebar() {
   useEffect(() => {
     const width = collapsed ? "4rem" : "20rem";
     document.documentElement.style.setProperty("--wf-right-sidebar-width", width);
-    localStorage.setItem("spotify_right_sidebar_collapsed", collapsed ? "1" : "0");
+    try { localStorage.setItem("spotify_now_playing_sidebar_open", collapsed ? "0" : "1"); } catch {}
     return () => {
       document.documentElement.style.removeProperty("--wf-right-sidebar-width");
     };

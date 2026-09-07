@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { usePlayerStore } from "@/store/player";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { isUnstagedDiscoverSong, stageDiscoverSong } from "@/client/discover-queue";
+import { playbackFailureMessage } from "@/client/playback-recovery";
 
 // Drives just-in-time staging for curated-playlist queues. Curated tracks enter
 // the queue as placeholders (empty audioUrl); this materializes the current one
@@ -37,11 +38,11 @@ export function DiscoverQueueStager(): null {
           const state = usePlayerStore.getState();
           if (state.currentSong?.id === real.id && state.isPlaying) requestImmediatePlayback(real);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           failedRef.current.add(placeholderId);
           // Also handles a prefetched song that became current while loading.
           // Late failures for a different selection leave playback untouched.
-          failPlayback(placeholderId, "This song couldn’t load. Press play to retry.");
+          failPlayback(placeholderId, playbackFailureMessage(error));
         })
         .finally(() => {
           inFlightRef.current.delete(placeholderId);

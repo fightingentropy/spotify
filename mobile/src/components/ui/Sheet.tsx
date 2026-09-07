@@ -29,12 +29,14 @@ export function Sheet({
   onClose,
   heightPct = 0.94,
   zIndex = 100,
+  dragToDismiss = true,
   children,
 }: {
   visible: boolean;
   onClose: () => void;
   heightPct?: number;
   zIndex?: number;
+  dragToDismiss?: boolean;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -90,6 +92,7 @@ export function Sheet({
   });
 
   const pan = Gesture.Pan()
+    .enabled(dragToDismiss)
     .onUpdate((e) => {
       "worklet";
       dragY.value = Math.max(0, e.translationY);

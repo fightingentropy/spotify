@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type TouchEvent } from "react";
-import { ChevronDown, X } from "lucide-react";
-import { usePlayerStore } from "@/store/player";
+import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
+import { ChevronDown, GripVertical, X } from "lucide-react";
+import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,13 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   const shuffleRemaining = usePlayerStore((s) => s.shuffleRemaining);
   const playFuture = usePlayerStore((s) => s.playFuture);
   const removeFromQueue = usePlayerStore((s) => s.removeFromQueue);
+  const moveQueuedSong = usePlayerStore((s) => s.moveQueuedSong);
+  const lastRemoval = usePlayerStore((s) => s.lastQueueRemoval);
+  const undoRemoval = usePlayerStore((s) => s.undoQueueRemoval);
+  const repeatMode = usePlayerStore((s) => s.repeatMode);
+  const drag = useRef<{ from: number; to: number; songId: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<number | null>(null);
+
 
   const touchStartYRef = useRef<number | null>(null);
   const swipeDismissAllowedRef = useRef(false);
@@ -36,26 +43,12 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   // trap while open.
   useModalDialogFocus(open, panelRef);
 
-  const upNext = useMemo<QueueEntry[]>(() => {
-    if (!shuffle) {
-      return queue
-        .slice(currentIndex + 1)
-        .map((song, offset) => ({ song, queueIndex: currentIndex + 1 + offset }));
-    }
-    // Shuffle plays the redo stack (playFuture, newest first) before drawing
-    // from the shuffle pool, so list those entries first to match next().
-    const seen = new Set<number>();
-    const entries: QueueEntry[] = [];
-    const pushIndex = (queueIndex: number) => {
-      if (queueIndex < 0 || queueIndex >= queue.length || queueIndex === currentIndex) return;
-      if (seen.has(queueIndex)) return;
-      seen.add(queueIndex);
-      entries.push({ song: queue[queueIndex], queueIndex });
-    };
-    for (let i = playFuture.length - 1; i >= 0; i -= 1) pushIndex(playFuture[i]);
-    for (const queueIndex of shuffleRemaining) pushIndex(queueIndex);
-    return entries;
-  }, [currentIndex, playFuture, queue, shuffle, shuffleRemaining]);
+  const upNext = useMemo<QueueEntry[]>(() =>
+    getUpcomingPlaybackIndices(queue.length, currentIndex, queue.length, {
+      shuffle, repeatMode, shuffleRemaining, playFuture,
+    }).map((queueIndex) => ({ song: queue[queueIndex], queueIndex })),
+    [queue, currentIndex, shuffle, repeatMode, shuffleRemaining, playFuture],
+  );
 
   const resolveDisplaySong = useMemo(
     () => (song: PlayerSong) => song,
@@ -124,9 +117,11 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
     return (
       <div
         key={`${entry.song.id}-${entry.queueIndex}`}
+        data-queue-index={entry.queueIndex}
         className={cn(
           "wf-list-row group flex items-center gap-3 rounded-lg px-2 py-2",
           highlighted ? "bg-white/[0.045]" : "hover:bg-white/[0.035]",
+          dropTarget === entry.queueIndex && "ring-1 ring-inset ring-white/40",
         )}
       >
         <button
@@ -154,6 +149,50 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
             <span className="block truncate text-xs opacity-70">{displaySong.artist}</span>
           </span>
         </button>
+        {removable ? <button
+          type="button"
+          aria-label={`Move ${displaySong.title}`}
+          title="Drag to reorder, or use the up and down arrow keys"
+          className="grid h-11 w-9 shrink-0 cursor-grab touch-none place-items-center rounded-lg text-white/45 hover:text-white active:cursor-grabbing"
+          onTouchStart={(event) => event.stopPropagation()}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.stopPropagation();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            drag.current = { from: entry.queueIndex, to: entry.queueIndex, songId: entry.song.id };
+          }}
+          onPointerMove={(event) => {
+            if (!drag.current) return;
+            const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-queue-index]");
+            const target = row ? Number(row.dataset.queueIndex) : NaN;
+            if (upNext.some((item) => item.queueIndex === target)) {
+              drag.current.to = target;
+              setDropTarget(target);
+            }
+            const panel = scrollContainerRef.current;
+            if (panel) {
+              const bounds = panel.getBoundingClientRect();
+              if (event.clientY > bounds.bottom - 60) panel.scrollTop += 18;
+              else if (event.clientY < bounds.top + 60) panel.scrollTop -= 18;
+            }
+          }}
+          onPointerUp={(event) => {
+            const move = drag.current;
+            drag.current = null;
+            setDropTarget(null);
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            if (move && usePlayerStore.getState().queue[move.from]?.id === move.songId) moveQueuedSong(move.from, move.to, upNext.map((item) => item.queueIndex));
+          }}
+          onPointerCancel={() => { drag.current = null; setDropTarget(null); }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            event.preventDefault();
+            event.stopPropagation();
+            const position = upNext.findIndex((item) => item.queueIndex === entry.queueIndex);
+            const target = upNext[position + (event.key === "ArrowUp" ? -1 : 1)];
+            if (target) moveQueuedSong(entry.queueIndex, target.queueIndex, upNext.map((item) => item.queueIndex));
+          }}
+        ><GripVertical size={18} /></button> : null}
         {removable ? (
           <button
             type="button"
@@ -210,6 +249,10 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
           className="h-full overflow-y-auto overscroll-contain pt-[env(safe-area-inset-top)] pb-[calc(env(safe-area-inset-bottom)+1rem)] lg:pt-0 lg:pb-0"
         >
           <div className="p-4 sm:p-6 min-h-full flex flex-col">
+            {lastRemoval ? <div role="status" className="mb-3 flex items-center gap-3 border-b border-white/10 pb-2 text-sm">
+              <span className="min-w-0 flex-1 truncate text-white/60">Removed {lastRemoval.song.title}</span>
+              <button type="button" onClick={undoRemoval} className="min-h-11 px-3 font-semibold text-white">Undo</button>
+            </div> : null}
             <div className="flex items-center justify-between mb-4 lg:mb-4">
               <button
                 type="button"

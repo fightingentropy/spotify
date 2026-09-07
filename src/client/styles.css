@@ -10,8 +10,8 @@
   --hairline: rgba(255, 255, 255, 0.12);
   --muted: rgba(255, 255, 255, 0.6);
   --dim: rgba(255, 255, 255, 0.4);
-  --wf-left-sidebar-width: 16rem;
-  --wf-right-sidebar-width: 20rem;
+  --wf-left-sidebar-width: 13.5rem;
+  --wf-right-sidebar-width: 4rem;
   --wf-mobile-nav-height: 3.625rem;
   --wf-mobile-player-height: 4.125rem;
   --wf-floating-inset: 0.625rem;
@@ -89,9 +89,9 @@ body.wf-now-playing-open {
     position: fixed;
     min-height: 0;
     top: calc(3.5rem + env(safe-area-inset-top));
-    right: var(--wf-right-sidebar-width, 20rem);
+    right: var(--wf-right-sidebar-width, 4rem);
     bottom: 84px;
-    left: var(--wf-left-sidebar-width, 16rem);
+    left: var(--wf-left-sidebar-width, 13.5rem);
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRecentSearches } from "@/client/recent-searches";
+import { rankLibrarySongs } from "@spotify/shared/library-search";
 import { Search } from "lucide-react";
 import { AuthButtons } from "@/components/AuthButtons";
 import { useAuth } from "@/client/auth";
@@ -16,6 +18,7 @@ export default function MobileSearch() {
   const [catalogQuery, setCatalogQuery] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
   const { user, status } = useAuth();
+  const { recentSearches, remember, clear } = useRecentSearches(user?.id ?? status);
   const setQueue = usePlayerStore((state) => state.setQueue);
 
   useEffect(() => {
@@ -43,8 +46,8 @@ export default function MobileSearch() {
   );
 
   const dedupedSongs = useMemo(
-    () => dedupeSongsByTitleArtist(libraryState.data.songs),
-    [libraryState.data.songs],
+    () => dedupeSongsByTitleArtist(rankLibrarySongs(libraryState.data.songs, query)),
+    [libraryState.data.songs, query],
   );
 
   const results = useMemo(() => dedupedSongs.slice(0, 50), [dedupedSongs]);
@@ -54,13 +57,14 @@ export default function MobileSearch() {
     [dedupedSongs],
   );
   const catalogResults = useMemo(
-    () => catalogState.data.results.filter(
+    () => (catalogQuery === query.trim() && catalogState.data.query === catalogQuery ? catalogState.data.results : []).filter(
       (song) => !libraryKeys.has(`${song.title.trim().toLowerCase()}\u0000${song.artist.trim().toLowerCase()}`),
     ),
-    [catalogState.data.results, libraryKeys],
+    [catalogState.data, catalogQuery, query, libraryKeys],
   );
 
   const playQueueSong = (queue: PlayerSong[], index: number) => {
+    remember(query);
     const song = setQueue(queue, index);
     if (song?.audioUrl) requestImmediatePlayback(song);
   };
@@ -104,6 +108,7 @@ export default function MobileSearch() {
           aria-label="Search songs"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") remember(query); }}
           placeholder="Songs, artists and playlists"
           autoComplete="off"
           autoCorrect="off"
@@ -114,7 +119,12 @@ export default function MobileSearch() {
 
       <div className="space-y-1">
         {query.trim().length === 0 ? (
-          <div className="py-12 text-center text-sm text-white/60">Start typing to search music</div>
+          <div className="py-4 text-sm text-white/60">
+            {recentSearches.length ? <>
+              <div className="mb-3 flex justify-between"><span>Recent searches</span><button type="button" onClick={clear} className="px-2 text-xs">Clear</button></div>
+              {recentSearches.map((term) => <button type="button" key={term} onClick={() => setQuery(term)} className="block min-h-11 w-full text-left text-base text-white">{term}</button>)}
+            </> : <p className="py-8 text-center">Start typing to search music</p>}
+          </div>
         ) : (
           <>
             {libraryState.loading && results.length === 0 ? (

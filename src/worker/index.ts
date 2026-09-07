@@ -47,9 +47,9 @@ import {
   wantsLibraryPage,
 } from "../../packages/shared/src/cursor-page";
 import {
-  escapeLikePattern,
   normalizeLibrarySearchQuery,
 } from "../../packages/shared/src/library-search";
+import { searchLibraryPage } from "./library-search";
 import { createStreamingMultipartBody } from "./streaming-multipart";
 import {
   canUseMacMiniProxy,
@@ -527,27 +527,11 @@ async function listSearchSongsPage(
   if (!userId) return { songs: [], nextCursor: null };
   const fetchCount = options.limit + 1;
   const needle = normalizeLibrarySearchQuery(options.query);
-  const pattern = needle ? `%${escapeLikePattern(needle)}%` : null;
-  const rows = pattern
-    ? options.cursor
-      ? await db<Pick<SongRow, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "createdAt">>`
-          SELECT "id", "title", "artist", "imageUrl", "audioUrl", "createdAt"
-          FROM "Song"
-          WHERE "userId" = ${userId}
-            AND (LOWER("title") LIKE ${pattern} ESCAPE '\' OR LOWER("artist") LIKE ${pattern} ESCAPE '\')
-            AND ("createdAt" < ${options.cursor.createdAt} OR ("createdAt" = ${options.cursor.createdAt} AND "id" < ${options.cursor.id}))
-          ORDER BY "createdAt" DESC, "id" DESC
-          LIMIT ${fetchCount}
-        `
-      : await db<Pick<SongRow, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "createdAt">>`
-          SELECT "id", "title", "artist", "imageUrl", "audioUrl", "createdAt"
-          FROM "Song"
-          WHERE "userId" = ${userId}
-            AND (LOWER("title") LIKE ${pattern} ESCAPE '\' OR LOWER("artist") LIKE ${pattern} ESCAPE '\')
-          ORDER BY "createdAt" DESC, "id" DESC
-          LIMIT ${fetchCount}
-        `
-    : options.cursor
+  if (needle) {
+    const page = await searchLibraryPage(db, userId, needle, options.limit, options.cursor);
+    return { songs: page.rows.map(songToPlayerSong), nextCursor: page.nextCursor };
+  }
+  const rows = options.cursor
       ? await db<Pick<SongRow, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "createdAt">>`
           SELECT "id", "title", "artist", "imageUrl", "audioUrl", "createdAt"
           FROM "Song"

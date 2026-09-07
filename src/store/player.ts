@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { moveUpcomingSong, rememberQueueRemoval, restoreQueueRemoval, type QueueRemoval } from "@spotify/shared/queue-editing";
 import { songKind } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
 import {
@@ -56,6 +57,9 @@ type PlayerState = {
   replaceStagedSong: (oldId: string, song: PlayerSong) => void;
   addToQueue: (song: PlayerSong) => void;
   playNext: (song: PlayerSong) => void;
+  lastQueueRemoval: (QueueRemoval<PlayerSong>) | null;
+  moveQueuedSong: (from: number, to: number, order?: number[]) => void;
+  undoQueueRemoval: () => void;
   removeFromQueue: (index: number) => void;
   play: () => void;
   pause: () => void;
@@ -315,6 +319,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       : state,
   ),
   clearPlaybackError: () => set({ playbackError: null }),
+  lastQueueRemoval: null,
   queue: [],
   currentIndex: -1,
   currentSong: null,
@@ -351,6 +356,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       : -1;
     const currentSong = start >= 0 ? queue[start] ?? null : null;
     set(() => ({
+      lastQueueRemoval: null,
       queue,
       currentIndex: start,
       currentSong,
@@ -364,6 +370,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   setSong: (song) =>
     set({
+      lastQueueRemoval: null,
       currentSong: song,
       playbackError: null,
       queue: song ? [song] : [],
@@ -472,14 +479,39 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, insertAt, 1),
       };
     }),
+  moveQueuedSong: (from, to, order) => set((s) => {
+    const currentOrder = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+    const available = new Set(currentOrder);
+    if (order && (order.length !== currentOrder.length || new Set(order).size !== order.length || order.some((index) => !available.has(index)))) return s;
+    const upcoming = order ?? currentOrder;
+    const moved = moveUpcomingSong(s, upcoming, from, to);
+    if (!moved) return s;
+    const { mapping, ...patch } = moved;
+    void mapping;
+    return patch;
+  }),
+  undoQueueRemoval: () => set((s) => {
+    const removed = s.lastQueueRemoval;
+    if (!removed) return s;
+    const upcoming = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+    const restored = restoreQueueRemoval(s, upcoming, removed);
+    if (!restored) return { lastQueueRemoval: null };
+    const { index, remap, ...patch } = restored;
+    void index;
+    void remap;
+    return { ...patch, lastQueueRemoval: null };
+  }),
   removeFromQueue: (index) =>
     set((s) => {
       if (!Number.isInteger(index) || index < 0 || index >= s.queue.length || index === s.currentIndex) {
         return s;
       }
+      const upcoming = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+      const removal = rememberQueueRemoval(s, upcoming, index);
       const queue = s.queue.slice();
       queue.splice(index, 1);
       return {
+        lastQueueRemoval: removal,
         queue,
         currentIndex: index < s.currentIndex ? s.currentIndex - 1 : s.currentIndex,
         playHistory: remapQueueIndices(s.playHistory, index, -1),

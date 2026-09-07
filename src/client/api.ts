@@ -407,6 +407,7 @@ export type SearchIndexPayload = {
 };
 
 export type SearchCatalogPayload = {
+  query?: string;
   results: PlayerSong[];
 };
 

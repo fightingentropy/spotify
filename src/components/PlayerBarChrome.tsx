@@ -142,7 +142,8 @@ export function PlayerBarChrome({
       <div className="fixed inset-x-0 z-40 bottom-[calc(var(--wf-mobile-nav-bottom-offset)+var(--wf-floating-gap))] text-white lg:bottom-0 lg:border-t lg:border-white/[0.08] lg:bg-black">
       {playbackError ? (
         <div role="alert" className="mx-[var(--wf-floating-inset)] mb-2 rounded-lg border border-white/15 bg-[#181818] px-4 py-2 text-center text-sm text-white/80 lg:mx-0 lg:mb-0 lg:rounded-none lg:border-x-0 lg:border-t-0">
-          {playbackError}
+          <span>{playbackError}</span>
+          <button type="button" onClick={onTogglePlayback} className="ml-3 min-h-9 rounded-full bg-white px-4 text-xs font-semibold text-black">Retry</button>
         </div>
       ) : null}
       {/* Mobile mini player */}

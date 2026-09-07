@@ -9,6 +9,7 @@ import {
 } from "@/lib/playback-state";
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
 import type { PlayerSong } from "@/types/player";
+import { discoverIdentity } from "@spotify/shared/playback-source";
 
 type PlaybackStateResponse = {
   state?: unknown;
@@ -38,7 +39,8 @@ function coercePlayerSong(value: unknown): PlayerSong | null {
   const title = toStringValue(payload.title);
   const artist = toStringValue(payload.artist);
   const audioUrl = toStringValue(payload.audioUrl);
-  if (!id || !title || !artist || !audioUrl) return null;
+  const identity = discoverIdentity(payload, audioUrl);
+  if (!id || !title || !artist || (!audioUrl && !identity.discoverTrackId)) return null;
   const album = toStringValue(payload.album);
   const imageUrl = toStringValue(payload.imageUrl) || "/apple-icon.png";
   const lyricsUrl = toStringValue(payload.lyricsUrl);
@@ -66,6 +68,8 @@ function coercePlayerSong(value: unknown): PlayerSong | null {
     audioSampleRate: audioSampleRate ?? undefined,
     source: source ? (source as PlayerSong["source"]) : undefined,
     localPath: localPath || undefined,
+    canonicalId: toStringValue(payload.canonicalId) || undefined,
+    ...identity,
   };
 }
 

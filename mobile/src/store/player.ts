@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { moveUpcomingSong, rememberQueueRemoval, restoreQueueRemoval, type QueueRemoval } from "@spotify/shared/queue-editing";
 import { markPlaybackEngaged } from "@/audio/publish-gate";
 import {
   createShuffleRemaining,
@@ -19,7 +20,9 @@ import {
   wouldDuplicateSongInQueue,
 } from "@/lib/queue-append";
 import { storage } from "@/lib/storage";
-import { useOfflineStore } from "@/store/offline";
+import { getOfflineAccountScope, useOfflineStore } from "@/store/offline";
+import { isBlocked, removeBlocked } from "@/store/smart-shuffle-blocklist";
+import { recordCollectionPlay } from "@/store/collection-history";
 import {
   findPlayableQueueIndex,
   resolveInitialQueueIndex,
@@ -125,6 +128,9 @@ type PlayerState = {
     },
   ) => void;
   playNext: (song: PlayerSong) => void;
+  lastQueueRemoval: (QueueRemoval<PlayerSong> & { recommended: boolean; blocked: boolean; manualNext: boolean; manualTail: boolean }) | null;
+  moveQueuedSong: (from: number, to: number, order?: number[]) => void;
+  undoQueueRemoval: () => void;
   removeFromQueue: (index: number) => void;
   play: () => void;
   pause: () => void;
@@ -421,6 +427,7 @@ function skipDownloadedOffline(direction: 1 | -1): boolean {
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
+  lastQueueRemoval: null,
   queue: [],
   currentIndex: -1,
   currentSong: null,
@@ -465,7 +472,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         })
       : -1;
     const currentSong = start >= 0 ? queue[start] ?? null : null;
+    if (currentSong) recordCollectionPlay(getOfflineAccountScope(), options?.contextKey);
     set(() => ({
+      lastQueueRemoval: null,
       queue,
       currentIndex: start,
       currentSong,
@@ -485,6 +494,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   setSong: (song) =>
     set({
+      lastQueueRemoval: null,
       currentSong: song,
       queue: song ? [song] : [],
       currentIndex: song ? 0 : -1,
@@ -717,11 +727,47 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, insertAt, 1),
       };
     }),
+  moveQueuedSong: (from, to, order) => set((s) => {
+    const currentOrder = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+    const available = new Set(currentOrder);
+    if (order && (order.length !== currentOrder.length || new Set(order).size !== order.length || order.some((index) => !available.has(index)))) return s;
+    const upcoming = order ?? currentOrder;
+    const moved = moveUpcomingSong(s, upcoming, from, to);
+    if (!moved) return s;
+    const { mapping, ...patch } = moved;
+    return {
+      ...patch,
+      manualNextIndices: new Set([...s.manualNextIndices].map((index) => mapping[index]).concat(upcoming)),
+      // A drag establishes the whole visible order, including former tail pins.
+      // Future collection pages belong after this explicitly arranged block.
+      manualTailIndices: new Set<number>(),
+    };
+  }),
+  undoQueueRemoval: () => set((s) => {
+    const removed = s.lastQueueRemoval;
+    if (!removed) return s;
+    const upcoming = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+    const restored = restoreQueueRemoval(s, upcoming, removed);
+    if (!restored) return { lastQueueRemoval: null };
+    const { index, remap, ...patch } = restored;
+    const recommendedIds = new Set(s.recommendedIds);
+    if (removed.recommended) {
+      recommendedIds.add(removed.song.id);
+      if (!removed.blocked) removeBlocked(removed.song);
+    }
+    const manualNextIndices = new Set([...s.manualNextIndices].map(remap));
+    const manualTailIndices = new Set([...s.manualTailIndices].map(remap));
+    if (removed.manualNext) manualNextIndices.add(index);
+    if (removed.manualTail) manualTailIndices.add(index);
+    return { ...patch, recommendedIds, manualNextIndices, manualTailIndices, lastQueueRemoval: null };
+  }),
   removeFromQueue: (index) =>
     set((s) => {
       if (!Number.isInteger(index) || index < 0 || index >= s.queue.length || index === s.currentIndex) {
         return s;
       }
+      const upcoming = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+      const removal = rememberQueueRemoval(s, upcoming, index);
       const removedId = s.queue[index].id;
       const queue = s.queue.slice();
       queue.splice(index, 1);
@@ -732,6 +778,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         recommendedIds.delete(removedId);
       }
       return {
+        lastQueueRemoval: { ...removal, recommended: s.recommendedIds.has(removedId), blocked: isBlocked(removal.song), manualNext: s.manualNextIndices.has(index), manualTail: s.manualTailIndices.has(index) },
         queue,
         currentIndex: index < s.currentIndex ? s.currentIndex - 1 : s.currentIndex,
         playHistory: remapQueueIndices(s.playHistory, index, -1),
