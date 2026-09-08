@@ -29,6 +29,13 @@ describe("collection browsing", () => {
     expect(filterCollectionSongs(songs, "  ")).toEqual(songs);
   });
 
+  test("does not mix spelling suggestions into a playable selection with direct matches", () => {
+    const similar = [song("blue", "Blue Monday", "New Order"), ...songs];
+    expect(filterCollectionSongs(similar, "blur").map((s) => s.id)).toEqual(["ten", "two"]);
+    expect(filterCollectionSongs(similar, "blue").map((s) => s.id)).toEqual(["blue"]);
+    expect(filterCollectionSongs(similar, "blurr").map((s) => s.id)).toEqual(["ten", "two"]);
+  });
+
   test("sorts titles naturally and artists using titles as a tiebreaker", () => {
     expect(sortCollectionSongs(songs, "title").map((s) => s.id)).toEqual(["accent", "two", "ten", "wonder"]);
     expect(sortCollectionSongs(songs, "artist").map((s) => s.id)).toEqual(["accent", "two", "ten", "wonder"]);

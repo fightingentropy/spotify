@@ -1,4 +1,4 @@
-import { songMatchesLibraryQuery } from "@spotify/shared/library-search";
+import { normalizeLibrarySearchQuery, songMatchesLibraryQuery } from "@spotify/shared/library-search";
 import type { PlayerSong } from "@/types/player";
 
 export const SONG_SORT_OPTIONS = [
@@ -44,6 +44,16 @@ export function sortCollectionSongs(songs: readonly PlayerSong[], mode: SongSort
 }
 
 export function filterCollectionSongs(songs: readonly PlayerSong[], query: string): PlayerSong[] {
+  const normalized = normalizeLibrarySearchQuery(query);
+  if (!normalized) return [...songs];
+  const tokens = normalized.split(/\s+/);
+  const directMatches = songs.filter((song) => {
+    const fields = [song.title, song.artist, song.album ?? ""].map(normalizeLibrarySearchQuery);
+    return tokens.every((token) => fields.some((field) => field.includes(token)));
+  });
+  // A collection is also a playable selection: "Blur" must not queue "Blue"
+  // tracks alongside the band. Recover spelling only when direct matches fail.
+  if (directMatches.length > 0) return directMatches;
   return songs.filter((song) => songMatchesLibraryQuery({
     title: song.title,
     artist: [song.artist, song.album].filter(Boolean).join(" "),
