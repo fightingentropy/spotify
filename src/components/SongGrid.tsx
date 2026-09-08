@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { LayoutGrid, Pause, Play, Rows3, Shuffle } from "lucide-react";
+import { LayoutGrid, Pause, Play, Rows3, Search, Shuffle, X } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
 import type { PlayerSong } from "@/types/player";
@@ -10,6 +10,13 @@ import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { SongCard } from "@/components/SongCard";
 import { SongListItem } from "@/components/SongListItem";
+import {
+  filterCollectionSongs,
+  isSongSortMode,
+  SONG_SORT_OPTIONS,
+  sortCollectionSongs,
+  type SongSortMode,
+} from "@/lib/song-collection";
 
 type SongGridProps = {
   songs: PlayerSong[];
@@ -23,10 +30,8 @@ type SongGridProps = {
   // When false, hides the per-row "add to queue" button.
   showQueueButton?: boolean;
   emptyLabel?: string;
-  viewToggleClassName?: string;
 };
 
-type SongSortMode = "default" | "uploaded_desc" | "uploaded_asc";
 type VirtualGridRange = {
   start: number;
   end: number;
@@ -40,8 +45,7 @@ const VIRTUAL_OVERSCAN_ROWS = 8;
 const VIRTUALIZATION_MIN_ITEMS = 80;
 const VIRTUAL_GRID_OVERSCAN_ROWS = 4;
 const VIRTUAL_GRID_FALLBACK_COLUMNS = 2;
-const VIRTUAL_GRID_FALLBACK_ROW_HEIGHT = 160;
-const PLAYLIST_VIRTUAL_GRID_FALLBACK_ROW_HEIGHT = 238;
+const VIRTUAL_GRID_FALLBACK_ROW_HEIGHT = 254;
 const VIRTUAL_GRID_FALLBACK_ROW_GAP = 16;
 const VIRTUAL_GRID_INITIAL_ROWS = 12;
 
@@ -68,13 +72,12 @@ function parseCssPixels(value: string): number | null {
 export function SongGrid({
   songs,
   variant = "default",
-  likedSongIds = [],
+  likedSongIds = null,
   hideIfUnliked = false,
   canLike = false,
   showLikeControls = true,
   showQueueButton = true,
   emptyLabel,
-  viewToggleClassName,
 }: SongGridProps) {
   const playlistPresentation = variant === "playlist";
   const viewPreferenceKey = playlistPresentation
@@ -83,13 +86,13 @@ export function SongGrid({
   const sortPreferenceKey = playlistPresentation
     ? "spotify_playlist_song_sort_mode"
     : "spotify_song_sort_mode";
-  const virtualGridFallbackRowHeight = playlistPresentation
-    ? PLAYLIST_VIRTUAL_GRID_FALLBACK_ROW_HEIGHT
-    : VIRTUAL_GRID_FALLBACK_ROW_HEIGHT;
+  const virtualGridFallbackRowHeight = VIRTUAL_GRID_FALLBACK_ROW_HEIGHT;
   const [viewMode, setViewMode] = useState<"grid" | "list">(
     playlistPresentation ? "list" : "grid",
   );
   const [sortMode, setSortMode] = useState<SongSortMode>("default");
+  const [filterQuery, setFilterQuery] = useState("");
+  const filterInputRef = useRef<HTMLInputElement>(null);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [virtualRange, setVirtualRange] = useState({ start: 0, end: 0 });
   const [virtualGridRange, setVirtualGridRange] = useState<VirtualGridRange>({
@@ -120,11 +123,7 @@ export function SongGrid({
         setViewMode(stored);
       }
       const storedSort = localStorage.getItem(sortPreferenceKey);
-      if (
-        storedSort === "default" ||
-        storedSort === "uploaded_desc" ||
-        storedSort === "uploaded_asc"
-      ) {
+      if (isSongSortMode(storedSort)) {
         setSortMode(storedSort);
       }
     } catch {}
@@ -145,13 +144,14 @@ export function SongGrid({
     } catch {}
   }, [sortPreferenceKey]);
 
-  // Only hydrate likes once on mount, not on every prop change
-  const likedSongIdsRef = useRef<string[]>([]);
+  // The first successful response must hydrate even an empty like set; an
+  // empty ref would otherwise leave a new library's heart buttons disabled.
+  const likedSongIdsRef = useRef<string[] | null>(null);
   useEffect(() => {
     // Skip when the server sent no like set (null): merging is non-additive and
     // would wipe every local-server heart until the next successful load.
     if (!Array.isArray(likedSongIds)) return;
-    if (!haveSameIds(likedSongIdsRef.current, likedSongIds)) {
+    if (likedSongIdsRef.current === null || !haveSameIds(likedSongIdsRef.current, likedSongIds)) {
       likedSongIdsRef.current = likedSongIds.slice();
       mergeInitial(likedSongIds);
     }
@@ -172,32 +172,20 @@ export function SongGrid({
   // Sort + id dedup is expensive for large libraries but doesn't depend on
   // likedMap. Keeping it in its own memo prevents every like toggle from
   // re-running it on pages where `hideIfUnliked` is false.
-  const sortedDedupedSongs = useMemo(() => {
-    const sorted = sortMode === "default" ? songs : [...songs];
-    if (sortMode !== "default") {
-      sorted.sort((left, right) => {
-        const leftTime = Date.parse(left.createdAt || "");
-        const rightTime = Date.parse(right.createdAt || "");
-        const a = Number.isFinite(leftTime) ? leftTime : 0;
-        const b = Number.isFinite(rightTime) ? rightTime : 0;
-        return sortMode === "uploaded_desc" ? b - a : a - b;
-      });
-    }
+  const sortedDedupedSongs = useMemo(() => sortCollectionSongs(songs, sortMode), [songs, sortMode]);
 
-    const seen = new Set<string>();
-    const deduped: PlayerSong[] = [];
-    for (const song of sorted) {
-      if (seen.has(song.id)) continue;
-      seen.add(song.id);
-      deduped.push(song);
-    }
-    return deduped;
-  }, [songs, sortMode]);
-
-  const visibleSongs = useMemo(() => {
+  const collectionSongs = useMemo(() => {
     if (!hideIfUnliked) return sortedDedupedSongs;
     return sortedDedupedSongs.filter((song) => !!likedMap[song.id]);
   }, [hideIfUnliked, likedMap, sortedDedupedSongs]);
+  const visibleSongs = useMemo(
+    () => filterCollectionSongs(collectionSongs, filterQuery),
+    [collectionSongs, filterQuery],
+  );
+  const clearFilter = () => {
+    setFilterQuery("");
+    filterInputRef.current?.focus();
+  };
 
   const currentSongId = currentSong?.id ?? null;
   const currentSongIsInList = useMemo(() => {
@@ -461,7 +449,6 @@ export function SongGrid({
       song={song}
       songIndex={index}
       onPlayAt={onPlayAt}
-      variant={variant}
       liked={!!likedMap[song.id]}
       likePending={!!pendingLookup[song.id]}
       canLike={canLike}
@@ -473,28 +460,23 @@ export function SongGrid({
     />
   );
 
-  if (visibleSongs.length === 0) {
-    if (hideIfUnliked && emptyLabel) {
-      return <div className="opacity-70">{emptyLabel}</div>;
-    }
-    return null;
+  if (collectionSongs.length === 0) {
+    return <div className="text-sm text-white/60">{emptyLabel ?? "No songs in this collection yet."}</div>;
   }
 
   return (
     <div className={cn(!preferencesReady && "opacity-0")}>
       <div
         className={cn(
-          "flex w-full items-center gap-2",
+          "flex w-full flex-wrap items-center gap-3",
           playlistPresentation ? "mb-5 border-y border-white/[0.08] py-3" : "mb-3",
-          viewToggleClassName,
         )}
         role={playlistPresentation ? "group" : undefined}
         aria-label={playlistPresentation ? "Playlist controls" : undefined}
       >
         <div
           className={cn(
-            "flex min-w-0 flex-1 flex-wrap items-center gap-2",
-            playlistPresentation ? "justify-between" : "ml-auto justify-end sm:flex-none",
+            "flex min-w-0 flex-1 flex-wrap items-center gap-3",
           )}
         >
           <div className="flex shrink-0 items-center gap-2">
@@ -528,20 +510,45 @@ export function SongGrid({
               />
             </button>
           </div>
-          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
+            <Search aria-hidden size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/45" />
+            <input
+              ref={filterInputRef}
+              type="search"
+              value={filterQuery}
+              maxLength={100}
+              onChange={(event) => setFilterQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && filterQuery) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  clearFilter();
+                }
+              }}
+              aria-label={playlistPresentation ? "Find in this playlist" : "Find in these songs"}
+              placeholder={playlistPresentation ? "Find in this playlist" : "Find in these songs"}
+              className="h-10 w-full rounded-lg border border-white/10 bg-white/[0.035] pl-9 pr-9 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/30 focus-visible:ring-2 focus-visible:ring-white/20 [&::-webkit-search-cancel-button]:appearance-none"
+            />
+            {filterQuery ? (
+              <button type="button" onClick={clearFilter} aria-label="Clear filter" className="absolute right-1 top-1 grid h-8 w-8 place-items-center rounded-md text-white/55 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60">
+                <X size={16} />
+              </button>
+            ) : null}
+          </div>
+          <div className="ml-auto flex w-full min-w-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
             <select
               value={sortMode}
               onChange={(event) => setNextSortMode(event.target.value as SongSortMode)}
               className={cn(
                 "h-10 min-w-0 flex-1 rounded-lg border border-black/10 bg-black/5 px-3 text-sm dark:border-white/10 dark:bg-white/5 sm:flex-none",
-                playlistPresentation ? "sm:w-52" : "sm:w-64",
+                "sm:w-48",
               )}
               aria-label="Sort songs"
               title="Sort songs"
             >
-              <option value="default">Sort: Default</option>
-              <option value="uploaded_desc">Sort: Upload date (newest)</option>
-              <option value="uploaded_asc">Sort: Upload date (oldest)</option>
+              {SONG_SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
             <div className="inline-flex h-10 shrink-0 items-center rounded-lg border border-black/10 bg-black/5 p-1 dark:border-white/10 dark:bg-white/5">
               <button
@@ -577,7 +584,19 @@ export function SongGrid({
         </div>
       </div>
 
-      {viewMode === "grid" ? (
+      {filterQuery.trim() ? (
+        <p role="status" className="mb-4 text-xs text-white/50">
+          {visibleSongs.length.toLocaleString()} of {collectionSongs.length.toLocaleString()} songs
+        </p>
+      ) : null}
+
+      {visibleSongs.length === 0 ? (
+        <div className="rounded-xl border border-white/[0.07] px-5 py-10 text-center">
+          <p className="text-base font-semibold">No matching songs</p>
+          <p className="mt-2 text-sm text-white/55">Try a song, artist, or album name.</p>
+          <button type="button" onClick={clearFilter} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black">Clear filter</button>
+        </div>
+      ) : viewMode === "grid" ? (
         enableVirtualGrid ? (
           <div
             ref={gridContainerRef}

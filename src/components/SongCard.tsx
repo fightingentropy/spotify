@@ -14,7 +14,6 @@ type SongCardProps = {
   song: PlayerSong;
   songIndex?: number;
   onPlayAt?: (index: number) => void;
-  variant?: "default" | "playlist";
   liked?: boolean;
   likePending?: boolean;
   canLike?: boolean;
@@ -29,7 +28,6 @@ const SongCardComponent = function SongCard({
   song,
   songIndex,
   onPlayAt,
-  variant = "default",
   liked = false,
   likePending = false,
   canLike = false,
@@ -69,89 +67,10 @@ const SongCardComponent = function SongCard({
 
   if (hideIfUnliked && !liked) return null;
 
-  if (variant === "playlist") {
-    return (
-      <div
-        onPointerEnter={() => warmPlaybackSong(song, true)}
-        className="wf-song-card group relative min-w-0"
-      >
-        <div
-          className={cn(
-            "relative aspect-square overflow-hidden rounded-[10px] bg-[#0c0c0d]",
-            isActive && "ring-1 ring-white/40",
-          )}
-        >
-          <button
-            type="button"
-            aria-label={isActiveAndPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
-            aria-pressed={isActiveAndPlaying}
-            onClick={handlePlay}
-            onFocus={() => warmPlaybackSong(song, true)}
-            className="absolute inset-0 z-10 cursor-pointer rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-          />
-          <CoverImage
-            src={song.imageUrl}
-            networkSrc={song.networkImageUrl}
-            alt={song.title}
-            fill
-            sizes="(max-width: 640px) 44vw, 190px"
-            className="wf-song-cover object-cover"
-            priority={priority}
-            loading={priority ? "eager" : "lazy"}
-          />
-        </div>
-
-        <div className="mt-2 flex min-w-0 items-start gap-1">
-          <button
-            type="button"
-            aria-label={isActiveAndPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
-            aria-pressed={isActiveAndPlaying}
-            onClick={handlePlay}
-            onFocus={() => warmPlaybackSong(song, true)}
-            className="min-w-0 flex-1 rounded-md text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-          >
-            <span className={cn("block truncate text-[14px] leading-5 text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
-              {song.title}
-            </span>
-            <span className="block truncate text-xs leading-5 text-white/55">
-              {song.artist || "Unknown Artist"}
-            </span>
-          </button>
-          {isActive ? (
-            <span
-              aria-hidden
-              className="wf-control-button grid h-8 w-8 shrink-0 place-items-center rounded-full text-white"
-            >
-              {isActiveAndPlaying ? (
-                <Pause size={15} fill="currentColor" />
-              ) : (
-                <Play size={15} fill="currentColor" className="translate-x-px" />
-              )}
-            </span>
-          ) : null}
-          <TrackActionsButton
-            song={song}
-            liked={liked}
-            likePending={likePending}
-            canLike={canLike}
-            onToggleLike={onToggleLike}
-            showLike={showLike}
-            showQueue={showQueue}
-            className="h-8 w-8 text-white/60 hover:bg-white/[0.08] hover:text-white"
-            iconSize={17}
-          />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       onPointerEnter={() => warmPlaybackSong(song, true)}
-      className={cn(
-        "wf-song-card wf-pressable group relative aspect-square overflow-hidden rounded-[10px] bg-[#0c0c0d]",
-        isActive && "ring-1 ring-white/30"
-      )}
+      className="wf-song-card group relative min-w-0"
     >
       <button
         type="button"
@@ -159,20 +78,40 @@ const SongCardComponent = function SongCard({
         aria-pressed={isActiveAndPlaying}
         onClick={handlePlay}
         onFocus={() => warmPlaybackSong(song, true)}
-        className="absolute inset-0 z-10 cursor-pointer rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-      />
-      <CoverImage
-        src={song.imageUrl}
-        networkSrc={song.networkImageUrl}
-        alt={song.title}
-        fill
-        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 33vw, 200px"
-        className="wf-song-cover object-cover"
-        priority={priority}
-        loading={priority ? "eager" : "lazy"}
-      />
-      <div className="absolute inset-x-0 bottom-0 h-16 bg-black/[0.76]" />
-
+        className="wf-pressable block w-full cursor-pointer rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+      >
+        <span className={cn(
+          "relative block aspect-square overflow-hidden rounded-[10px] bg-[#0c0c0d]",
+          isActive && "ring-1 ring-inset ring-white/40",
+        )}>
+          <CoverImage
+            src={song.imageUrl}
+            networkSrc={song.networkImageUrl}
+            alt=""
+            fill
+            sizes="(max-width: 640px) 44vw, (max-width: 1024px) 25vw, 220px"
+            className="wf-song-cover object-cover"
+            priority={priority}
+            loading={priority ? "eager" : "lazy"}
+          />
+          <span aria-hidden className={cn(
+            "absolute bottom-2 right-2 grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-black/60 text-white backdrop-blur transition-opacity",
+            isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+          )}>
+            {isActiveAndPlaying
+              ? <Pause size={19} fill="currentColor" />
+              : <Play size={19} fill="currentColor" className="translate-x-px" />}
+          </span>
+        </span>
+        <span className="block h-[72px] min-w-0 pt-2.5">
+          <span title={song.title} className={cn("line-clamp-2 text-[14px] leading-5 text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
+            {song.title}
+          </span>
+          <span title={song.artist} className="mt-0.5 block truncate text-[13px] leading-5 text-white/55">
+            {song.artist || "Unknown Artist"}
+          </span>
+        </span>
+      </button>
       <TrackActionsButton
         song={song}
         liked={liked}
@@ -181,31 +120,8 @@ const SongCardComponent = function SongCard({
         onToggleLike={onToggleLike}
         showLike={showLike}
         showQueue={showQueue}
-        className="absolute right-2 top-2 z-30 h-9 w-9 text-white/90 bg-black/40 backdrop-blur hover:bg-black/60"
+        className="absolute right-2 top-2 z-30 h-9 w-9 text-white/90 bg-black/50 backdrop-blur hover:bg-black/70 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
       />
-
-      <div className="pointer-events-none absolute bottom-2 left-2 right-2 z-20 flex items-end justify-between gap-2">
-        <div className="text-left min-w-0 flex-1">
-          <div className="text-white font-medium drop-shadow truncate">{song.title}</div>
-          <div className="text-white/80 text-xs drop-shadow truncate">{song.artist}</div>
-        </div>
-        <div
-          className={cn(
-            "transition-opacity shrink-0",
-            isActive
-              ? "opacity-100"
-              : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-          )}
-        >
-          <div className="wf-control-button grid h-10 w-10 place-items-center text-white">
-            {isActiveAndPlaying ? (
-              <Pause size={18} fill="currentColor" />
-            ) : (
-              <Play size={18} fill="currentColor" />
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 };
@@ -216,7 +132,6 @@ export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
   return (
     prevProps.song === nextProps.song &&
     prevProps.songIndex === nextProps.songIndex &&
-    prevProps.variant === nextProps.variant &&
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&

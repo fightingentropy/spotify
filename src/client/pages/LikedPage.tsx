@@ -92,7 +92,6 @@ export default function LikedPage() {
             hideIfUnliked
             canLike
             emptyLabel="You haven't liked any songs yet."
-            viewToggleClassName="mb-8 sm:-mt-14"
           />
         )}
       </div>

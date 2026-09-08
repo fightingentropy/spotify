@@ -49,7 +49,7 @@ export default function SongsPage() {
       ) : null}
       <SongGrid
         songs={songsState.data}
-        likedSongIds={likesState.data.likedSongIds}
+        likedSongIds={likesState.loading || likesState.error ? null : likesState.data.likedSongIds}
         canLike={Boolean(user)}
         emptyLabel="Your library is empty. Upload music to get started."
       />

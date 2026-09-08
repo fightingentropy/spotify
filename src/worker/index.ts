@@ -1600,7 +1600,7 @@ async function refreshPlayEventMediaUrls(
         const imageUrl = toStringValue(item.imageUrl);
         const audioUrl = toStringValue(item.audioUrl);
         const lyricsUrl = toStringValue(item.lyricsUrl);
-        if (!id || !imageUrl || !audioUrl) return null;
+        if (!id || !imageUrl || typeof item.audioUrl !== "string") return null;
         const media: PlayEventMediaUrls = { id, imageUrl, audioUrl };
         if (lyricsUrl) media.lyricsUrl = lyricsUrl;
         return media;

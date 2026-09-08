@@ -46,6 +46,7 @@ import {
   isSafeRelativeFileName,
 } from "../lib/local-media-path";
 import type { PlayerSong } from "../types/player";
+import { normalizeMediaRefreshItem, type MediaRefreshItem } from "../lib/media-refresh";
 import {
   decodeOffsetCursor,
   parsePageLimit,
@@ -535,32 +536,7 @@ function songsForRequest(songs: PlayerSong[], request: Request): PlayerSong[] {
   return songs.map((song) => songForRequest(song, request));
 }
 
-type MediaRefreshItem = Pick<PlayerSong, "id" | "title" | "artist" | "imageUrl" | "audioUrl" | "lyricsUrl">;
 const MAX_MEDIA_REFRESH_ITEMS = 40;
-const MAX_MEDIA_REFRESH_VALUE_LENGTH = 16_384;
-
-function normalizeMediaRefreshItem(value: unknown): MediaRefreshItem | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const item = value as Record<string, unknown>;
-  const id = typeof item.id === "string" ? item.id.trim() : "";
-  const title = typeof item.title === "string" ? item.title.trim() : "";
-  const artist = typeof item.artist === "string" ? item.artist.trim() : "";
-  const imageUrl = typeof item.imageUrl === "string" ? item.imageUrl.trim() : "";
-  const audioUrl = typeof item.audioUrl === "string" ? item.audioUrl.trim() : "";
-  const lyricsUrl = typeof item.lyricsUrl === "string" ? item.lyricsUrl.trim() : "";
-  if (!id || !title || !artist || !imageUrl || !audioUrl) return null;
-  if (
-    id.length > 512 ||
-    title.length > 1_024 ||
-    artist.length > 1_024 ||
-    imageUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH ||
-    audioUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH ||
-    lyricsUrl.length > MAX_MEDIA_REFRESH_VALUE_LENGTH
-  ) {
-    return null;
-  }
-  return { id, title, artist, imageUrl, audioUrl, lyricsUrl: lyricsUrl || undefined };
-}
 
 async function handleMediaRefresh(request: Request): Promise<Response> {
   const identity = currentUserIdentityForRequest(request);

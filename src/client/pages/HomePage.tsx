@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Pause, Play } from "lucide-react";
 import { AuthButtons } from "@/components/AuthButtons";
 import { CoverImage } from "@/components/CoverImage";
+import { HomeRow } from "@/components/HomeRow";
 import { PageError } from "@/components/PageError";
 import {
   useApiData,
@@ -51,8 +52,8 @@ export default function HomePage() {
   // user opens a page that lists songs — including the heart for Discover tracks.
   const mergeInitialLikes = useLikesStore((state) => state.mergeInitial);
   useEffect(() => {
-    mergeInitialLikes(homeData.likedSongIds);
-  }, [mergeInitialLikes, homeData.likedSongIds]);
+    if (!loading && !error) mergeInitialLikes(homeData.likedSongIds);
+  }, [mergeInitialLikes, homeData.likedSongIds, loading, error]);
   const { data: statsData } = useApiData<StatsHomePayload>(
     withAccountScope("/api/stats/home", user?.id ?? status),
     {
@@ -243,27 +244,19 @@ export default function HomePage() {
         </div>
 
         {discoverPlaylists.length > 0 ? (
-          <section aria-label="Discover" className="mb-[34px]">
-            <h2 className="mb-3.5 text-[22px] font-bold tracking-[-0.35px]">Discover</h2>
-            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
-              {discoverPlaylists.map((playlist) => renderDiscoverPlaylistTile(playlist))}
-            </div>
-          </section>
+          <HomeRow title="Discover">
+            {discoverPlaylists.map((playlist) => renderDiscoverPlaylistTile(playlist))}
+          </HomeRow>
         ) : null}
 
         {recentlyPlayedSongs.length > 0 ? (
-          <section aria-label="Continue listening" className="mb-[34px]">
-            <h2 className="mb-3.5 text-[22px] font-bold tracking-[-0.35px]">Continue listening</h2>
-            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
-              {recentlyPlayedSongs.map((_, index) => renderScrollerTile(recentlyPlayedSongs, index))}
-            </div>
-          </section>
+          <HomeRow title="Continue listening">
+            {recentlyPlayedSongs.map((_, index) => renderScrollerTile(recentlyPlayedSongs, index))}
+          </HomeRow>
         ) : null}
 
         {statsData.mostPlayed.length > 0 ? (
-          <section aria-label="Most played" className="mb-[34px]">
-            <h2 className="mb-3.5 text-[22px] font-bold tracking-[-0.35px]">Most played</h2>
-            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
+          <HomeRow title="Most played">
               {statsData.mostPlayed.map((entry, index) =>
                 renderScrollerTile(
                   mostPlayedSongs,
@@ -273,8 +266,7 @@ export default function HomePage() {
                     : undefined,
                 ),
               )}
-            </div>
-          </section>
+          </HomeRow>
         ) : null}
 
         {discoverPlaylists.length === 0 &&
