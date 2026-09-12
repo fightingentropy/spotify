@@ -3,6 +3,13 @@
 	"main": "src/worker/index.ts",
 	"name": "spotify",
 	"workers_dev": true,
+	// Playback snapshots live in D1. Keep large queue saves off the home tunnel.
+	"routes": [
+		{
+			"pattern": "music.streamarena.xyz/api/playback-state*",
+			"zone_name": "streamarena.xyz"
+		}
+	],
 	"compatibility_date": "2026-07-09",
 	"compatibility_flags": [
 		"nodejs_compat",
