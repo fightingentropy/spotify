@@ -1,4 +1,5 @@
 import type { SqlTag } from "@/lib/sql-tag";
+import { ApiError } from "./http";
 
 export function randomToken(): string {
   const bytes = new Uint8Array(32);
@@ -87,6 +88,36 @@ export async function rateLimit(
   return { allowed, headers, ip };
 }
 
-export async function readJson<T>(req: Request): Promise<T | null> {
-  return (await req.json().catch(() => null)) as T | null;
+export async function readJson<T>(req: Request, maxBytes?: number): Promise<T | null> {
+  if (maxBytes === undefined) return (await req.json().catch(() => null)) as T | null;
+  if (Number(req.headers.get("content-length")) > maxBytes) {
+    await req.body?.cancel();
+    throw new ApiError("Request body is too large", 413);
+  }
+  if (!req.body) return null;
+
+  const reader = req.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        throw new ApiError("Request body is too large", 413);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    return JSON.parse(chunks.join("")) as T | null;
+  } catch {
+    return null;
+  }
 }

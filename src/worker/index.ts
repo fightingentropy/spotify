@@ -90,6 +90,7 @@ import {
 } from "./playlists";
 import { coercePlayerSongPayload } from "./player-payload";
 import { readJson } from "./request";
+import { decodePlaybackState, encodePlaybackState, MAX_PLAYBACK_STATE_BYTES } from "./playback-state-storage";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -352,7 +353,7 @@ function coercePlaybackStatePayload(value: unknown, fallbackUpdatedAt = Date.now
 
 function parsePlaybackStateJson(value: string): PlaybackStateSnapshot | null {
   try {
-    return coercePlaybackStatePayload(JSON.parse(value), 0);
+    return coercePlaybackStatePayload(decodePlaybackState(value), 0);
   } catch {
     return null;
   }
@@ -1516,11 +1517,10 @@ app.get("/api/playback-state", async (c) => {
 
 app.put("/api/playback-state", async (c) => {
   const user = requirePlaybackStateUser(c);
-  const payload = await readJson<PlaybackStateWritePayload>(c.req.raw);
+  const payload = await readJson<PlaybackStateWritePayload>(c.req.raw, MAX_PLAYBACK_STATE_BYTES);
   const state = coercePlaybackStatePayload(payload?.state);
   if (!state) return jsonError("Invalid playback state", 400);
-  const stateJson = JSON.stringify(state);
-  if (stateJson.length > 512_000) return jsonError("Playback state is too large", 413);
+  const stateJson = encodePlaybackState(state);
 
   const db = c.get("db");
   const existingRows = await db<PlaybackStateRow>`
