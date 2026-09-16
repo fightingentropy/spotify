@@ -23,6 +23,7 @@ const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPodcastsPage = () => import("@/client/pages/PodcastsPage");
 const loadEventsPage = () => import("@/client/pages/EventsPage");
 const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
+const AlbumPage = lazy(() => import("@/client/pages/AlbumPage"));
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
 const loadListeningStatsPage = () => import("@/client/pages/ListeningStatsPage");
@@ -348,6 +349,7 @@ function Shell() {
           <Route path="/podcasts" element={lazyRoute(<PodcastsPage />, "Loading podcasts...")} />
           <Route path="/events" element={lazyRoute(<EventsPage />, "Loading events...")} />
           <Route path="/playlist/:id" element={lazyRoute(<PlaylistPage />, "Loading playlist...")} />
+          <Route path="/search/album/:source/:id" element={lazyRoute(<AlbumPage />, "Loading album...")} />
           <Route path="/upload" element={lazyRoute(<UploadPage />, "Loading upload...")} />
           <Route path="/settings" element={lazyRoute(<SettingsPage />, "Loading settings...")} />
           <Route

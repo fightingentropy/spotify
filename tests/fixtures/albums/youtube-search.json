@@ -1,0 +1,264 @@
+{
+  "contents": {
+    "musicShelfRenderer": {
+      "contents": [
+        {
+          "musicResponsiveListItemRenderer": {
+            "flexColumns": [
+              {
+                "musicResponsiveListItemFlexColumnRenderer": {
+                  "text": {
+                    "runs": [
+                      {
+                        "text": "÷ (Deluxe)"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "musicResponsiveListItemFlexColumnRenderer": {
+                  "text": {
+                    "runs": [
+                      {
+                        "text": "Album"
+                      },
+                      {
+                        "text": " • "
+                      },
+                      {
+                        "text": "Ed Sheeran",
+                        "navigationEndpoint": {
+                          "browseEndpoint": {
+                            "browseId": "UClmXPfaYhXOYsNn_QUyheWQ"
+                          }
+                        }
+                      },
+                      {
+                        "text": " • "
+                      },
+                      {
+                        "text": "2017"
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "navigationEndpoint": {
+              "browseEndpoint": {
+                "browseId": "MPREb_T5s950Swfdy"
+              }
+            },
+            "thumbnail": {
+              "musicThumbnailRenderer": {
+                "thumbnail": {
+                  "thumbnails": [
+                    {
+                      "url": "https://yt3.googleusercontent.com/xpDEOr2TeqEn1QpXosXhqtj149FzNnTgAG3oqPnpTxTbQk-oceO90Sz4Axq0s4Jp_QLGQha_um6_EG3WGQ=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                    },
+                    {
+                      "url": "https://yt3.googleusercontent.com/xpDEOr2TeqEn1QpXosXhqtj149FzNnTgAG3oqPnpTxTbQk-oceO90Sz4Axq0s4Jp_QLGQha_um6_EG3WGQ=w120-h120-l90-rj",
+                      "width": 120,
+                      "height": 120
+                    },
+                    {
+                      "url": "https://yt3.googleusercontent.com/xpDEOr2TeqEn1QpXosXhqtj149FzNnTgAG3oqPnpTxTbQk-oceO90Sz4Axq0s4Jp_QLGQha_um6_EG3WGQ=w226-h226-l90-rj",
+                      "width": 226,
+                      "height": 226
+                    },
+                    {
+                      "url": "https://yt3.googleusercontent.com/xpDEOr2TeqEn1QpXosXhqtj149FzNnTgAG3oqPnpTxTbQk-oceO90Sz4Axq0s4Jp_QLGQha_um6_EG3WGQ=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                    }
+                  ]
+                }
+              }
+            },
+            "overlay": {
+              "musicItemThumbnailOverlayRenderer": {
+                "background": {
+                  "verticalGradient": {
+                    "gradientLayerColors": [
+                      "3422552064",
+                      "3422552064"
+                    ]
+                  }
+                },
+                "content": {
+                  "musicPlayButtonRenderer": {
+                    "playNavigationEndpoint": {
+                      "watchPlaylistEndpoint": {
+                        "playlistId": "OLAK5uy_mizQEF9wXLFxAjGlDF83JskTg49IZ1Ito"
+                      }
+                    },
+                    "playIcon": {
+                      "iconType": "PLAY_ARROW"
+                    },
+                    "pauseIcon": {
+                      "iconType": "PAUSE"
+                    },
+                    "iconColor": 4294967295,
+                    "backgroundColor": 0,
+                    "activeBackgroundColor": 0,
+                    "loadingIndicatorColor": 14745645,
+                    "playingIcon": {
+                      "iconType": "VOLUME_UP"
+                    },
+                    "iconLoadingColor": 0,
+                    "activeScaleFactor": 1,
+                    "buttonSize": "MUSIC_PLAY_BUTTON_SIZE_SMALL",
+                    "rippleTarget": "MUSIC_PLAY_BUTTON_RIPPLE_TARGET_SELF",
+                    "accessibilityPlayData": {
+                      "accessibilityData": {
+                        "label": "Play ÷ (Deluxe)"
+                      }
+                    },
+                    "accessibilityPauseData": {
+                      "accessibilityData": {
+                        "label": "Pause ÷ (Deluxe)"
+                      }
+                    }
+                  }
+                },
+                "contentPosition": "MUSIC_ITEM_THUMBNAIL_OVERLAY_CONTENT_POSITION_CENTERED",
+                "displayStyle": "MUSIC_ITEM_THUMBNAIL_OVERLAY_DISPLAY_STYLE_PERSISTENT"
+              }
+            }
+          }
+        },
+        {
+          "musicResponsiveListItemRenderer": {
+            "flexColumns": [
+              {
+                "musicResponsiveListItemFlexColumnRenderer": {
+                  "text": {
+                    "runs": [
+                      {
+                        "text": "x (Deluxe Edition)"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "musicResponsiveListItemFlexColumnRenderer": {
+                  "text": {
+                    "runs": [
+                      {
+                        "text": "Album"
+                      },
+                      {
+                        "text": " • "
+                      },
+                      {
+                        "text": "Ed Sheeran",
+                        "navigationEndpoint": {
+                          "browseEndpoint": {
+                            "browseId": "UClmXPfaYhXOYsNn_QUyheWQ"
+                          }
+                        }
+                      },
+                      {
+                        "text": " • "
+                      },
+                      {
+                        "text": "2014"
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "navigationEndpoint": {
+              "browseEndpoint": {
+                "browseId": "MPREb_A4r9EfLZzYN"
+              }
+            },
+            "thumbnail": {
+              "musicThumbnailRenderer": {
+                "thumbnail": {
+                  "thumbnails": [
+                    {
+                      "url": "https://yt3.googleusercontent.com/emeqGnTWaGFe5roPNKOsSe5WFl81hEScrwhlaJkSrmZn8F-rcYVg_VtYKSj5v59eU5ZrUo3uzlbI0wDV=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                    },
+                    {
+                      "url": "https://yt3.googleusercontent.com/emeqGnTWaGFe5roPNKOsSe5WFl81hEScrwhlaJkSrmZn8F-rcYVg_VtYKSj5v59eU5ZrUo3uzlbI0wDV=w120-h120-l90-rj",
+                      "width": 120,
+                      "height": 120
+                    },
+                    {
+                      "url": "https://yt3.googleusercontent.com/emeqGnTWaGFe5roPNKOsSe5WFl81hEScrwhlaJkSrmZn8F-rcYVg_VtYKSj5v59eU5ZrUo3uzlbI0wDV=w226-h226-l90-rj",
+                      "width": 226,
+                      "height": 226
+                    },
+                    {
+                      "url": "https://yt3.googleusercontent.com/emeqGnTWaGFe5roPNKOsSe5WFl81hEScrwhlaJkSrmZn8F-rcYVg_VtYKSj5v59eU5ZrUo3uzlbI0wDV=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                    }
+                  ]
+                }
+              }
+            },
+            "overlay": {
+              "musicItemThumbnailOverlayRenderer": {
+                "background": {
+                  "verticalGradient": {
+                    "gradientLayerColors": [
+                      "3422552064",
+                      "3422552064"
+                    ]
+                  }
+                },
+                "content": {
+                  "musicPlayButtonRenderer": {
+                    "playNavigationEndpoint": {
+                      "watchPlaylistEndpoint": {
+                        "playlistId": "OLAK5uy_lkFY4oZHG2FXKLKirsBIa3sff0ToSxLSY"
+                      }
+                    },
+                    "playIcon": {
+                      "iconType": "PLAY_ARROW"
+                    },
+                    "pauseIcon": {
+                      "iconType": "PAUSE"
+                    },
+                    "iconColor": 4294967295,
+                    "backgroundColor": 0,
+                    "activeBackgroundColor": 0,
+                    "loadingIndicatorColor": 14745645,
+                    "playingIcon": {
+                      "iconType": "VOLUME_UP"
+                    },
+                    "iconLoadingColor": 0,
+                    "activeScaleFactor": 1,
+                    "buttonSize": "MUSIC_PLAY_BUTTON_SIZE_SMALL",
+                    "rippleTarget": "MUSIC_PLAY_BUTTON_RIPPLE_TARGET_SELF",
+                    "accessibilityPlayData": {
+                      "accessibilityData": {
+                        "label": "Play x (Deluxe Edition)"
+                      }
+                    },
+                    "accessibilityPauseData": {
+                      "accessibilityData": {
+                        "label": "Pause x (Deluxe Edition)"
+                      }
+                    }
+                  }
+                },
+                "contentPosition": "MUSIC_ITEM_THUMBNAIL_OVERLAY_CONTENT_POSITION_CENTERED",
+                "displayStyle": "MUSIC_ITEM_THUMBNAIL_OVERLAY_DISPLAY_STYLE_PERSISTENT"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -97,6 +97,22 @@ describe("private web path policy", () => {
 });
 
 describe("Worker private page gate", () => {
+  test("album search and track lists require an authenticated listener", async () => {
+    const harness = workerHarness(false);
+    for (const path of ["/api/search/albums?q=Ed%20Sheeran", "/api/catalog/youtube/albums/OLAK5uy_mizQEF9wXLFxAjGlDF83JskTg49IZ1Ito", "/api/catalog/spotify/albums/3T4tUhGYeRNVUGevb0wThu"]) {
+      const response = await harness.fetch(`https://music.streamarena.xyz${path}`);
+      expect(response.status).toBe(401);
+    }
+  });
+
+  test("album endpoints reject invalid providers and unsafe links before looking them up", async () => {
+    const harness = workerHarness(true);
+    for (const path of ["/api/catalog/evil/albums/3T4tUhGYeRNVUGevb0wThu", "/api/catalog/youtube/albums/not-an-album", "/api/search/albums?q=https%3A%2F%2Flocalhost%2Fprivate"]) {
+      const response = await harness.fetch(`https://music.streamarena.xyz${path}`, { headers: { cookie: "spotify_session=test-session" } });
+      expect(response.status).toBe(400);
+    }
+  });
+
   test("redirects anonymous private pages to the canonical sign-in page", async () => {
     const harness = workerHarness(false);
     const response = await harness.fetch("https://spotify.example.workers.dev/api/auth/page-gate", {

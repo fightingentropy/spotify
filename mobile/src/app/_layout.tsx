@@ -160,6 +160,10 @@ function AuthenticatedApp() {
             headerTintColor: "#fff",
           }}
         />
+        <Stack.Screen
+          name="search/album/[source]/[id]"
+          options={{ ...headerOptions, title: "", headerTransparent: true, headerStyle: { backgroundColor: "transparent" }, headerTintColor: "#fff" }}
+        />
       </Stack>
       <TabBar />
       <MiniPlayer />

@@ -34,6 +34,7 @@ import { useUiStore } from "@/store/ui";
 import { colors } from "@/theme";
 
 type PlaylistDetailScreenProps = {
+  collectionType?: "playlist" | "album";
   playlistId?: string;
   apiPath?: string;
   queueContextKey?: `playlist:${string}`;
@@ -48,6 +49,7 @@ type PlaylistDetailScreenProps = {
 };
 
 export function PlaylistDetailScreen({
+  collectionType = "playlist",
   playlistId,
   apiPath,
   queueContextKey,
@@ -167,7 +169,7 @@ export function PlaylistDetailScreen({
         : reconciledSongs,
     [isOnline, offlineRecords, providerReadThrough, reconciledSongs, user?.id],
   );
-  const songs = useMemo(() => sortSongs(availableSongs, sort), [availableSongs, sort]);
+  const songs = useMemo(() => collectionType === "album" ? availableSongs : sortSongs(availableSongs, sort), [availableSongs, collectionType, sort]);
   const count = songs.length;
   const totalCount = data.page?.totalCount ?? data.playlist?.trackCount ?? sourceSongs.length;
   const countLabel =
@@ -383,6 +385,9 @@ export function PlaylistDetailScreen({
         <Text numberOfLines={2} className="mt-5 text-center text-3xl font-extrabold" style={{ color: "#fff" }}>
           {name}
         </Text>
+        {collectionType === "album" ? <Text className="mt-2 text-center text-sm" style={{ color: colors.muted }}>
+          {["Album", data.playlist?.description].filter(Boolean).join(" · ")}
+        </Text> : null}
         <Text className="mt-1.5 text-sm font-medium" style={{ color: colors.muted }}>
           {countLabel}
         </Text>
@@ -461,7 +466,7 @@ export function PlaylistDetailScreen({
           </PressableScale>
         </View>
       ) : null}
-      {count > 0 ? <SongSortBar context={contextKey} /> : null}
+      {count > 0 && collectionType !== "album" ? <SongSortBar context={contextKey} /> : null}
     </View>
   );
 

@@ -1,11 +1,12 @@
 export const YOUTUBE_PLAYLIST_SEARCH_INCLUDE = "youtube-playlists";
 
-export type CatalogSearchFilter = "top" | "songs" | "artists" | "playlists";
-export type CatalogSearchSection = "songs" | "artists" | "playlists";
+export type CatalogSearchFilter = "top" | "songs" | "albums" | "artists" | "playlists";
+export type CatalogSearchSection = "songs" | "albums" | "artists" | "playlists";
 
 const SECTION_ORDER: Record<CatalogSearchFilter, readonly CatalogSearchSection[]> = {
-  top: ["songs", "artists", "playlists"],
+  top: ["songs", "albums", "artists", "playlists"],
   songs: ["songs"],
+  albums: ["albums"],
   artists: ["artists"],
   playlists: ["playlists"],
 };

@@ -1,4 +1,5 @@
 import { looksNonCanonicalTrack, normalizeSongPart } from "@/lib/song-dedupe";
+import type { CatalogAlbum } from "@spotify/shared/catalog-albums";
 
 const SPOTIFY_TOKEN_URL = "https://open.spotify.com/api/token";
 const SPOTIFY_SERVER_TIME_URL = "https://open.spotify.com/api/server-time";
@@ -1646,6 +1647,98 @@ export async function fetchSpotifyAlbumTracks(
   }
 
   return { title, artist, tracks };
+}
+
+function spotifyAlbumSummary(value: unknown): CatalogAlbum | null {
+  const data = toObject(value);
+  if (!data) return null;
+  const id = toStringValue(data.uri).match(/^spotify:album:([A-Za-z0-9]{22})$/)?.[1] || toStringValue(data.id);
+  const name = toStringValue(data.name);
+  if (!isSpotifyCatalogId(id) || !name) return null;
+  const artists = Array.isArray(data.artists) ? data.artists : toObject(data.artists)?.items;
+  const artist = (Array.isArray(artists) ? artists : []).map((v) => toStringValue(toObject(toObject(v)?.profile)?.name) || toStringValue(toObject(v)?.name)).filter(Boolean).join(", ");
+  const releaseDate = releaseDateFromAlbum(data) || toStringValue(data.release_date) || String(toObject(data.date)?.year ?? "");
+  const trackCount = toFiniteNumber(data.total_tracks) ?? toFiniteNumber(toObject(data.tracks)?.totalCount);
+  return { kind: "album", provider: "spotify", id, name, artist, imageUrl: imageUrlFromAlbum(data) || largestImageUrl(data.images) || null,
+    ...(releaseDate ? { releaseDate } : {}), ...(trackCount !== null ? { trackCount } : {}), externalUrl: `https://open.spotify.com/album/${id}` };
+}
+
+export function parseSpotifyAlbumSearch(payload: unknown): CatalogAlbum[] {
+  const search = findSearchV2(payload);
+  const section = search ? search.albumsV2 ?? search.albums : toObject(payload)?.albums;
+  const albums: CatalogAlbum[] = [];
+  function walk(value: unknown, depth = 0): void {
+    if (!value || typeof value !== "object" || depth > 6 || albums.length >= 12) return;
+    const album = spotifyAlbumSummary(value);
+    if (album) { if (!albums.some((v) => v.id === album.id)) albums.push(album); return; }
+    for (const child of Object.values(value)) walk(child, depth + 1);
+  }
+  walk(section);
+  return albums;
+}
+
+export async function searchSpotifyAlbums(query: string, spotifyCookie?: string): Promise<CatalogAlbum[]> {
+  try {
+    const payload = await pathfinderQuery("searchDesktop", { searchTerm: query, offset: 0, limit: 12, numberOfTopResults: 5, includeAudiobooks: false },
+      PATHFINDER_QUERIES.searchDesktop, spotifyCookie, 5_000);
+    return parseSpotifyAlbumSearch(payload);
+  } catch { /* Retry against the public catalog. */ }
+  const token = await fetchSpotifyAccessToken(spotifyCookie);
+  const response = await fetchWithTimeout(`${SPOTIFY_SEARCH_URL}?${new URLSearchParams({ q: query, type: "album", limit: "12" })}`,
+    { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, 5_000);
+  if (!response?.ok) throw new SpotifyPathfinderError("Could not search Spotify albums");
+  return parseSpotifyAlbumSearch(await response.json());
+}
+
+export function parseSpotifyAlbumCatalog(payload: unknown): { album: CatalogAlbum; tracks: SpotifyBatchTrack[] } {
+  const root = toObject(toObject(payload)?.data);
+  const data = toObject(root?.albumUnion ?? root?.album ?? payload);
+  const album = spotifyAlbumSummary(data);
+  if (!album) throw new SpotifyPathfinderError("Spotify did not return this album", 404);
+  const items = toObject(data?.tracks)?.items;
+  const tracks: SpotifyBatchTrack[] = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const wrapper = toObject(item);
+    const value = toObject(toObject(wrapper?.track)?.data) ?? toObject(wrapper?.track) ?? toObject(wrapper?.data) ?? wrapper;
+    if (!value) continue;
+    const id = parseTrackIdFromUri(toStringValue(value.uri)) || toStringValue(value.id);
+    const name = toStringValue(value.name);
+    if (!isSpotifyCatalogId(id) || !name) continue;
+    const artists = Array.isArray(value.artists) ? value.artists : toObject(value.artists)?.items;
+    const names = (Array.isArray(artists) ? artists : []).map((v) => toStringValue(toObject(toObject(v)?.profile)?.name) || toStringValue(toObject(v)?.name)).filter(Boolean);
+    tracks.push({ id, name, artists: names.length ? names : [album.artist], album: album.name, imageUrl: album.imageUrl ?? undefined,
+      releaseDate: album.releaseDate, durationMs: durationMsFromTrackData(value) || toFiniteNumber(value.duration_ms) || undefined });
+  }
+  if (!tracks.length) throw new SpotifyPathfinderError("This album has no available tracks", 404);
+  return { album: { ...album, trackCount: album.trackCount ?? tracks.length }, tracks };
+}
+
+export async function fetchSpotifyAlbumCatalog(id: string, spotifyCookie?: string): Promise<{ album: CatalogAlbum; tracks: SpotifyBatchTrack[] }> {
+  try {
+    return parseSpotifyAlbumCatalog(await pathfinderQuery("getAlbum", { uri: `spotify:album:${id}`, locale: "", offset: 0, limit: 500 },
+      PATHFINDER_QUERIES.getAlbum, spotifyCookie, 6_000));
+  } catch { /* Fall back when Spotify changes the persisted query. */ }
+  const token = await fetchSpotifyAccessToken(spotifyCookie);
+  const response = await fetchWithTimeout(`https://api.spotify.com/v1/albums/${id}`, { headers: { authorization: `Bearer ${token}` } }, 6_000);
+  if (!response?.ok) throw new SpotifyPathfinderError("Could not load Spotify album");
+  const payload = toObject(await response.json());
+  const tracks = toObject(payload?.tracks);
+  const items = Array.isArray(tracks?.items) ? [...tracks.items] : [];
+  let next = toStringValue(tracks?.next);
+  while (next && items.length < 500) {
+    // Follow only Spotify's own album-tracks pagination URL.
+    const url = new URL(next);
+    if (url.origin !== "https://api.spotify.com" || url.pathname !== `/v1/albums/${id}/tracks`) throw new SpotifyPathfinderError("Invalid album pagination");
+    const page = await fetchWithTimeout(url.toString(), { headers: { authorization: `Bearer ${token}` } }, 6_000);
+    if (!page?.ok) throw new SpotifyPathfinderError("Could not load all album tracks");
+    const body = toObject(await page.json());
+    items.push(...(Array.isArray(body?.items) ? body.items : []));
+    const following = toStringValue(body?.next);
+    if (following === next) throw new SpotifyPathfinderError("Invalid album pagination");
+    next = following;
+  }
+  if (next) throw new SpotifyPathfinderError("This album is too large to load completely");
+  return parseSpotifyAlbumCatalog({ ...payload, tracks: { ...tracks, items } });
 }
 
 export function scrapeSpotifyTrackIdsFromHtml(html: string): string[] {

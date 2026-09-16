@@ -1,5 +1,7 @@
 import { Hono, type Context } from "hono";
 import { extname } from "node:path";
+import { isYouTubeAlbumId, parseAlbumLink, type CatalogAlbum } from "@spotify/shared/catalog-albums";
+import { fetchYouTubeAlbum, searchYouTubeAlbums } from "@/lib/youtube-albums";
 import { D1_SCHEMA_STATEMENTS } from "@/lib/db-schema";
 import type { PlaybackStateRow, PlaylistRow, SongRow } from "@/lib/db-types";
 import { PLAYBACK_STATE_VERSION, type PlaybackStateSnapshot } from "@/lib/playback-state";
@@ -22,6 +24,8 @@ import type { PlayerSong } from "@/types/player";
 import { resolveQobuzAvailability } from "@/lib/qobuz-download";
 import {
   SpotifyPathfinderError,
+  fetchSpotifyAlbumCatalog,
+  searchSpotifyAlbums,
   fetchSpotifyArtistCatalog,
   fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
   fetchSpotifyLikedTracks,
@@ -1283,6 +1287,61 @@ app.get("/api/search/catalog", async (c) => {
   return jsonCached(c, { query: q, results, playlists, artists, providers }, {
     cacheControl: "private, max-age=60, stale-while-revalidate=120",
   });
+});
+
+app.get("/api/search/albums", async (c) => {
+  if (!c.get("user")) return jsonError("Unauthorized", 401);
+  const query = (c.req.query("q") || "").trim();
+  if (query.length > 2048) return jsonError("Search is too long", 400);
+  if (query.length < 2) return jsonCached(c, { query, albums: [], providers: {} }, { cacheControl: "private, max-age=30" });
+  const link = parseAlbumLink(query);
+  if (/^https?:\/\//i.test(query) && !link) return jsonError("Paste a Spotify or YouTube Music album link", 400);
+  const cookie = envString(c.env, "SPOTIFY_SP_DC") || undefined;
+  const lookup = async (provider: CatalogAlbum["provider"]) => {
+    if (link && link.provider !== provider) return { albums: [], status: "not_requested" as const };
+    try {
+      const albums = await withProviderDeadline(link
+        ? (provider === "youtube" ? fetchYouTubeAlbum(link.id) : fetchSpotifyAlbumCatalog(link.id, cookie)).then((result) => [result.album])
+        : provider === "youtube" ? searchYouTubeAlbums(query.slice(0, 100)) : searchSpotifyAlbums(query.slice(0, 100), cookie), link ? 12_000 : 6_000);
+      return { albums, status: "ok" as const };
+    } catch (error) {
+      console.warn("Album search provider unavailable", { provider, error: error instanceof Error ? error.message : "Unknown error" });
+      return { albums: [], status: "unavailable" as const };
+    }
+  };
+  const [youtube, spotify] = await Promise.all([lookup("youtube"), lookup("spotify")]);
+  return jsonCached(c, { query, albums: [...youtube.albums, ...spotify.albums], providers: { youtube: youtube.status, spotify: spotify.status } },
+    { cacheControl: "private, max-age=60, stale-while-revalidate=120" });
+});
+
+app.get("/api/catalog/:source/albums/:id", async (c) => {
+  if (!c.get("user")) return jsonError("Unauthorized", 401);
+  const source = c.req.param("source");
+  const id = c.req.param("id");
+  if ((source !== "youtube" && source !== "spotify") || (source === "youtube" ? !isYouTubeAlbumId(id) : !isSpotifyCatalogId(id))) {
+    return jsonError("Invalid album", 400);
+  }
+  try {
+    let album: CatalogAlbum;
+    let songs: PlayerSong[];
+    if (source === "youtube") {
+      const detail = await withProviderDeadline(fetchYouTubeAlbum(id), 12_000);
+      album = detail.album;
+      songs = detail.tracks.map((track) => ({ id: `discover:yt:${track.videoId}`, title: track.title, artist: track.artist,
+        album: album.name, imageUrl: album.imageUrl ?? "/apple-icon.png", duration: track.duration, audioUrl: "", source: "server", preview: true,
+        discoverTrackId: `yt:${track.videoId}`, youtubeVideoId: track.videoId }));
+    } else {
+      const detail = await withProviderDeadline(fetchSpotifyAlbumCatalog(id, envString(c.env, "SPOTIFY_SP_DC") || undefined), 12_000);
+      album = detail.album;
+      songs = spotifyBatchTracksToCatalogSongs(detail.tracks).map((track) => ({ ...discoverStagedToPlayerSong({ ...track, staged: false }), preview: true }));
+    }
+    return jsonCached(c, { kind: "curated", provider: source, album,
+      playlist: { ...album, collectionType: "album", editable: false, deletable: false, description: [album.artist, album.releaseDate?.slice(0, 4)].filter(Boolean).join(" · ") },
+      songs, likedSongIds: null }, { cacheControl: "private, max-age=300, stale-while-revalidate=600" });
+  } catch (error) {
+    console.warn("Album detail provider unavailable", { source, error: error instanceof Error ? error.message : "Unknown error" });
+    return jsonError("Could not load this album. Please try again.", 502);
+  }
 });
 
 app.get("/api/catalog/spotify/playlists/:id", async (c) => {

@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
+import { albumPagePath, albumSearchPath, parseAlbumLink, type AlbumSearchPayload, type CatalogAlbum } from "@spotify/shared/catalog-albums";
+import type { PlayerSong } from "@/types/player";
 import { Clock3, Search } from "lucide-react";
 import { rankLibrarySongs } from "@spotify/shared/library-search";
 import { useRecentSearches } from "@/client/recent-searches";
@@ -20,12 +23,14 @@ type HomeSearchCommandPaletteProps = {
 };
 
 export function HomeSearchCommandPalette({ className }: HomeSearchCommandPaletteProps) {
+  const navigate = useNavigate();
   const { user, status } = useAuth();
   const { recentSearches, remember, clear } = useRecentSearches(user?.id ?? status);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const albumLink = parseAlbumLink(query);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const setQueue = usePlayerStore((state) => state.setQueue);
 
@@ -41,11 +46,15 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
       user?.id ?? status,
     ),
     { songs: [] },
-    { enabled: open && status !== "loading" && libraryQuery.length > 0, keepPreviousData: false },
+    { enabled: open && !albumLink && status !== "loading" && libraryQuery.length > 0, keepPreviousData: false },
   );
   const catalog = useApiData<SearchCatalogPayload>(
     withAccountScope(`/api/search/catalog?q=${encodeURIComponent(libraryQuery)}`, user?.id ?? status),
     { results: [] },
+    { enabled: open && !albumLink && status === "authenticated" && libraryQuery.length >= 2, keepPreviousData: false },
+  );
+  const albumSearch = useApiData<AlbumSearchPayload>(
+    withAccountScope(albumSearchPath(libraryQuery), user?.id ?? status), { query: "", albums: [] },
     { enabled: open && status === "authenticated" && libraryQuery.length >= 2, keepPreviousData: false },
   );
   const currentQuery = libraryQuery === query.trim();
@@ -60,7 +69,13 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
     return dedupeSongsByTitleArtist([...library, ...extra]).slice(0, 35);
   }, [songs, libraryQuery, currentQuery, catalog.data]);
 
-  const resolvedResults = results;
+  const resolvedResults = useMemo(() => {
+    type Entry = { kind: "song"; song: PlayerSong } | { kind: "album"; album: CatalogAlbum };
+    const songEntries: Entry[] = albumLink ? [] : results.map((song) => ({ kind: "song", song }));
+    const albumEntries: Entry[] = currentQuery && albumSearch.data.query === libraryQuery
+      ? albumSearch.data.albums.slice(0, 5).map((album) => ({ kind: "album", album })) : [];
+    return [...songEntries.slice(0, 5), ...albumEntries, ...songEntries.slice(5)];
+  }, [albumLink, albumSearch.data, currentQuery, libraryQuery, results]);
 
   useEffect(() => {
     if (!open) return;
@@ -119,8 +134,11 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
         const selected = resolvedResults[activeIndex];
         remember(query);
         if (!selected) return;
-        requestImmediatePlayback(selected);
-        setQueue(resolvedResults, activeIndex);
+        if (selected.kind === "album") navigate(albumPagePath(selected.album));
+        else {
+          requestImmediatePlayback(selected.song);
+          setQueue(results, results.indexOf(selected.song));
+        }
         setOpen(false);
         return;
       }
@@ -128,13 +146,13 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, open, query, remember, resolvedResults, setQueue]);
+  }, [activeIndex, navigate, open, query, remember, resolvedResults, results, setQueue]);
 
   return (
     <div className={className}>
       <button
         type="button"
-        aria-label="Search songs, Command K"
+        aria-label="Search music, Command K"
         aria-keyshortcuts="Meta+K Control+K"
         title="Search (Command K)"
         onClick={() => setOpen(true)}
@@ -155,7 +173,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
             ref={dialogRef}
             role="dialog"
             aria-modal="true"
-            aria-label="Search songs"
+            aria-label="Search music"
             className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-3xl border border-white/15 bg-zinc-950/95 shadow-2xl sm:mt-16"
             onClick={(event) => event.stopPropagation()}
           >
@@ -164,7 +182,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
               <input
                 type="search"
                 role="combobox"
-                aria-label="Search songs"
+                aria-label="Search music"
                 aria-expanded={resolvedResults.length > 0}
                 aria-controls="home-search-results"
                 aria-activedescendant={
@@ -205,20 +223,30 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     </>
                   ) : <p className="py-6 text-center">Search your library and the music catalog</p>}
                 </div>
-              ) : (!currentQuery || loading || catalog.loading) && results.length === 0 ? (
+              ) : (!currentQuery || loading || catalog.loading || albumSearch.loading) && resolvedResults.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
                   Searching music…
                 </div>
-              ) : error && results.length === 0 ? (
+              ) : error && resolvedResults.length === 0 ? (
                 <div className="px-3 py-10 text-center">
                   <PageError compact message={error} />
                 </div>
-              ) : results.length === 0 ? (
+              ) : resolvedResults.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-foreground/65">
-                  No songs found
+                  No music found
                 </div>
               ) : (
-                resolvedResults.map((song, index) => (
+                resolvedResults.map((entry, index) => {
+                  if (entry.kind === "album") return <button key={`album:${entry.album.provider}:${entry.album.id}`} id={`home-search-option-${index}`}
+                    role="option" aria-selected={index === activeIndex} type="button"
+                    onClick={() => { remember(query); navigate(albumPagePath(entry.album)); setOpen(false); }}
+                    className={cn("flex min-h-16 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition", index === activeIndex ? "bg-white/10" : "hover:bg-white/5")}>
+                    <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md"><CoverImage src={entry.album.imageUrl ?? undefined} alt="" className="h-full w-full object-cover" /></div>
+                    <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{entry.album.name}</div><div className="truncate text-xs text-white/60">Album · {entry.album.artist} · {entry.album.releaseDate?.slice(0, 4)}</div></div>
+                    <span className="text-[11px] text-white/40">{entry.album.provider === "youtube" ? "YouTube" : "Spotify"}</span>
+                  </button>;
+                  const song = entry.song;
+                  return (
                   <button
                     key={song.id}
                     id={`home-search-option-${index}`}
@@ -230,7 +258,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     onClick={() => {
                       remember(query);
                       requestImmediatePlayback(song);
-                      setQueue(resolvedResults, index);
+                      setQueue(results, results.indexOf(song));
                       setOpen(false);
                     }}
                     className={cn(
@@ -253,8 +281,10 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                       <span className="shrink-0 text-[11px] text-white/40">Catalog</span>
                     ) : null}
                   </button>
-                ))
+                );})
               )}
+              {albumSearch.error || (currentQuery && albumSearch.data.query === libraryQuery && Object.values(albumSearch.data.providers ?? {}).includes("unavailable")) ?
+                <div role="status" className="flex items-center justify-between px-3 py-3 text-xs text-white/60"><span>Some album results are unavailable.</span><button type="button" onClick={albumSearch.retry} className="px-2 py-2 text-white">Retry albums</button></div> : null}
               {query.trim().length >= 2 && currentQuery ? (
                 catalog.error ? (
                   <div role="status" className="flex items-center justify-between gap-3 px-3 py-3 text-xs text-white/60">

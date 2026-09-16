@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
+import { albumSearchPath, parseAlbumLink, type AlbumSearchPayload } from "@spotify/shared/catalog-albums";
+import { AlbumResult } from "@/components/AlbumResult";
 import { useRecentSearches } from "@/client/recent-searches";
 import { rankLibrarySongs } from "@spotify/shared/library-search";
 import { Search } from "lucide-react";
@@ -14,7 +17,12 @@ import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { dedupeSongsByTitleArtist } from "@/lib/song-dedupe";
 
 export default function MobileSearch() {
-  const [query, setQuery] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const setQuery = (value: string) => setSearchParams((params) => { params.set("q", value); return params; }, { replace: true });
+  const filter = parseAlbumLink(query) ? "albums" : searchParams.get("type") ?? "top";
+  const showSongs = filter !== "albums";
+  const showAlbums = filter !== "songs";
   const [catalogQuery, setCatalogQuery] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
   const { user, status } = useAuth();
@@ -36,14 +44,22 @@ export default function MobileSearch() {
       user?.id ?? status,
     ),
     { songs: [] },
-    { enabled: status !== "loading" && libraryQuery.length > 0, keepPreviousData: true },
+    { enabled: showSongs && status !== "loading" && libraryQuery.length > 0, keepPreviousData: true },
   );
 
   const catalogState = useApiData<SearchCatalogPayload>(
     withAccountScope(`/api/search/catalog?q=${encodeURIComponent(catalogQuery)}`, user?.id ?? status),
     { results: [] },
-    { enabled: status === "authenticated" && catalogQuery.length >= 2, keepPreviousData: false },
+    { enabled: showSongs && status === "authenticated" && catalogQuery.length >= 2, keepPreviousData: false },
   );
+  const albumState = useApiData<AlbumSearchPayload>(
+    withAccountScope(albumSearchPath(catalogQuery), user?.id ?? status), { query: "", albums: [] },
+    { enabled: showAlbums && status === "authenticated" && catalogQuery.length >= 2, keepPreviousData: false },
+  );
+  const albumsCurrent = albumState.data.query === query.trim() && catalogQuery === query.trim();
+  const albums = showAlbums && albumsCurrent ? albumState.data.albums : [];
+  const albumsLoading = showAlbums && query.trim().length >= 2 && (catalogQuery !== query.trim() || albumState.loading);
+  const albumsUnavailable = showAlbums && albumsCurrent && Object.values(albumState.data.providers ?? {}).includes("unavailable");
 
   const dedupedSongs = useMemo(
     () => dedupeSongsByTitleArtist(rankLibrarySongs(libraryState.data.songs, query)),
@@ -105,16 +121,24 @@ export default function MobileSearch() {
         />
         <input
           type="search"
-          aria-label="Search songs"
+          aria-label="Search music"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Enter") remember(query); }}
-          placeholder="Songs, artists and playlists"
+          placeholder="Songs, albums, artists or an album link"
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
           className="h-[50px] w-full rounded-xl border border-white/[0.08] bg-[#0c0c0d] pl-12 pr-4 text-base font-medium text-[#f2f2f2] outline-none transition placeholder:text-white/60 focus:border-white/20 focus:ring-2 focus:ring-white/10"
         />
+      </div>
+
+      <div className="mb-5 flex gap-6 border-b border-white/[0.08]" aria-label="Search filters">
+        {(["top", "songs", "albums"] as const).map((value) => <button type="button" key={value}
+          aria-pressed={filter === value} onClick={() => setSearchParams((params) => { params.set("type", value); return params; }, { replace: true })}
+          className={`min-h-11 border-b-2 px-1 text-sm ${filter === value ? "border-white font-semibold text-white" : "border-transparent text-white/60 hover:text-white"}`}>
+          {value === "top" ? "Top" : value === "songs" ? "Songs" : "Albums"}
+        </button>)}
       </div>
 
       <div className="space-y-1">
@@ -127,16 +151,16 @@ export default function MobileSearch() {
           </div>
         ) : (
           <>
-            {libraryState.loading && results.length === 0 ? (
+            {showSongs && libraryState.loading && results.length === 0 ? (
               <div className="py-5 text-sm opacity-70">Searching your library...</div>
             ) : null}
-            {libraryState.error ? (
+            {showSongs && libraryState.error ? (
               <div className="py-5 text-sm text-red-300">
                 <p>{libraryState.error}</p>
                 <button type="button" onClick={libraryState.retry} className="mt-3 rounded-lg border border-white/[0.16] px-3 py-1.5 text-white">Try again</button>
               </div>
             ) : null}
-            {results.length > 0 ? (
+            {showSongs && results.length > 0 ? (
               <section>
                 <h2 className="mb-1 pt-2 text-lg font-bold tracking-[-0.3px] text-[#f2f2f2]">
                   In your library
@@ -145,7 +169,16 @@ export default function MobileSearch() {
               </section>
             ) : null}
 
-            {catalogQuery.length >= 2 ? (
+            {showAlbums && query.trim().length >= 2 ? <section className="pb-5">
+              <h2 className="mb-2 pt-2 text-lg font-bold tracking-[-0.3px] text-[#f2f2f2]">Albums</h2>
+              {albumsLoading ? <p className="py-5 text-sm text-white/60" role="status">Searching albums…</p> : null}
+              <div className="grid gap-x-6 sm:grid-cols-2">{(filter === "top" ? albums.slice(0, 4) : albums).map((album) => <AlbumResult key={`${album.provider}:${album.id}`} album={album} onSelect={() => remember(query)} />)}</div>
+              {filter === "top" && albums.length > 4 ? <button type="button" onClick={() => setSearchParams((params) => { params.set("type", "albums"); return params; }, { replace: true })} className="mt-3 min-h-11 text-sm font-semibold text-white/80">See all albums</button> : null}
+              {albumState.error || albumsUnavailable ? <div className="py-3 text-sm text-white/60"><p>{albumState.error || "Some album results are temporarily unavailable."}</p><button type="button" onClick={albumState.retry} className="mt-2 min-h-11 text-white">Try again</button></div> : null}
+              {!albumsLoading && !albumState.error && !albumsUnavailable && albumsCurrent && albums.length === 0 ? <p className="py-5 text-sm text-white/60">No albums found. Try the album name and artist.</p> : null}
+            </section> : null}
+
+            {showSongs && catalogQuery.length >= 2 ? (
               <section className={results.length > 0 ? "mt-7" : ""}>
                 <h2 className="mb-1 text-lg font-bold tracking-[-0.3px] text-[#f2f2f2]">
                   More on Spotify
@@ -163,7 +196,7 @@ export default function MobileSearch() {
               </section>
             ) : null}
 
-            {results.length === 0 && !libraryState.loading && !libraryState.error && (catalogQuery.length < 2 || (!catalogState.loading && !catalogState.error && catalogResults.length === 0)) ? (
+            {showSongs && albums.length === 0 && !albumsLoading && results.length === 0 && !libraryState.loading && !libraryState.error && (catalogQuery.length < 2 || (!catalogState.loading && !catalogState.error && catalogResults.length === 0)) ? (
               <div className="py-12 text-center text-sm opacity-70">No songs found</div>
             ) : null}
           </>

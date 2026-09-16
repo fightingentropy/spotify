@@ -276,7 +276,7 @@ function PlaylistDeleteDialog({
 const songKeyOf = (song: Pick<PlayerSong, "id" | "discoverTrackId"> | null | undefined): string | null =>
   song ? song.discoverTrackId ?? song.id : null;
 
-function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
+export function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
   const { playlist } = data;
   const songs = data.songs ?? [];
   const setQueue = usePlayerStore((s) => s.setQueue);
@@ -337,7 +337,7 @@ function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
           <CoverImage src={playlist.imageUrl || undefined} alt={playlist.name} fill sizes="176px" className="object-cover" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-[1.2px] text-white/60">Playlist</div>
+          <div className="text-xs font-semibold uppercase tracking-[1.2px] text-white/60">{playlist.collectionType === "album" ? "Album" : "Playlist"}</div>
           <h1 className="mt-1 truncate text-3xl font-bold sm:text-4xl">{playlist.name}</h1>
           {playlist.description ? (
             <p className="mt-2 line-clamp-2 text-sm text-white/[0.62]">{playlist.description}</p>

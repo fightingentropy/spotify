@@ -30,7 +30,8 @@ describe("catalog search request policy", () => {
   });
 
   test("puts songs before secondary entities in Top results", () => {
-    expect(catalogSearchSectionOrder("top")).toEqual(["songs", "artists", "playlists"]);
+    expect(catalogSearchSectionOrder("top")).toEqual(["songs", "albums", "artists", "playlists"]);
+    expect(catalogSearchSectionOrder("albums")).toEqual(["albums"]);
     expect(catalogSearchSectionOrder("playlists")).toEqual(["playlists"]);
   });
 

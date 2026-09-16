@@ -454,9 +454,10 @@ export type CuratedPlaylistPayload = {
     name: string;
     imageUrl: string;
     description?: string;
+    collectionType?: "album";
   };
   songs: PlayerSong[];
-  likedSongIds: string[];
+  likedSongIds: string[] | null;
 };
 
 export type PlaylistPayload = LibraryPlaylistPayload | CuratedPlaylistPayload;

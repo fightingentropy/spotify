@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, TextInput, View, Text } from "react-native";
+import { ActivityIndicator, FlatList, ScrollView, TextInput, View, Text } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { ListMusic, Search as SearchIcon, UserRound } from "lucide-react-native";
 import { rankLibrarySongs } from "@spotify/shared/library-search";
+import { albumPagePath, albumSearchPath, parseAlbumLink, type AlbumSearchPayload, type CatalogAlbum } from "@spotify/shared/catalog-albums";
 import {
   catalogSearchPath,
   catalogSearchSectionOrder,
@@ -143,14 +144,15 @@ function ArtistResultRow({ artist, onPress }: { artist: CatalogArtist; onPress: 
   );
 }
 
-function PlaylistResultRow({ playlist, onPress }: { playlist: CatalogPlaylist; onPress: () => void }) {
+function PlaylistResultRow({ playlist, onPress }: { playlist: CatalogPlaylist | CatalogAlbum; onPress: () => void }) {
   const providerName = playlist.provider === "youtube" ? "YouTube" : "Spotify";
   const detail = [
-    `${providerName} playlist`,
-    playlist.ownerName || null,
+    playlist.kind === "album" ? `Album · ${playlist.artist}` : `${providerName} playlist`,
+    playlist.kind === "album" ? playlist.releaseDate?.slice(0, 4) : playlist.ownerName || null,
     typeof playlist.trackCount === "number"
       ? `${playlist.trackCount} ${playlist.trackCount === 1 ? "song" : "songs"}`
       : null,
+    playlist.kind === "album" ? providerName : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -160,7 +162,7 @@ function PlaylistResultRow({ playlist, onPress }: { playlist: CatalogPlaylist; o
       scaleTo={0.99}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`Open playlist ${playlist.name}`}
+      accessibilityLabel={`Open ${playlist.kind} ${playlist.name}${playlist.kind === "album" ? ` by ${playlist.artist}` : ""}`}
       className="flex-row items-center"
       style={{ minHeight: 78, gap: 14, paddingHorizontal: 20, paddingVertical: 8 }}
     >
@@ -207,6 +209,7 @@ type SearchRow =
   | { kind: "header"; key: string; title: string }
   | { kind: "song"; key: string; song: PlayerSong; list: PlayerSong[]; index: number }
   | { kind: "artist"; key: string; artist: CatalogArtist }
+  | { kind: "album"; key: string; album: CatalogAlbum }
   | { kind: "playlist"; key: string; playlist: CatalogPlaylist };
 
 function addSongSection(out: SearchRow[], title: string, key: string, songs: PlayerSong[]) {
@@ -226,6 +229,7 @@ export default function SearchScreen() {
   const [query, setQuery] = useState("");
   const { recentSearches, remember, clear } = useRecentSearches(accountScope);
   const [filter, setFilter] = useState<CatalogSearchFilter>("top");
+  const activeFilter = parseAlbumLink(query) ? "albums" : filter;
   const debouncedQuery = useDebouncedValue(query.trim(), 350);
   const { data, loading } = useApiData<SearchIndexPayload>(
     withAccountScope(
@@ -233,7 +237,7 @@ export default function SearchScreen() {
       user?.id ?? status,
     ),
     { songs: [] },
-    { enabled: status !== "loading" && isOnline && debouncedQuery.length > 0, keepPreviousData: true },
+    { enabled: status !== "loading" && isOnline && debouncedQuery.length > 0 && activeFilter !== "albums", keepPreviousData: true },
   );
 
   const readyDownloadedSongs = useMemo(
@@ -262,10 +266,10 @@ export default function SearchScreen() {
   // Platform results are debounced and scoped to the signed-in account. YouTube
   // playlist lookup is requested only inside the Playlists filter, keeping Top
   // and Songs on the fast Spotify path. A new query clears the previous payload.
-  const catalogEnabled = debouncedQuery.length >= 2;
+  const catalogEnabled = debouncedQuery.length >= 2 && activeFilter !== "albums";
   const catalog = useApiData<SearchCatalogPayload>(
     withAccountScope(
-      catalogSearchPath(debouncedQuery, filter),
+      catalogSearchPath(debouncedQuery, activeFilter),
       user?.id ?? status,
     ),
     { query: "", results: [], playlists: [], artists: [], providers: {} },
@@ -308,10 +312,26 @@ export default function SearchScreen() {
   ]);
   const artists = isOnline && catalogIsCurrent ? (catalog.data.artists ?? []) : [];
   const playlists = isOnline && catalogIsCurrent ? (catalog.data.playlists ?? []) : [];
+  const albumsEnabled = activeFilter === "top" || activeFilter === "albums";
+  const albumCatalog = useApiData<AlbumSearchPayload>(
+    withAccountScope(albumSearchPath(debouncedQuery), user?.id ?? status),
+    { query: "", albums: [] },
+    { enabled: albumsEnabled && isOnline && status !== "loading" && debouncedQuery.length >= 2, keepPreviousData: false },
+  );
+  const albumState = catalogRequestState(query, debouncedQuery, albumCatalog.data.query, albumCatalog.loading, albumCatalog.error);
+  const albums = albumsEnabled && isOnline && albumState.dataIsCurrent ? albumCatalog.data.albums : [];
 
   const rows = useMemo<SearchRow[]>(() => {
     const out: SearchRow[] = [];
-    for (const section of catalogSearchSectionOrder(filter)) {
+    for (const section of catalogSearchSectionOrder(activeFilter)) {
+      if (section === "albums") {
+        const visibleAlbums = activeFilter === "top" ? albums.slice(0, 4) : albums;
+        if (visibleAlbums.length) {
+          out.push({ kind: "header", key: "hdr:albums", title: "Albums" });
+          visibleAlbums.forEach((album) => out.push({ kind: "album", key: `album:${album.provider}:${album.id}`, album }));
+        }
+        continue;
+      }
       if (section === "songs") {
         addSongSection(
           out,
@@ -352,16 +372,16 @@ export default function SearchScreen() {
       }
     }
     return out;
-  }, [artists, catalogSongs, filter, playlists, visibleLocalResults]);
+  }, [activeFilter, albums, artists, catalogSongs, filter, playlists, visibleLocalResults]);
 
-  const catalogLoading = isOnline && catalogState.loading;
+  const catalogLoading = isOnline && ((catalogEnabled && catalogState.loading) || (albumsEnabled && albumState.loading));
   const platformOffline = !isOnline && query.trim().length >= 2;
   const providerUnavailable =
     isOnline &&
-    (catalogState.errorIsCurrent ||
-      (catalogIsCurrent &&
+    ((albumsEnabled && (albumState.errorIsCurrent || (albumState.dataIsCurrent && Object.values(albumCatalog.data.providers ?? {}).includes("unavailable")))) ||
+      (catalogEnabled && (catalogState.errorIsCurrent || (catalogIsCurrent &&
         (catalog.data.providers?.spotify === "unavailable" ||
-          catalog.data.providers?.youtube === "unavailable")));
+          catalog.data.providers?.youtube === "unavailable")))));
   const hasQuery = query.trim().length > 0;
 
   return (
@@ -398,7 +418,7 @@ export default function SearchScreen() {
               value={query}
               onChangeText={setQuery}
               onSubmitEditing={() => remember(query)}
-              placeholder="Songs, artists and playlists"
+              placeholder="Songs, albums, artists or a link"
               placeholderTextColor={colors.muted}
               style={{
                 flex: 1,
@@ -417,16 +437,17 @@ export default function SearchScreen() {
         </View>
 
         {hasQuery ? (
-          <View className="flex-row" style={{ paddingTop: 12 }}>
-            <SearchFilterButton label="Top" active={filter === "top"} onPress={() => setFilter("top")} />
-            <SearchFilterButton label="Songs" active={filter === "songs"} onPress={() => setFilter("songs")} />
-            <SearchFilterButton label="Artists" active={filter === "artists"} onPress={() => setFilter("artists")} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingTop: 12 }}>
+            <SearchFilterButton label="Top" active={activeFilter === "top"} onPress={() => setFilter("top")} />
+            <SearchFilterButton label="Songs" active={activeFilter === "songs"} onPress={() => setFilter("songs")} />
+            <SearchFilterButton label="Albums" active={activeFilter === "albums"} onPress={() => setFilter("albums")} />
+            <SearchFilterButton label="Artists" active={activeFilter === "artists"} onPress={() => setFilter("artists")} />
             <SearchFilterButton
               label="Playlists"
-              active={filter === "playlists"}
+              active={activeFilter === "playlists"}
               onPress={() => setFilter("playlists")}
             />
-          </View>
+          </ScrollView>
         ) : null}
       </View>
 
@@ -493,6 +514,9 @@ export default function SearchScreen() {
                 />
               );
             }
+            if (item.kind === "album") {
+              return <PlaylistResultRow playlist={item.album} onPress={() => { remember(query); router.push(albumPagePath(item.album) as Href); }} />;
+            }
             if (item.kind === "playlist") {
               return (
                 <PlaylistResultRow
@@ -527,10 +551,10 @@ export default function SearchScreen() {
             ) : providerUnavailable ? (
               <View style={{ paddingHorizontal: 20, paddingVertical: 18, gap: 10 }}>
                 <ErrorText>
-                  {catalog.error ?? "Some platform results are temporarily unavailable."}
+                  {(albumsEnabled ? albumCatalog.error : null) ?? catalog.error ?? "Some platform results are temporarily unavailable."}
                 </ErrorText>
                 <PressableScale
-                  onPress={catalog.retry}
+                  onPress={() => { if (catalogEnabled) catalog.retry(); if (albumsEnabled) albumCatalog.retry(); }}
                   accessibilityRole="button"
                   accessibilityLabel="Retry platform search"
                   style={{ alignSelf: "flex-start", paddingVertical: 6 }}

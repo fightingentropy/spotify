@@ -15,6 +15,7 @@ export function isProviderReadThroughRequest(url: string): boolean {
   const path = apiPath(url);
   return (
     path === "/api/search/catalog" ||
+    path === "/api/search/albums" ||
     path.startsWith("/api/catalog/") ||
     path.startsWith("/api/playlist/yt-mix-") ||
     path === "/api/playlist/discover-top50"
@@ -23,6 +24,7 @@ export function isProviderReadThroughRequest(url: string): boolean {
 
 export function apiReadTimeoutMs(url: string): number {
   const path = apiPath(url);
+  if (path === "/api/search/albums") return SPOTIFY_CATALOG_TIMEOUT_MS;
   if (path === "/api/search/catalog") return CATALOG_SEARCH_TIMEOUT_MS;
   if (path.startsWith("/api/catalog/")) return SPOTIFY_CATALOG_TIMEOUT_MS;
   if (path.startsWith("/api/playlist/yt-mix-")) return YOUTUBE_PLAYLIST_TIMEOUT_MS;
