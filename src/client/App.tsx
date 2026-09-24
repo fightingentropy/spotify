@@ -304,12 +304,10 @@ function Shell() {
       <PwaRegister />
       <header className="fixed top-0 inset-x-0 z-50 hidden border-b border-white/[0.08] bg-black text-white pt-[env(safe-area-inset-top)] lg:block">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-          {/* On lg+ the logo leaves the centered grid and pins to the header's
-              left edge (the fixed header is its containing block), so it hugs
-              the screen edge on big displays instead of the max-w-7xl gutter. */}
+          {/* Keep the desktop logo aligned with the Library heading's inset. */}
           <Link
             to="/"
-            className="font-semibold inline-flex shrink-0 items-center touch-manipulation lg:absolute lg:left-4 lg:top-1/2 lg:-translate-y-1/2"
+            className="font-semibold inline-flex shrink-0 items-center touch-manipulation lg:absolute lg:left-6 lg:top-1/2 lg:-translate-y-1/2"
           >
             <img src="/logo.png" alt="Music" width={40} height={40} className="h-10 w-10 lg:h-7 lg:w-7" />
           </Link>

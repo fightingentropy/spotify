@@ -39,7 +39,7 @@ export default function LibrarySidebarClient({
       <div className={cn("flex-1 overflow-y-auto", collapsed ? "p-2" : "p-4")}>
         <div className={cn("mb-4 flex items-center", collapsed ? "justify-center" : "justify-between")}>
           {!collapsed && (
-            <div className="inline-flex items-center gap-2 text-[16px] font-medium text-white/[0.82]">
+            <div className="inline-flex items-center gap-2 pl-2 text-[16px] font-medium text-white/[0.82]">
               <Library size={18} />
               <span>Your Library</span>
             </div>
