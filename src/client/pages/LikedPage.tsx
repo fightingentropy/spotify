@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { useEffect } from "react";
 import { useApiData, withAccountScope, type LikedPayload } from "@/client/api";
 import { useAuth } from "@/client/auth";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 import { PageError } from "@/components/PageError";
 import { SongGrid } from "@/components/SongGrid";
 
@@ -10,7 +11,7 @@ function SongGridSkeleton() {
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" aria-hidden>
       {[0, 1, 2, 3, 4, 5, 6, 7].map((item) => (
         <div key={item} className="space-y-3">
-          <div className="wf-skeleton aspect-square rounded-lg" />
+          <div className="wf-skeleton aspect-square rounded" />
           <div className="wf-skeleton h-4 rounded-full" />
           <div className="wf-skeleton h-3 w-2/3 rounded-full" />
         </div>
@@ -53,48 +54,43 @@ export default function LikedPage() {
 
   if (!authSettled) {
     return (
-      <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
-        <div className="mx-auto max-w-7xl">
-          <h1 className="mb-6 text-2xl font-semibold">Liked Songs</h1>
-          <SongGridSkeleton />
-        </div>
-      </div>
+      <PageLayout>
+        <PageHeader title="Liked Songs" />
+        <SongGridSkeleton />
+      </PageLayout>
     );
   }
 
   if (!user || isAuthError) {
     return (
-      <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
-        <div className="mx-auto max-w-7xl">
-          <h1 className="mb-6 text-2xl font-semibold">Liked Songs</h1>
-          <div className="opacity-70">
-            <Link className="underline" to="/signin">Sign in</Link> to view and manage your liked songs.
-          </div>
+      <PageLayout>
+        <PageHeader title="Liked Songs" />
+        <div className="wf-empty-state">
+          <p className="wf-muted mb-4">Sign in to view and manage your liked songs.</p>
+          <Link className="wf-button-primary" to="/signin">Sign in</Link>
         </div>
-      </div>
+      </PageLayout>
     );
   }
 
   return (
-    <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
-      <div className="mx-auto max-w-7xl">
-        <h1 className="mb-4 text-2xl font-semibold leading-tight sm:mb-6">Liked Songs</h1>
-        {loading && songs.length === 0 ? (
-          <SongGridSkeleton />
-        ) : error ? (
-          <PageError compact message={error} onRetry={retry} />
-        ) : songs.length === 0 ? (
-          <div className="opacity-70">You haven&apos;t liked any songs yet.</div>
-        ) : (
-          <SongGrid
-            songs={songs}
-            likedSongIds={likedSongIds}
-            hideIfUnliked
-            canLike
-            emptyLabel="You haven't liked any songs yet."
-          />
-        )}
-      </div>
-    </div>
+    <PageLayout>
+      <PageHeader title="Liked Songs" />
+      {loading && songs.length === 0 ? (
+        <SongGridSkeleton />
+      ) : error ? (
+        <PageError compact message={error} onRetry={retry} />
+      ) : songs.length === 0 ? (
+        <div className="wf-empty-state">You haven&apos;t liked any songs yet.</div>
+      ) : (
+        <SongGrid
+          songs={songs}
+          likedSongIds={likedSongIds}
+          hideIfUnliked
+          canLike
+          emptyLabel="You haven't liked any songs yet."
+        />
+      )}
+    </PageLayout>
   );
 }

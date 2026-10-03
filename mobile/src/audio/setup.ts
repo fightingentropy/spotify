@@ -15,7 +15,7 @@ export async function setupTrackPlayer(): Promise<void> {
     try {
       await TrackPlayer.setupPlayer({
         // We handle interruptions via the RemoteDuck event so the Zustand store
-        // stays in sync (auto-pause on call/Siri, auto-resume after) — §11.
+        // stays in sync (auto-pause on call/Siri, auto-resume after).
         autoHandleInterruptions: false,
         iosCategory: IOSCategory.Playback, // background audio (UIBackgroundModes: audio)
         iosCategoryMode: IOSCategoryMode.Default,

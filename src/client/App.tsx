@@ -9,48 +9,53 @@ import LibrarySidebarClient from "@/components/LibrarySidebarClient";
 import MobileNav from "@/components/MobileNav";
 import NowPlayingSidebar from "@/components/NowPlayingSidebar";
 import { PlayerBar } from "@/components/PlayerBar";
+import { LikeFeedback } from "@/components/LikeFeedback";
 import { DiscoverQueueStager } from "@/client/DiscoverQueueStager";
-import PwaRegister from "@/components/PwaRegister";
+import LegacyServiceWorkerCleanup from "@/components/LegacyServiceWorkerCleanup";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 import HomePage from "@/client/pages/HomePage";
-import ProfilePage from "@/client/pages/ProfilePage";
 import { usePlayerStore } from "@/store/player";
 
 const loadSearchPage = () => import("@/client/pages/SearchPage");
 const loadLibraryPage = () => import("@/client/pages/LibraryPage");
 const loadSongsPage = () => import("@/client/pages/SongsPage");
 const loadLikedPage = () => import("@/client/pages/LikedPage");
+const loadLyricsPage = () => import("@/client/pages/LyricsPage");
 const loadRadioPage = () => import("@/client/pages/RadioPage");
 const loadPodcastsPage = () => import("@/client/pages/PodcastsPage");
 const loadEventsPage = () => import("@/client/pages/EventsPage");
 const loadPlaylistPage = () => import("@/client/pages/PlaylistPage");
-const AlbumPage = lazy(() => import("@/client/pages/AlbumPage"));
+const loadAlbumPage = () => import("@/client/pages/AlbumPage");
+const AlbumPage = lazy(loadAlbumPage);
+const loadProfilePage = () => import("@/client/pages/ProfilePage");
+const ProfilePage = lazy(loadProfilePage);
 const loadUploadPage = () => import("@/client/pages/UploadPage");
 const loadSettingsPage = () => import("@/client/pages/SettingsPage");
 const loadListeningStatsPage = () => import("@/client/pages/ListeningStatsPage");
 const loadSignInPage = () => import("@/client/pages/SignInPage");
 type RoutePrefetcher = () => Promise<unknown>;
-const ROUTE_PREFETCHERS: RoutePrefetcher[] = [
-  loadSearchPage,
-  loadLibraryPage,
-  loadSongsPage,
-  loadLikedPage,
-  loadRadioPage,
-  loadPodcastsPage,
-  loadEventsPage,
-  loadPlaylistPage,
-  loadUploadPage,
-  loadSettingsPage,
-  loadListeningStatsPage,
-  loadSignInPage,
-];
+const ROUTE_PREFETCHERS: Record<string, RoutePrefetcher> = {
+  "/search": loadSearchPage,
+  "/library": loadLibraryPage,
+  "/playlists": loadLibraryPage,
+  "/songs": loadSongsPage,
+  "/liked": loadLikedPage,
+  "/radio": loadRadioPage,
+  "/podcasts": loadPodcastsPage,
+  "/events": loadEventsPage,
+  "/upload": loadUploadPage,
+  "/settings": loadSettingsPage,
+  "/listening-stats": loadListeningStatsPage,
+  "/profile": loadProfilePage,
+  "/signin": loadSignInPage,
+};
 const prefetchedRouteModules = new Set<RoutePrefetcher>();
-const ROUTE_PREFETCH_IDLE_TIMEOUT_MS = 2_000;
-const ROUTE_PREFETCH_FALLBACK_DELAY_MS = 1_000;
 
 const SearchPage = lazy(loadSearchPage);
 const LibraryPage = lazy(loadLibraryPage);
 const SongsPage = lazy(loadSongsPage);
 const LikedPage = lazy(loadLikedPage);
+const LyricsPage = lazy(loadLyricsPage);
 const RadioPage = lazy(loadRadioPage);
 const PodcastsPage = lazy(loadPodcastsPage);
 const EventsPage = lazy(loadEventsPage);
@@ -62,8 +67,8 @@ const SignInPage = lazy(loadSignInPage);
 
 function RouteLoading({ label = "Loading..." }: { label?: string }) {
   return (
-    <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white/[0.7] sm:px-6">
-      <div className="mx-auto max-w-7xl">
+    <PageLayout>
+      <div>
         <div className="mb-6 text-sm">{label}</div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {[0, 1, 2, 3, 4, 5].map((item) => (
@@ -75,18 +80,18 @@ function RouteLoading({ label = "Loading..." }: { label?: string }) {
           ))}
         </div>
       </div>
-    </div>
+    </PageLayout>
   );
 }
 
 function RouteUnavailable() {
   return (
-    <div className="min-h-[calc(100dvh-3.5rem)] px-4 py-8 text-white sm:px-6">
-      <h1 className="text-xl font-semibold">Something went wrong</h1>
+    <PageLayout>
+      <PageHeader title="Something went wrong" />
       <p className="mt-2 max-w-md text-sm text-white/[0.62]">
         This page failed to load. Try reloading, or come back in a moment.
       </p>
-    </div>
+    </PageLayout>
   );
 }
 
@@ -118,16 +123,6 @@ function lazyRoute(element: ReactNode, label?: string) {
   );
 }
 
-async function prefetchRouteModules(): Promise<void> {
-  for (const load of ROUTE_PREFETCHERS) {
-    if (prefetchedRouteModules.has(load)) continue;
-    try {
-      await load();
-      prefetchedRouteModules.add(load);
-    } catch {}
-  }
-}
-
 function shouldSkipRoutePrefetch(): boolean {
   if (navigator.onLine === false) return true;
   const connection = (navigator as Navigator & {
@@ -140,49 +135,29 @@ function shouldSkipRoutePrefetch(): boolean {
   );
 }
 
-function useIdleRoutePrefetch() {
+// Warm the page the user is heading towards instead of downloading every
+// route (including uploads and sign-in) during the initial artwork requests.
+function useIntentRoutePrefetch() {
   useEffect(() => {
-    let idleHandle: number | undefined;
-    let timeoutHandle: number | undefined;
-    let cancelled = false;
-    const prefetch = () => {
-      if (cancelled) return;
-      if (shouldSkipRoutePrefetch()) return;
-      void prefetchRouteModules();
+    const prefetch = (event: Event) => {
+      if (shouldSkipRoutePrefetch() || !(event.target instanceof Element)) return;
+      const link = event.target.closest<HTMLAnchorElement>("a[href]");
+      if (!link || link.origin !== location.origin) return;
+      const path = link.pathname;
+      const load = ROUTE_PREFETCHERS[path]
+        ?? (path.startsWith("/playlist/") ? loadPlaylistPage : undefined)
+        ?? (path.startsWith("/search/album/") ? loadAlbumPage : undefined);
+      if (!load || prefetchedRouteModules.has(load)) return;
+      prefetchedRouteModules.add(load);
+      void load().catch(() => prefetchedRouteModules.delete(load));
     };
-    const idleWindow = window as unknown as {
-      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-
-    const clearScheduledPrefetch = () => {
-      if (idleHandle !== undefined) {
-        idleWindow.cancelIdleCallback?.(idleHandle);
-        idleHandle = undefined;
-      }
-      if (timeoutHandle !== undefined) {
-        window.clearTimeout(timeoutHandle);
-        timeoutHandle = undefined;
-      }
-    };
-
-    const schedulePrefetch = () => {
-      clearScheduledPrefetch();
-      if (shouldSkipRoutePrefetch()) return;
-      if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
-        idleHandle = idleWindow.requestIdleCallback(prefetch, { timeout: ROUTE_PREFETCH_IDLE_TIMEOUT_MS });
-      } else {
-        timeoutHandle = window.setTimeout(prefetch, ROUTE_PREFETCH_FALLBACK_DELAY_MS);
-      }
-    };
-
-    window.addEventListener("online", schedulePrefetch);
-    schedulePrefetch();
-
+    document.addEventListener("pointerover", prefetch, { passive: true });
+    document.addEventListener("focusin", prefetch);
+    document.addEventListener("touchstart", prefetch, { passive: true });
     return () => {
-      cancelled = true;
-      clearScheduledPrefetch();
-      window.removeEventListener("online", schedulePrefetch);
+      document.removeEventListener("pointerover", prefetch);
+      document.removeEventListener("focusin", prefetch);
+      document.removeEventListener("touchstart", prefetch);
     };
   }, []);
 }
@@ -212,11 +187,11 @@ function ResponsiveLibraryRoute() {
 const MOBILE_STACK_ROUTES = [
   { match: (path: string) => path.startsWith("/playlist/"), label: "Playlist", fallback: "/library" },
   { match: (path: string) => path === "/liked", label: "Liked Songs", fallback: "/library" },
-  { match: (path: string) => path === "/songs", label: "Songs", fallback: "/library" },
+  { match: (path: string) => path === "/songs", label: "All Songs", fallback: "/library" },
   { match: (path: string) => path === "/radio", label: "Radio", fallback: "/library" },
   { match: (path: string) => path === "/podcasts", label: "Podcasts", fallback: "/library" },
-  { match: (path: string) => path === "/events", label: "Events", fallback: "/library" },
-  { match: (path: string) => path === "/upload", label: "Create", fallback: "/library" },
+  { match: (path: string) => path === "/events", label: "Live events", fallback: "/library" },
+  { match: (path: string) => path === "/upload", label: "Add music", fallback: "/library" },
   { match: (path: string) => path === "/settings", label: "Settings", fallback: "/" },
   { match: (path: string) => path === "/listening-stats", label: "Listening stats", fallback: "/profile" },
   { match: (path: string) => path === "/profile", label: "Profile", fallback: "/" },
@@ -259,7 +234,7 @@ function Shell() {
     () => localStorage.getItem("spotify_left_sidebar_collapsed") === "1",
   );
   const isAuthPublicPath = AUTH_PUBLIC_PATHS.has(location.pathname);
-  useIdleRoutePrefetch();
+  useIntentRoutePrefetch();
   useLayoutEffect(() => {
     document.querySelector(".wf-main")?.scrollTo(0, 0);
   }, [location.pathname, location.search]);
@@ -289,7 +264,7 @@ function Shell() {
 
   if (!user) {
     return (
-      <main className="wf-main min-h-dvh bg-background pt-[env(safe-area-inset-top)]">
+      <main className="wf-main wf-main-auth min-h-dvh bg-background pt-[env(safe-area-inset-top)]">
         <div key={location.pathname} className="wf-route-surface">
           <Routes location={location}>
             <Route path="/signin" element={lazyRoute(<SignInPage />, "Loading sign in...")} />
@@ -301,15 +276,15 @@ function Shell() {
 
   return (
     <>
-      <PwaRegister />
-      <header className="fixed top-0 inset-x-0 z-50 hidden border-b border-white/[0.08] bg-black text-white pt-[env(safe-area-inset-top)] lg:block">
+      <LegacyServiceWorkerCleanup />
+      <header className="wf-app-header fixed top-0 inset-x-0 z-50 hidden border-b border-white/[0.08] bg-black text-white pt-[env(safe-area-inset-top)] lg:block">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {/* Keep the desktop logo aligned with the Library heading's inset. */}
           <Link
             to="/"
             className="font-semibold inline-flex shrink-0 items-center touch-manipulation lg:absolute lg:left-6 lg:top-1/2 lg:-translate-y-1/2"
           >
-            <img src="/logo.png" alt="Music" width={40} height={40} className="h-10 w-10 lg:h-7 lg:w-7" />
+            <img src="/icon.svg" alt="Music" width={40} height={40} className="h-10 w-10 lg:h-7 lg:w-7" />
           </Link>
           <HomeSearchCommandPalette
             className="hidden w-[22rem] lg:col-start-2 lg:block lg:justify-self-center xl:w-[30rem]"
@@ -326,7 +301,7 @@ function Shell() {
       </header>
       <LibrarySidebarClient initialCollapsed={initialSidebarCollapsed} />
       <NowPlayingSidebar />
-      <main className="wf-main bg-black">
+      <main className={`wf-main bg-background${location.pathname === "/lyrics" ? " wf-main-lyrics" : ""}`}>
         <MobileStackHeader />
         <EmailVerificationBanner />
         <div key={location.pathname} className="wf-route-surface">
@@ -343,6 +318,7 @@ function Shell() {
           />
           <Route path="/songs" element={lazyRoute(<SongsPage />, "Loading songs...")} />
           <Route path="/liked" element={lazyRoute(<LikedPage />, "Loading liked songs...")} />
+          <Route path="/lyrics" element={lazyRoute(<LyricsPage />, "Loading lyrics...")} />
           <Route path="/radio" element={lazyRoute(<RadioPage />, "Loading radio stations...")} />
           <Route path="/podcasts" element={lazyRoute(<PodcastsPage />, "Loading podcasts...")} />
           <Route path="/events" element={lazyRoute(<EventsPage />, "Loading events...")} />
@@ -360,16 +336,17 @@ function Shell() {
           <Route
             path="*"
             element={
-              <div className="px-4 sm:px-6 py-10 max-w-3xl mx-auto">
-                <h1 className="text-2xl font-semibold mb-2">Not found</h1>
-                <Link to="/" className="underline">Back home</Link>
-              </div>
+              <PageLayout>
+                <PageHeader title="Page not found" />
+                <Link to="/" className="wf-button">Back home</Link>
+              </PageLayout>
             }
           />
         </Routes>
         </div>
       </main>
       <PlayerBar />
+      <LikeFeedback />
       <DiscoverQueueStager />
       <MobileNav />
     </>

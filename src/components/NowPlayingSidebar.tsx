@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, FileText, Music4, Podcast, RadioTower } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Music4, Podcast, RadioTower } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { cn } from "@/lib/utils";
-import { parseCredits, useLyrics } from "@/lib/credits";
+import { parseCredits } from "@/lib/credits";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
-import { requestPlaybackSeek, subscribePlaybackPosition } from "@/lib/playback-position";
 import { CoverImage } from "@/components/CoverImage";
-import { LyricsPanel } from "@/components/LyricsPanel";
+import { LyricsPreview } from "@/components/LyricsPreview";
 
 export default function NowPlayingSidebar() {
   const currentSong = usePlayerStore((state) => state.currentSong);
@@ -23,15 +22,19 @@ export default function NowPlayingSidebar() {
       catch { return true; }
     },
   );
-  const [showLyrics, setShowLyrics] = useState(false);
-  const [playbackPosition, setPlaybackPosition] = useState(0);
+  const [desktop, setDesktop] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
 
   const credits = useMemo(
     () => parseCredits(displaySong?.artist || ""),
     [displaySong?.artist],
   );
 
-  const lyricsState = useLyrics(displaySong?.id, displaySong?.lyricsUrl, showLyrics);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px)");
+    const update = () => setDesktop(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     const width = collapsed ? "4rem" : "20rem";
@@ -42,24 +45,17 @@ export default function NowPlayingSidebar() {
     };
   }, [collapsed]);
 
-  // PlayerBar owns the audio clock; follow it only while lyrics are visible
-  // so the sidebar doesn't re-render 4x/second the rest of the time.
-  useEffect(() => {
-    if (!showLyrics || collapsed) return;
-    return subscribePlaybackPosition((detail) => setPlaybackPosition(detail.currentTime));
-  }, [collapsed, showLyrics]);
-
   return (
     <aside
       className={cn(
-        "hidden lg:flex fixed top-14 bottom-[84px] right-0 z-30 border-l border-white/[0.08] bg-black text-white transition-all duration-200",
+        "wf-now-playing-sidebar hidden lg:flex fixed top-14 bottom-[84px] right-0 z-30 bg-black text-white transition-[width] duration-200",
         collapsed ? "w-16" : "w-80",
       )}
     >
       <div className={cn("h-full w-full overflow-y-auto", collapsed ? "p-2" : "p-4")}>
         <div className="mb-4 flex items-center justify-between">
           {!collapsed && (
-            <div className="text-[13px] uppercase tracking-wide text-white/[0.55]">
+            <div className="text-[13px] font-medium text-white/[0.55]">
               Now Playing
             </div>
           )}
@@ -92,7 +88,8 @@ export default function NowPlayingSidebar() {
               networkSrc={displaySong.networkImageUrl}
               alt={displaySong.title}
               loading="eager"
-              className="w-full aspect-square rounded-xl object-cover bg-white/[0.045]"
+              sizes="288px"
+              className="w-full aspect-square rounded object-cover bg-white/[0.045]"
             />
 
             <div>
@@ -101,7 +98,7 @@ export default function NowPlayingSidebar() {
             </div>
 
             {liveStream ? (
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
+              <div className="border-t border-white/[0.08] pt-4">
                 <div className="flex items-center gap-3">
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
                     <RadioTower size={18} />
@@ -112,7 +109,7 @@ export default function NowPlayingSidebar() {
                 </div>
               </div>
             ) : podcastEpisode ? (
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
+              <div className="border-t border-white/[0.08] pt-4">
                 <div className="flex items-center gap-3">
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
                     <Podcast size={18} />
@@ -129,32 +126,9 @@ export default function NowPlayingSidebar() {
               </div>
             ) : (
               <>
-                <div className="space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-medium text-[16px] text-white">Lyrics</div>
-                    <button
-                      type="button"
-                      onClick={() => setShowLyrics((value) => !value)}
-                      onMouseUp={(event) => event.currentTarget.blur()}
-                      className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-full border border-white/[0.16] text-[13px] text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white"
-                    >
-                      <FileText size={13} />
-                      {showLyrics ? "Hide" : "Show"}
-                    </button>
-                  </div>
+                {desktop ? <LyricsPreview key={`${displaySong.id}:${displaySong.lyricsUrl ?? ""}`} song={displaySong} /> : null}
 
-                  {showLyrics && (
-                    <LyricsPanel
-                      lyricsState={lyricsState}
-                      currentTime={playbackPosition}
-                      onSeek={requestPlaybackSeek}
-                      size="sm"
-                      className="h-72 rounded-md"
-                    />
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3.5">
+                <div className="border-t border-white/[0.08] pt-4">
                   <div className="font-medium text-[16px] text-white mb-3">Credits</div>
                   <div className="space-y-2.5">
                     {credits.map((credit) => (

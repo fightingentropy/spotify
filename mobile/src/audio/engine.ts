@@ -5,16 +5,7 @@ import * as nativeEngine from "@/audio/engine-native";
 import * as rntpEngine from "@/audio/engine-rntp";
 import { startSmartShuffleController } from "@/audio/smart-shuffle-controller";
 import { useOfflineStore } from "@/store/offline";
-
-// Audio engine dispatcher. iOS uses the native dual-deck crossfade engine
-// (engine-native); every other platform uses the RNTP single-player engine
-// (engine-rntp). Both are STATICALLY imported — engine-native's native module
-// handle is lazy (see modules/audio-engine), so importing it is side-effect-free
-// and never calls requireNativeModule off-iOS. Backend-agnostic cross-device
-// resume + sleep timer are re-exported from their shared modules so consumers keep
-// importing them from "@/audio/engine".
-
-export { publishPlaybackState, restorePlaybackState } from "@/audio/playback-sync";
+export { restorePlaybackState } from "@/audio/playback-sync";
 export { startSleepTimerWatchdog } from "@/audio/sleep";
 
 const isIOS = Platform.OS === "ios";

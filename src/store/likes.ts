@@ -3,6 +3,8 @@
 import { create } from "zustand";
 import { getAccountScope, patchLikeApiCache } from "@/client/api";
 import { promoteStagedSong } from "@/client/discover-keep";
+import { usePlayerStore } from "@/store/player";
+import { songLikeId } from "@spotify/shared/catalog-like";
 import type { PlayerSong } from "@/types/player";
 
 type LikeToggleResult = {
@@ -15,6 +17,8 @@ type LikesState = {
   likedSongIds: Record<string, true>;
   pending: Record<string, true>;
   hydrated: boolean;
+  error: string | null;
+  clearError: () => void;
   mergeInitial: (ids: string[]) => void;
   resetRemote: () => void;
   toggleLike: (songId: string, nextLiked: boolean, song?: PlayerSong) => Promise<LikeToggleResult>;
@@ -64,6 +68,8 @@ export const useLikesStore = create<LikesState>((set, get) => ({
   likedSongIds: readLocalLikedSongIds(),
   pending: {},
   hydrated: false,
+  error: null,
+  clearError: () => set({ error: null }),
   mergeInitial: (ids) => {
     const list = Array.isArray(ids) ? ids : [];
     const current = get().likedSongIds;
@@ -104,17 +110,23 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       if (isLocalSongId(id)) next[id] = true;
     }
     writeLocalLikedSongIds(next);
-    set({ likedSongIds: next, pending: {}, hydrated: true });
+    set({ likedSongIds: next, pending: {}, hydrated: true, error: null });
   },
   toggleLike: async (songId, nextLiked, song) => {
     if (typeof songId !== "string" || songId.length === 0) {
       return { ok: false, status: 400, error: "Invalid song id" };
     }
+    if (song) songId = songLikeId(song, get().likedSongIds);
 
     const pendingMap = get().pending;
     if (pendingMap[songId]) {
       return { ok: false, status: 0, error: "Like is still updating" };
     }
+
+    set({ error: null });
+    const failureMessage = nextLiked
+      ? `Couldn't save ${song ? `“${song.title}”` : "this song"} to Liked Songs. Please try again.`
+      : "Couldn't remove this song from Liked Songs. Please try again.";
 
     const prevLiked = !!get().likedSongIds[songId];
     if (prevLiked === nextLiked) {
@@ -153,42 +165,42 @@ export const useLikesStore = create<LikesState>((set, get) => ({
       pending: { ...state.pending, [songId]: true },
       hydrated: true,
     }));
-    if (!(nextLiked && song?.discoverTrackId)) patchOptimisticCache();
+    const needsPromotion = nextLiked && song?.discoverTrackId;
+    if (!needsPromotion) patchOptimisticCache();
 
-    // Keep a Discover track: promote it into the library first (you can't like a
-    // song that isn't in the library yet). Promotion is idempotent and usually
-    // keeps the same id; if it differs, move the optimistic like onto the new id.
-    if (nextLiked && song?.discoverTrackId) {
-      const promoted = await promoteStagedSong(song);
-      if (!promoted) {
-        set((state) => ({
-          likedSongIds: prevLiked
-            ? { ...state.likedSongIds, [songId]: true }
-            : removeKey(state.likedSongIds, songId),
-          pending: removeKey(state.pending, songId),
-          hydrated: true,
-        }));
-        rollbackOptimisticCache();
-        return { ok: false, status: 502, error: "Couldn't save this track" };
+    const moveOptimisticLike = (replacement: PlayerSong) => {
+      if (replacement.id === songId) return;
+      const previousId = songId;
+      set((state) => ({
+        likedSongIds: { ...removeKey(state.likedSongIds, previousId), [replacement.id]: true },
+        pending: { ...removeKey(state.pending, previousId), [replacement.id]: true },
+        hydrated: true,
+      }));
+      songId = replacement.id;
+    };
+    let saveCatalogMetadata = songId.startsWith("catalog:");
+
+    // Try to download a Discover track before saving its like. If both audio
+    // sources fail, preserve the like as catalog metadata for a later retry.
+    if (needsPromotion && song) {
+      const promoted = await promoteStagedSong(song, moveOptimisticLike);
+      if (promoted) {
+        song = promoted;
+        songId = promoted.id;
+        saveCatalogMetadata = false;
+        patchOptimisticCache();
+      } else {
+        // A download outage must not discard a like. The music server can save
+        // catalog metadata independently and resolve a stream on the next play.
+        saveCatalogMetadata = true;
       }
-      if (promoted.id !== songId) {
-        const previousId = songId;
-        set((state) => ({
-          likedSongIds: { ...removeKey(state.likedSongIds, previousId), [promoted.id]: true },
-          pending: { ...removeKey(state.pending, previousId), [promoted.id]: true },
-          hydrated: true,
-        }));
-      }
-      song = promoted;
-      songId = promoted.id;
-      patchOptimisticCache();
     }
 
     try {
       const response = await fetch("/api/likes", {
         method: nextLiked ? "POST" : "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ songId }),
+        body: JSON.stringify({ songId, ...(saveCatalogMetadata && song ? { song } : {}) }),
         credentials: "include",
         cache: "no-store",
       });
@@ -200,6 +212,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
             : removeKey(state.likedSongIds, songId),
           pending: removeKey(state.pending, songId),
           hydrated: true,
+          error: failureMessage,
         }));
         rollbackOptimisticCache();
 
@@ -214,6 +227,14 @@ export const useLikesStore = create<LikesState>((set, get) => ({
         return { ok: false, status: response.status, error: message };
       }
 
+      const payload = await response.json().catch(() => null) as { song?: PlayerSong } | null;
+      if (nextLiked && payload?.song?.id && song) {
+        const previousId = song.id;
+        const replacement = { ...payload.song, audioUrl: song.audioUrl || payload.song.audioUrl };
+        moveOptimisticLike(replacement);
+        usePlayerStore.getState().replaceStagedSong(previousId, replacement);
+        song = replacement;
+      }
       set((state) => ({
         pending: removeKey(state.pending, songId),
         hydrated: true,
@@ -228,6 +249,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
           : removeKey(state.likedSongIds, songId),
         pending: removeKey(state.pending, songId),
         hydrated: true,
+        error: failureMessage,
       }));
       rollbackOptimisticCache();
 

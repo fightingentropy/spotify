@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
 :root {
-  --background: #000000;
+  --background: #121212;
   --foreground: #f2f2f2;
-  --surface: #0c0c0d;
+  --surface: #1a1a1a;
   --surface-raised: rgba(255, 255, 255, 0.045);
   --surface-active: rgba(255, 255, 255, 0.09);
   --line: rgba(255, 255, 255, 0.08);
@@ -88,17 +88,52 @@ body.wf-now-playing-open {
   .wf-main {
     position: fixed;
     min-height: 0;
-    top: calc(3.5rem + env(safe-area-inset-top));
-    right: var(--wf-right-sidebar-width, 4rem);
-    bottom: 84px;
-    left: var(--wf-left-sidebar-width, 13.5rem);
+    top: calc(4rem + env(safe-area-inset-top));
+    right: calc(var(--wf-right-sidebar-width, 4rem) + 8px);
+    bottom: 92px;
+    left: calc(var(--wf-left-sidebar-width, 13.5rem) + 4px);
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 0;
     scrollbar-gutter: stable;
+    border: 1px solid rgba(255, 255, 255, 0.055);
+    border-radius: 8px;
+    background: var(--background);
   }
+
+  body, #root { background: #0a0a0a; }
+  .wf-app-header { background: #0a0a0a; border-bottom-color: transparent; }
+  .wf-library-sidebar, .wf-now-playing-sidebar { background: #0a0a0a; }
+  .wf-main::-webkit-scrollbar { width: 8px; }
+  .wf-main::-webkit-scrollbar-thumb { background: #ffffff20; border: 2px solid var(--background); border-radius: 8px; }
+  .wf-main::-webkit-scrollbar-thumb:hover { background: #ffffff38; }
+  .wf-main-auth { position: static; height: 100dvh; min-height: 100dvh; border: 0; border-radius: 0; }
 }
+
+.wf-library-sidebar a {
+  position: relative;
+  color: rgba(255, 255, 255, 0.7);
+  outline-offset: -2px;
+}
+
+.wf-library-sidebar a[aria-current="page"] {
+  background: rgba(255, 255, 255, 0.085);
+  color: white;
+}
+
+.wf-library-sidebar a[aria-current="page"]::before {
+  position: absolute;
+  left: 0;
+  top: 30%;
+  bottom: 30%;
+  width: 3px;
+  content: "";
+  border-radius: 3px;
+  background: #ededed;
+}
+
+.wf-library-sidebar a:focus-visible { outline: 2px solid #ffffffb3; }
 
 .touch-manipulation {
   touch-action: manipulation;
@@ -108,8 +143,112 @@ body.wf-now-playing-open {
   min-height: 100%;
 }
 
+.wf-main.wf-main-lyrics {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wf-main-lyrics > .wf-route-surface {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Shared route geometry and controls keep every part of the library aligned. */
+@layer components {
+.wf-page {
+  --page-gutter: 20px;
+  width: 100%;
+  max-width: 1440px;
+  min-width: 0;
+  min-height: 100%;
+  margin-inline: auto;
+  padding: 24px var(--page-gutter) 40px;
+}
+
+.wf-page-narrow > * { max-width: 896px; }
+.wf-page-header { margin-bottom: 28px; }
+.wf-heading-row, .wf-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.wf-page-title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.6px;
+  overflow-wrap: anywhere;
+}
+.wf-page-description { margin-top: 6px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.wf-page-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.wf-section-header { margin-bottom: 16px; }
+.wf-section-title { margin: 0; font-size: 18px; line-height: 1.4; font-weight: 600; letter-spacing: -0.25px; }
+.wf-muted { color: var(--muted); }
+.wf-panel { padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.wf-button, .wf-button-primary, .wf-icon-button {
+  display: inline-flex;
+  min-height: 40px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.wf-button:hover, .wf-icon-button:hover { background: var(--surface-active); border-color: #ffffff38; }
+.wf-button-primary { border-color: transparent; background: #ededed; color: #121212; font-weight: 600; }
+.wf-button-primary:hover { background: white; }
+.wf-icon-button { width: 40px; padding: 8px; }
+.wf-button:disabled, .wf-button-primary:disabled, .wf-icon-button:disabled { opacity: .4; cursor: default; }
+.wf-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: #ffffff04;
+  padding: 8px 12px;
+  color: var(--foreground);
+  font-size: 16px;
+  line-height: 22px;
+}
+.wf-input::placeholder { color: var(--dim); }
+.wf-input:focus { border-color: #ffffff70; outline: none; }
+.wf-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+.wf-tab { min-height: 40px; padding: 8px 12px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 14px; font-weight: 500; cursor: pointer; }
+.wf-tab:hover { color: var(--foreground); }
+.wf-tab[aria-selected="true"], .wf-tab[aria-pressed="true"], .wf-tab[data-active="true"] { border-bottom-color: var(--foreground); color: var(--foreground); }
+.wf-empty-state { padding: 48px 20px; color: var(--muted); font-size: 14px; line-height: 1.6; text-align: center; }
+.wf-empty-state h2, .wf-empty-state h3 { color: var(--foreground); }
+.wf-button:focus-visible, .wf-button-primary:focus-visible, .wf-icon-button:focus-visible, .wf-input:focus-visible, .wf-tab:focus-visible {
+  outline: 2px solid #ffffffb3;
+  outline-offset: 3px;
+}
+@media (min-width: 640px) {
+  .wf-page { --page-gutter: 32px; padding-top: 32px; }
+  .wf-page-title { font-size: 28px; }
+  .wf-input { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wf-button, .wf-button-primary, .wf-icon-button { transition: none; }
+}
+
+}
+
 .wf-pressable {
-  transform: translateZ(0);
   transition:
     transform 160ms ease,
     background-color 160ms ease,
@@ -119,7 +258,6 @@ body.wf-now-playing-open {
 }
 
 .wf-control-button {
-  transform: translateZ(0);
   transition:
     transform 160ms ease,
     background-color 160ms ease,
@@ -129,15 +267,10 @@ body.wf-now-playing-open {
 }
 
 .wf-song-card {
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0);
-  transition:
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 220ms ease,
-    filter 220ms ease;
+  transition: background-color 160ms ease;
 }
 
 .wf-list-row {
-  transform: translateZ(0);
   transition:
     background-color 170ms ease,
     opacity 170ms ease;
@@ -147,22 +280,22 @@ body.wf-now-playing-open {
   transition: opacity 280ms ease;
 }
 
-.wf-now-playing-panel {
-  transition:
-    transform 360ms cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 260ms ease,
-    border-color 260ms ease;
-  will-change: transform, opacity;
+.wf-sheet-backdrop[data-open="false"] {
+  transition-duration: 220ms;
 }
 
-/* Closing should feel as smooth as opening, not abrupt. Opening decelerates
-   into place; closing mirrors it by accelerating out (gentle start, no jerk)
-   over the same duration, and holds opacity until the panel has begun sliding
-   so it glides off-screen instead of blinking out. Scoped to [data-open="false"]
-   so the entrance keeps its original curve. */
+.wf-now-playing-panel {
+  /* Tailwind's translate-y utilities set the individual translate property. */
+  transition:
+    translate 360ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 260ms ease;
+  will-change: translate, opacity;
+}
+
+/* Move and fade together; a delayed fade makes dismissal appear to stall. */
 .wf-now-playing-panel[data-open="false"] {
-  transition-timing-function: cubic-bezier(0.4, 0, 1, 1), ease, ease;
-  transition-delay: 0ms, 120ms, 0ms;
+  transition-duration: 220ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1), ease;
 }
 
 .wf-now-playing-art {
@@ -190,15 +323,7 @@ body.wf-now-playing-open {
   transform: scale(0.985);
 }
 
-.wf-song-card:active {
-  transform: scale(0.985);
-}
 
-@media (prefers-reduced-motion: no-preference) {
-  .wf-route-surface {
-    animation: wf-route-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .wf-route-surface,
@@ -212,22 +337,11 @@ body.wf-now-playing-open {
   .wf-song-card,
   .wf-list-row,
   .wf-sheet-backdrop,
+  .wf-sheet-backdrop[data-open="false"],
   .wf-now-playing-panel,
   .wf-now-playing-panel[data-open="false"] {
     transition-duration: 1ms;
     transition-delay: 0ms;
-  }
-}
-
-@keyframes wf-route-enter {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 

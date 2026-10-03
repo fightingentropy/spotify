@@ -77,7 +77,7 @@ const SongListItemComponent = function SongListItem({
       <div
         onPointerEnter={() => warmPlaybackSong(song, true)}
         className={cn(
-          "wf-list-row group grid min-h-16 grid-cols-[minmax(0,1fr)_2.25rem] items-center gap-2 rounded-lg px-2 py-1.5 [contain-intrinsic-size:auto_64px] [content-visibility:auto]",
+          "wf-list-row group grid min-h-16 grid-cols-[minmax(0,1fr)_2.25rem] items-center gap-2 rounded px-2 py-1.5 [contain-intrinsic-size:auto_64px] [content-visibility:auto]",
           "sm:grid-cols-[minmax(14rem,2fr)_minmax(7rem,1fr)_3.5rem_2.25rem] sm:gap-3",
           isActive ? "bg-white/[0.055]" : "hover:bg-white/[0.035]",
         )}
@@ -104,7 +104,7 @@ const SongListItemComponent = function SongListItem({
               </>
             )}
           </span>
-          <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md bg-white/[0.055]">
+          <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded bg-white/[0.055]">
             <CoverImage
               src={song.imageUrl}
               networkSrc={song.networkImageUrl}
@@ -150,7 +150,7 @@ const SongListItemComponent = function SongListItem({
     <div
       onPointerEnter={() => warmPlaybackSong(song, true)}
       className={cn(
-        "wf-list-row group flex items-center gap-3 px-4 py-2",
+        "wf-list-row group flex items-center gap-3 rounded px-2 py-2",
         isActive ? "bg-white/[0.045]" : "hover:bg-white/[0.035]",
       )}
     >
@@ -160,7 +160,7 @@ const SongListItemComponent = function SongListItem({
         aria-pressed={isActiveAndPlaying}
         onClick={handlePlay}
         onFocus={() => warmPlaybackSong(song, true)}
-        className="wf-pressable flex min-w-0 flex-1 items-center gap-3 rounded-md bg-transparent text-left focus:outline-none"
+        className="wf-pressable flex min-w-0 flex-1 items-center gap-3 rounded-md bg-transparent text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
       >
         <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded">
           <CoverImage
@@ -176,10 +176,10 @@ const SongListItemComponent = function SongListItem({
         </span>
 
         <span className="min-w-0 flex-1">
-          <span className={cn("block truncate text-[15px] text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
+          <span className={cn("block truncate text-[14px] text-[#f2f2f2]", isActive ? "font-semibold" : "font-medium")}>
             {song.title}
           </span>
-          <span className="block truncate text-xs opacity-70">{song.artist}</span>
+          <span className="block truncate text-[13px] text-white/55">{song.artist}</span>
         </span>
       </button>
 

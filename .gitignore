@@ -46,3 +46,6 @@ yarn-error.log*
 .wrangler
 .dev.vars*
 !.dev.vars.example
+
+# Cloudflare CLI generated build output
+.cloudflare/

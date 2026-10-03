@@ -1,5 +1,6 @@
 import { useAuth } from "@/client/auth";
 import { type HomePayload, useApiData, withAccountScope } from "@/client/api";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 import { PageError } from "@/components/PageError";
 import { SongGrid } from "@/components/SongGrid";
 import type { PlayerSong } from "@/types/player";
@@ -18,26 +19,23 @@ export default function SongsPage() {
   );
 
   if ((songsState.loading && songsState.data.length === 0) || status === "loading") {
-    return <div className="px-6 py-8 text-white/[0.68]">Loading songs...</div>;
+    return <PageLayout><PageHeader title="All Songs" /><p role="status" className="wf-muted text-sm">Loading songs...</p></PageLayout>;
   }
 
   if (songsState.error) {
     return (
-      <div className="mx-auto max-w-7xl px-6 py-8">
-        <h1 className="text-2xl font-semibold">All Songs</h1>
+      <PageLayout>
+        <PageHeader title="All Songs" />
         <div className="mt-3">
           <PageError compact message={songsState.error} onRetry={songsState.retry} />
         </div>
-      </div>
+      </PageLayout>
     );
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">All Songs</h1>
-        <p className="mt-1 text-sm text-white/[0.62]">{songsState.data.length} tracks in your library</p>
-      </div>
+    <PageLayout>
+      <PageHeader title="All Songs" description={`${songsState.data.length} tracks in your library`} />
       {likesState.error ? (
         <div className="mb-4">
           <PageError
@@ -53,6 +51,6 @@ export default function SongsPage() {
         canLike={Boolean(user)}
         emptyLabel="Your library is empty. Upload music to get started."
       />
-    </div>
+    </PageLayout>
   );
 }

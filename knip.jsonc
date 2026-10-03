@@ -1,0 +1,44 @@
+{
+  "$schema": "https://unpkg.com/knip/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "treatConfigHintsAsErrors": true,
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.ts",
+        "tests/**/*.test.ts",
+        // Old browser installations still request this unregistering worker.
+        "public/sw.js"
+      ],
+      "project": ["src/**/*.{ts,tsx,css}", "scripts/**/*.ts", "tests/**/*.ts"]
+    },
+    "mobile": {
+      "ignoreDependencies": [
+        // Loaded via requireOptionalNativeModule("ExpoNetwork") for compatibility
+        // with older app binaries, rather than the throwing JavaScript wrapper.
+        "expo-network",
+        // Used by `expo lint` and its default configuration.
+        "eslint", "eslint-config-expo",
+        // Expo's config plugin reports this optional EAS Update integration;
+        // this app does not configure or import expo-updates.
+        "expo-updates",
+        // The postinstall compatibility patch targets Expo's bundled JSI package.
+        "expo-modules-jsi"
+      ],
+      // NativeWind resolves its Tailwind config relative to cwd when executed.
+      // Analyze Metro statically instead of executing it from the repo root.
+      "metro": { "config": [] },
+      "entry": [
+        "src/app/**/*.{ts,tsx}",
+        "metro.config.js",
+        "plugins/*.js",
+        "scripts/*.mjs",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx,css}", "global.css", "modules/**/*.ts", "plugins/**/*.js", "scripts/**/*.mjs", "tests/**/*.ts"]
+    },
+    "packages/shared": {
+      "project": ["src/**/*.ts"]
+    }
+  }
+}

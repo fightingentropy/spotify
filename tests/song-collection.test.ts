@@ -36,6 +36,16 @@ describe("collection browsing", () => {
     expect(filterCollectionSongs(similar, "blurr").map((s) => s.id)).toEqual(["ten", "two"]);
   });
 
+  test("refreshes cached search fields when song metadata is edited", () => {
+    const edited = song("edited", "Original Title", "Original Artist", "Original Album");
+    expect(filterCollectionSongs([edited], "original")).toEqual([edited]);
+    edited.title = "Updated Title";
+    edited.artist = "Beyoncé";
+    edited.album = "Renaissance";
+    expect(filterCollectionSongs([edited], "original")).toEqual([]);
+    expect(filterCollectionSongs([edited], "updated beyonce renaissance")).toEqual([edited]);
+  });
+
   test("sorts titles naturally and artists using titles as a tiebreaker", () => {
     expect(sortCollectionSongs(songs, "title").map((s) => s.id)).toEqual(["accent", "two", "ten", "wonder"]);
     expect(sortCollectionSongs(songs, "artist").map((s) => s.id)).toEqual(["accent", "two", "ten", "wonder"]);
@@ -50,5 +60,18 @@ describe("collection browsing", () => {
     expect(isSongSortMode("uploaded_desc")).toBe(true);
     expect(isSongSortMode("unknown")).toBe(false);
     expect(isSongSortMode(null)).toBe(false);
+  });
+
+  test("date sorting preserves equal-date order and keeps the correctly sorted duplicate", () => {
+    const dated = [
+      song("duplicate", "Older Copy", "Artist", undefined, "2024-01-01"),
+      song("same-date", "Same Date", "Artist", undefined, "2026-01-01"),
+      song("duplicate", "Newer Copy", "Artist", undefined, "2026-01-01"),
+      song("invalid", "Invalid Date", "Artist", undefined, "invalid"),
+    ];
+    expect(sortCollectionSongs(dated, "uploaded_desc").map((s) => s.title))
+      .toEqual(["Same Date", "Newer Copy", "Invalid Date"]);
+    expect(sortCollectionSongs(dated, "uploaded_asc").map((s) => s.title))
+      .toEqual(["Invalid Date", "Older Copy", "Same Date"]);
   });
 });

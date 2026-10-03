@@ -2,6 +2,7 @@ export type PlaybackKeyTargetInfo = {
   isContentEditable: boolean;
   tagName: string;
   inputType: string | null;
+  preserveKeyboardInput?: boolean;
 };
 
 export function playbackKeyTargetInfo(target: EventTarget | null): PlaybackKeyTargetInfo | null {
@@ -9,6 +10,7 @@ export function playbackKeyTargetInfo(target: EventTarget | null): PlaybackKeyTa
   return {
     isContentEditable: target.isContentEditable,
     tagName: target.tagName.toUpperCase(),
+    preserveKeyboardInput: Boolean(target.closest("[data-preserve-playback-keys]")),
     inputType:
       typeof HTMLInputElement !== "undefined" && target instanceof HTMLInputElement
         ? target.type.toLowerCase()
@@ -22,6 +24,7 @@ export function isSpaceKey(event: Pick<KeyboardEvent, "code" | "key">): boolean 
 
 export function shouldPreservePlaybackShortcutTarget(info: PlaybackKeyTargetInfo | null): boolean {
   if (!info) return false;
+  if (info.preserveKeyboardInput) return true;
   if (info.isContentEditable) return true;
   if (info.tagName === "TEXTAREA" || info.tagName === "SELECT") return true;
   return info.tagName === "INPUT" && info.inputType !== "range";
@@ -30,6 +33,7 @@ export function shouldPreservePlaybackShortcutTarget(info: PlaybackKeyTargetInfo
 export function shouldPreserveEditableShortcutTarget(info: PlaybackKeyTargetInfo | null): boolean {
   if (!info) return false;
   return (
+    info.preserveKeyboardInput === true ||
     info.isContentEditable ||
     info.tagName === "INPUT" ||
     info.tagName === "TEXTAREA" ||

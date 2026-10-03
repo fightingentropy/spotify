@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useAuth } from "@/client/auth";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 
 function resolveRedirectTarget(
   state: unknown,
@@ -45,51 +46,53 @@ export default function SignInPage() {
   }
 
   return (
-    <div className="max-w-md mx-auto py-16 px-4">
-      <h1 className="text-2xl font-semibold mb-6">Sign in</h1>
-      <form onSubmit={onSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="signin-email" className="block text-sm mb-1">Email</label>
-          <input
-            id="signin-email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            aria-describedby={error ? "signin-error" : undefined}
-            className="w-full border rounded px-3 py-2 bg-transparent"
-            required
-          />
-        </div>
-        <div>
-          <label htmlFor="signin-password" className="block text-sm mb-1">Password</label>
-          <input
-            id="signin-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            aria-describedby={error ? "signin-error" : undefined}
-            className="w-full border rounded px-3 py-2 bg-transparent"
-            required
-          />
-        </div>
-        {error && (
-          <div id="signin-error" role="alert" className="text-sm text-red-600">
-            {error}
+    <PageLayout narrow>
+      <div className="max-w-md">
+        <PageHeader title="Sign in" description="Access your personal music library." />
+        <form onSubmit={onSubmit} className="wf-panel space-y-5 p-5">
+          <div>
+            <label htmlFor="signin-email" className="mb-2 block text-sm">Email</label>
+            <input
+              id="signin-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              aria-describedby={error ? "signin-error" : undefined}
+              className="wf-input w-full"
+              required
+            />
           </div>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full h-10 rounded bg-foreground text-background disabled:opacity-50"
-        >
-          {loading ? "Signing in..." : "Sign in"}
-        </button>
-      </form>
-      <p className="mt-4 text-sm text-white/[0.62]">
-        Private personal library. Sign-in only.
-      </p>
-    </div>
+          <div>
+            <label htmlFor="signin-password" className="mb-2 block text-sm">Password</label>
+            <input
+              id="signin-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              aria-describedby={error ? "signin-error" : undefined}
+              className="wf-input w-full"
+              required
+            />
+          </div>
+          {error && (
+            <div id="signin-error" role="alert" className="text-sm text-red-300">
+              {error}
+            </div>
+          )}
+          <button
+            type="submit"
+            disabled={loading}
+            className="wf-button-primary w-full"
+          >
+            {loading ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
+        <p className="wf-muted mt-4 text-sm">
+          Private personal library. Sign-in only.
+        </p>
+      </div>
+    </PageLayout>
   );
 }

@@ -24,7 +24,7 @@ type CoverImageProps = {
 // RN replacement for src/components/CoverImage.tsx. expo-image caches covers and
 // decodes off-thread; we keep the candidate fallback chain (src → networkSrc →
 // bundled fallback) advancing on load error. The web r2 ?w= srcSet is dropped —
-// /api/artwork/local serves the cover as-is (§6).
+// /api/artwork/local serves the cover as-is.
 export function CoverImage({
   src,
   networkSrc,

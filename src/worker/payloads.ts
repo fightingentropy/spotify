@@ -26,9 +26,8 @@ export type BatchDownloadPayload = {
 
 export type SongPayload = {
   mode?: unknown;
-  // Discover staging: when true, stage a cheap YouTube Opus preview (play/skip)
-  // instead of resolving a lossless source. The lossless resolver is reserved
-  // for the Add-to-library path so the library stays FLAC-only.
+  // Discovery playback goes directly to YouTube. Library saves first attempt
+  // the lossless providers, then fall back to a permanent YouTube download.
   preview?: unknown;
   title?: unknown;
   artist?: unknown;

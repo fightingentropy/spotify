@@ -3,9 +3,8 @@ import { isOfflinePlaybackSong, isRadioSong } from "@/lib/player-song";
 import { getOfflineAccountScope, keyFor, useOfflineStore } from "@/store/offline";
 import type { PlayerSong } from "@/types/player";
 
-// Ported from src/client/play-events.ts. fetch → apiFetch; capacitor-file checks
-// dropped (offline tracks are plain file:// in RN). The 30s-OR-≥50% threshold and
-// the offline→canonical swap (so device-local URLs don't poison Home rails) stay.
+// Record after 30 seconds or half a track. Resolve device-local playback to its
+// canonical song so history never persists a phone-specific file:// URL.
 
 const PLAY_EVENT_MIN_POSITION_SECONDS = 30;
 

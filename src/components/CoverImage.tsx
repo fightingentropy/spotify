@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ImgHTMLAttributes } from "react";
 import { normalizeCoverImageUrl } from "@/lib/song-utils";
+import { artworkSrcSet } from "@/lib/artwork-url";
 
 type CoverImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onError"> & {
   src: string | null | undefined;
@@ -17,33 +18,6 @@ type CoverImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onErro
   blurDataURL?: string;
   unoptimized?: boolean;
 };
-
-const COVER_IMAGE_WIDTHS = [64, 128, 256, 384, 640];
-
-function artworkVariantUrl(src: string, width: number): string | null {
-  if (!src.startsWith("/api/files/")) return null;
-  if (src.startsWith("/api/files/local/")) return null;
-  const path = src.slice("/api/files/".length);
-  const cleanPath = path.split(/[?#]/)[0] || "";
-  if (!/\.(jpe?g|png|webp|gif)$/i.test(cleanPath)) return null;
-  const encodedPath = cleanPath
-    .split("/")
-    .filter(Boolean)
-    .map((part) => encodeURIComponent(part))
-    .join("/");
-  if (!encodedPath) return null;
-  return `/api/artwork/r2/${encodedPath}?w=${width}`;
-}
-
-function artworkSrcSet(src: string): string | undefined {
-  const entries = COVER_IMAGE_WIDTHS
-    .map((width) => {
-      const url = artworkVariantUrl(src, width);
-      return url ? `${url} ${width}w` : "";
-    })
-    .filter(Boolean);
-  return entries.length > 0 ? entries.join(", ") : undefined;
-}
 
 export function CoverImage({
   src,
@@ -101,8 +75,8 @@ export function CoverImage({
       fetchPriority={_priority ? "high" : undefined}
       width={fill ? undefined : width}
       height={fill ? undefined : height}
-      sizes={sizes}
-      srcSet={imgProps.srcSet ?? generatedSrcSet}
+      sizes={sizes ?? (typeof width === "number" ? `${width}px` : "100vw")}
+      srcSet={imgProps.srcSet ?? (_unoptimized ? undefined : generatedSrcSet)}
       style={{
         ...(fill
           ? {

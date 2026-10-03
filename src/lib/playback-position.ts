@@ -12,8 +12,15 @@ export type PlaybackPositionDetail = {
   duration: number;
 };
 
+let lastPosition: PlaybackPositionDetail = { currentTime: 0, duration: 0 };
+
+export function getPlaybackPosition(): PlaybackPositionDetail {
+  return lastPosition;
+}
+
 export function publishPlaybackPosition(detail: PlaybackPositionDetail): void {
   if (typeof window === "undefined") return;
+  lastPosition = detail;
   window.dispatchEvent(new CustomEvent<PlaybackPositionDetail>(PLAYBACK_POSITION_EVENT, { detail }));
 }
 
@@ -26,6 +33,9 @@ export function subscribePlaybackPosition(
     if (detail && typeof detail.currentTime === "number") callback(detail);
   };
   window.addEventListener(PLAYBACK_POSITION_EVENT, listener);
+  // A view opened while paused must start at the saved position, even when
+  // there won't be another audio tick until the user resumes playback.
+  callback(lastPosition);
   return () => window.removeEventListener(PLAYBACK_POSITION_EVENT, listener);
 }
 

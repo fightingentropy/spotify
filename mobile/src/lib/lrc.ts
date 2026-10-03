@@ -23,11 +23,3 @@ export function parseLrc(raw: string): LrcLine[] {
   }
   return lines;
 }
-
-export function stripLrc(raw: string): string {
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.replace(TIMESTAMP, "").trim())
-    .filter((line) => line.length > 0)
-    .join("\n");
-}

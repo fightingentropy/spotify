@@ -74,6 +74,8 @@ import {
 } from "./local-access";
 import { createPrivateProxyAuthenticator } from "./proxy-auth";
 import { json, jsonCached, text, readJsonBody, withNoIndexHeader } from "./local-http";
+import { normalizeCatalogLike, readCatalogLikes, setCatalogLike } from "./catalog-likes";
+import { artworkWidth, getArtworkVariant } from "./artwork-variants";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -88,6 +90,7 @@ import {
 } from "./local-files";
 import {
   configureDiscover,
+  discoverCatalogMetadata,
   handleDiscoverPromote,
   handleDiscoverStageNow,
   handleDiscoverStagingStatus,
@@ -641,8 +644,8 @@ function likesCachePath(source: LibrarySource): string {
 
 // Folds the persisted likes set onto content-canonical ids at read time so a
 // like recorded under ANY physical copy lights the one logical song
-// (like-once-everywhere). Gated so the dark deploy keeps exact legacy behavior
-// until the new app ships and the flag is flipped alongside PLAYLISTS_EDITABLE.
+// (like-once-everywhere). SPOTIFY_CANONICAL_LIKES opts into this behavior;
+// installations without it keep likes keyed by physical file id.
 const CANONICAL_LIKES_ENABLED = process.env.SPOTIFY_CANONICAL_LIKES === "1";
 
 const canonicalIdOf = (song: PlayerSong): string => song.canonicalId ?? song.id;
@@ -771,11 +774,13 @@ async function backfillLegacyLikesForSource(source: LibrarySource, songs: Player
 }
 
 async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]): Promise<string[]> {
+  const catalogIds = (await readCatalogLikes(source)).map((song) => song.id);
   const stored = await readPersistentLikes(source);
   if (stored !== null) {
-    return CANONICAL_LIKES_ENABLED
+    const fileIds = CANONICAL_LIKES_ENABLED
       ? canonicalizeLikedIds(stored, songs)
       : filterVisibleLikedSongIds(stored, songs);
+    return [...fileIds, ...catalogIds];
   }
   // No cache yet: report the legacy default (all songs liked) WITHOUT writing on
   // this GET path. The shared source is backfilled at startup; per-user sources
@@ -784,9 +789,10 @@ async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]):
   if (!source.shared && !likesBackfilled.has(source.key)) {
     void backfillLegacyLikesForSource(source, songs).catch(() => {});
   }
-  return CANONICAL_LIKES_ENABLED
+  const fileIds = CANONICAL_LIKES_ENABLED
     ? Array.from(new Set(songs.map(canonicalIdOf)))
     : songs.map((song) => song.id);
+  return [...fileIds, ...catalogIds];
 }
 
 async function setSongLikedForSource(
@@ -841,13 +847,40 @@ async function handleLikes(request: Request): Promise<Response> {
   if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
   if (!source) return forbiddenLibraryResponse();
 
-  const payload = await readJsonBody<{ songId?: unknown }>(request);
+  const payload = await readJsonBody<{ songId?: unknown; song?: unknown }>(request);
   const songId = typeof payload?.songId === "string" ? payload.songId : "";
   if (!songId) return json({ error: "Song id is required" }, { status: 400 });
+  if (songId.startsWith("catalog:") || !visibleSongIds(visibleSongs).has(songId)) {
+    let catalogSong = normalizeCatalogLike(payload?.song);
+    if (catalogSong && request.method === "POST") {
+      catalogSong = normalizeCatalogLike({
+        ...catalogSong,
+        ...await discoverCatalogMetadata(source, catalogSong.discoverTrackId!),
+      });
+    }
+    const saved = (await readCatalogLikes(source)).find((song) => song.id === songId);
+    const target = saved ?? catalogSong;
+    if (!target) return notFound("Song not found");
+    await setCatalogLike(source, target, request.method === "POST");
+    const ids = await likedSongIdsForSongs(source, visibleSongs);
+    return json({ ok: true, song: target, likes: ids, likedSongIds: ids });
+  }
   const nextLikedSongIds = await setSongLikedForSource(source, visibleSongs, songId, request.method === "POST");
   if (!nextLikedSongIds) return notFound("Song not found");
-
-  return json({ ok: true, likes: nextLikedSongIds, likedSongIds: nextLikedSongIds });
+  // A successful download replaces any metadata-only like for the same track.
+  // Remove that placeholder only after the durable file like has been saved.
+  if (request.method === "POST") {
+    const downloaded = visibleSongs.find((song) => song.id === songId || canonicalIdOf(song) === songId);
+    if (downloaded) {
+      for (const catalog of await readCatalogLikes(source)) {
+        if (trackKey(catalog.title, catalog.artist) === trackKey(downloaded.title, downloaded.artist)) {
+          await setCatalogLike(source, catalog, false);
+        }
+      }
+    }
+  }
+  const ids = await likedSongIdsForSongs(source, visibleSongs);
+  return json({ ok: true, likes: ids, likedSongIds: ids });
 }
 
 async function songEntryOwnedPaths(source: LibrarySource, entry: LocalSongEntry): Promise<string[]> {
@@ -1370,6 +1403,12 @@ function missingArtworkResponse(): Response {
   });
 }
 
+async function serveArtworkFile(path: string, source: LibrarySource, request: Request): Promise<Response> {
+  const width = artworkWidth(new URL(request.url).searchParams.get("w"));
+  const output = width ? await getArtworkVariant(path, source.artworkDir, width).catch(() => path) : path;
+  return serveFile(output, request, SIGNED_ARTWORK_CACHE_CONTROL);
+}
+
 async function handleArtwork(source: LibrarySource, id: string, request: Request): Promise<Response> {
   const snapshot = await getLibrary(source);
   const entry = snapshot.entriesById.get(id);
@@ -1386,7 +1425,7 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
       if (isAllowedLocalMediaRelativePath(relativeCover, snapshot.entriesByPath)) {
         const absoluteCover = await resolveInsideReal(source.root, relativeCover);
         if (absoluteCover) {
-          return serveFile(absoluteCover, request, SIGNED_ARTWORK_CACHE_CONTROL);
+          return serveArtworkFile(absoluteCover, source, request);
         }
       }
     } catch {}
@@ -1416,7 +1455,7 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
       if (meta.fileName && isSafeRelativeFileName(meta.fileName)) {
         const cachedArtwork = await resolveInsideReal(source.artworkDir, meta.fileName);
         if (cachedArtwork) {
-          return serveFile(cachedArtwork, request, SIGNED_ARTWORK_CACHE_CONTROL);
+          return serveArtworkFile(cachedArtwork, source, request);
         }
       }
     }
@@ -1452,7 +1491,7 @@ async function handleArtwork(source: LibrarySource, id: string, request: Request
         })}\n`,
         "utf8",
       );
-      return serveFile(artworkPath, request, SIGNED_ARTWORK_CACHE_CONTROL);
+      return serveArtworkFile(artworkPath, source, request);
     }
 
     await writeFile(
@@ -1699,8 +1738,8 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const source = librarySourceForRequest(request);
     if (!source) return forbiddenLibraryResponse();
     const snapshot = await getLibrary(source);
-    const songs = songsForRequest(snapshot.songs, request);
-    const likedSongIds = await likedSongIdsForSongs(source, songs);
+    const songs = songsForRequest([...snapshot.songs, ...await readCatalogLikes(source)], request);
+    const likedSongIds = Array.from(new Set(await likedSongIdsForSongs(source, songs)));
     const likedLookup = new Set(likedSongIds);
     const likeTimes = await readPersistentLikeTimes(source);
     const likeTimeOf = (song: PlayerSong): number | undefined =>
@@ -1722,7 +1761,7 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     const orderKey = (song: PlayerSong): number => {
       const ts = likeTimeOf(song);
       if (typeof ts === "number") return ts;
-      const parsed = Date.parse(song.createdAt ?? "");
+      const parsed = Date.parse(song.likedAt ?? song.createdAt ?? "");
       return Number.isFinite(parsed) ? parsed : 0;
     };
     likedSongs.sort((a, b) => orderKey(b) - orderKey(a));
@@ -1857,6 +1896,9 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
       return notFound();
     }
     const absolutePath = await resolveInsideReal(source.root, relativePath);
+    if (absolutePath && IMAGE_EXTENSIONS.has(extname(relativePath).toLowerCase())) {
+      return serveArtworkFile(absolutePath, source, request);
+    }
     const knownEntry = snapshot.entriesByPath.get(relativePath);
     const knownFileStat = knownEntry
       ? { size: knownEntry.size, mtimeMs: knownEntry.mtimeMs }

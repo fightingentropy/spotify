@@ -97,6 +97,12 @@ const MAX_STICKY_SEEK_ATTEMPTS = 30;
 const PODCAST_PROGRESS_WRITE_INTERVAL_MS = 5_000;
 const PODCAST_RESUME_MIN_SECONDS = 10;
 
+function playerSheetCloseDelay(): number {
+  // The shared sheet exit is 220ms; leave a little room for the style frame
+  // before unmounting. Reduced motion should release the overlay immediately.
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 260;
+}
+
 export function usePlaybackEngine(): {
   audioElements: React.ReactNode;
   playbackSong: PlayerSong | null | undefined;
@@ -377,7 +383,7 @@ export function usePlaybackEngine(): {
     nowPlayingCloseTimeoutRef.current = window.setTimeout(() => {
       nowPlayingCloseTimeoutRef.current = null;
       setNowPlayingMounted(false);
-    }, 380);
+    }, playerSheetCloseDelay());
   }, []);
 
   const openNowPlaying = useCallback(() => {
@@ -412,7 +418,7 @@ export function usePlaybackEngine(): {
     queueSheetCloseTimeoutRef.current = window.setTimeout(() => {
       queueSheetCloseTimeoutRef.current = null;
       setQueueSheetMounted(false);
-    }, 380);
+    }, playerSheetCloseDelay());
   }, []);
 
   const openQueueSheet = useCallback(() => {
@@ -964,9 +970,11 @@ export function usePlaybackEngine(): {
   }, [unloadAudioSource]);
 
   useEffect(() => {
-    if (!currentSong) return;
-    void prefetchUpcomingPlayback(queue, currentIndex, { shuffle, repeatMode, playFuture, shuffleRemaining });
-  }, [currentIndex, currentSong?.id, queue, shuffle, repeatMode, playFuture, shuffleRemaining]);
+    if (!currentSong || !isPlaying) return;
+    const controller = new AbortController();
+    void prefetchUpcomingPlayback(queue, currentIndex, { shuffle, repeatMode, playFuture, shuffleRemaining }, controller.signal);
+    return () => controller.abort();
+  }, [currentIndex, currentSong?.id, isPlaying, queue, shuffle, repeatMode, playFuture, shuffleRemaining]);
 
   useEffect(() => {
     return () => {

@@ -4,7 +4,7 @@ import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
-  plugins: [react(), cloudflare()],
+  plugins: [react(), cloudflare({ persistState: { path: ".wrangler/state" } })],
   legacy: {
     skipWebSocketTokenCheck: true,
   },

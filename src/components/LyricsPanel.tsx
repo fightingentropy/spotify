@@ -1,117 +1,100 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
-import { activeLyricIndex } from "@/lib/lrc";
+import { useEffect, useRef, useState } from "react";
+import { AlignCenter, MicVocal } from "lucide-react";
 import type { LyricsState } from "@/lib/credits";
-import { cn } from "@/lib/utils";
-
-// Highlight slightly ahead of the audio clock so the line lands on the beat
-// instead of trailing it (timeupdate ticks at ~4Hz).
-const SYNC_LOOKAHEAD_MS = 250;
-// How long after the user scrolls/touches before auto-centering resumes.
-const USER_SCROLL_HOLD_MS = 2_600;
+import { useLyricPosition } from "@/lib/use-lyric-position";
+import { cn, formatTime } from "@/lib/utils";
 
 type LyricsPanelProps = {
   lyricsState: LyricsState;
-  currentTime: number;
-  onSeek?: (seconds: number) => void;
-  size?: "lg" | "sm";
+  onSeek: (seconds: number) => void;
   className?: string;
 };
 
-function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-// Spotify-style lyrics: synced files highlight the line being sung and keep it
-// centered (pausing while the user explores); plain files render as scrollable
-// text. Tapping a synced line seeks to it.
-export function LyricsPanel({ lyricsState, currentTime, onSeek, size = "lg", className }: LyricsPanelProps) {
+export function LyricsPanel({ lyricsState, onSeek, className }: LyricsPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const userScrollUntilRef = useRef(0);
-  const scrollHoldTimeoutRef = useRef<number | null>(null);
-
+  const hasCenteredRef = useRef(false);
+  const recenterRef = useRef<() => void>(() => {});
+  const [following, setFollowing] = useState(true);
   const synced = lyricsState.status === "ready" ? lyricsState.parsed?.synced ?? null : null;
   const plain = lyricsState.status === "ready" ? lyricsState.parsed?.plain ?? lyricsState.text : "";
-
-  const activeIndex = useMemo(
-    () => (synced ? activeLyricIndex(synced, currentTime * 1000 + SYNC_LOOKAHEAD_MS) : -1),
-    [synced, currentTime],
-  );
-
-  const markUserScroll = () => {
-    userScrollUntilRef.current = Date.now() + USER_SCROLL_HOLD_MS;
-    if (scrollHoldTimeoutRef.current != null) window.clearTimeout(scrollHoldTimeoutRef.current);
-    scrollHoldTimeoutRef.current = window.setTimeout(() => {
-      scrollHoldTimeoutRef.current = null;
-      userScrollUntilRef.current = 0;
-    }, USER_SCROLL_HOLD_MS);
-  };
+  const activeIndex = useLyricPosition(synced);
 
   useEffect(() => {
-    return () => {
-      if (scrollHoldTimeoutRef.current != null) window.clearTimeout(scrollHoldTimeoutRef.current);
+    const container = containerRef.current;
+    if (!container) return;
+    const centerLine = (smooth: boolean) => {
+      container.style.setProperty("--lyrics-height", `${container.clientHeight}px`);
+      if (!following || activeIndex < 0) return;
+      const line = lineRefs.current[activeIndex];
+      if (!line) return;
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      container.scrollTo({
+        top: Math.max(0, line.offsetTop - container.clientHeight / 2 + line.offsetHeight / 2),
+        behavior: smooth && !reducedMotion && !document.hidden ? "smooth" : "instant",
+      });
+      hasCenteredRef.current = true;
     };
+    recenterRef.current = () => centerLine(false);
+    centerLine(hasCenteredRef.current);
+  }, [activeIndex, following, synced]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(() => recenterRef.current());
+    observer.observe(container);
+    return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (activeIndex < 0) return;
-    if (Date.now() < userScrollUntilRef.current) return;
-    const container = containerRef.current;
-    const line = lineRefs.current[activeIndex];
-    if (!container || !line) return;
-    const target = line.offsetTop - container.clientHeight / 2 + line.offsetHeight / 2;
-    // Smooth scrolling never progresses while the document is hidden (the
-    // scroll animation clock is paused), so jump instantly there.
-    const documentHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
-    container.scrollTo({
-      top: Math.max(0, target),
-      behavior: prefersReducedMotion() || documentHidden ? "auto" : "smooth",
-    });
-  }, [activeIndex]);
-
-  const lineSize =
-    size === "lg"
-      ? "text-[21px] leading-[1.4] sm:text-[23px]"
-      : "text-[15px] leading-[1.45]";
+  const pauseFollowing = () => { if (synced) setFollowing(false); };
 
   let body;
   if (lyricsState.status === "loading") {
     body = (
-      <div className="flex flex-col gap-3 p-6">
-        {[0.9, 0.7, 0.8, 0.55, 0.75].map((width, index) => (
-          <div key={index} className="wf-skeleton h-5 rounded" style={{ width: `${width * 100}%` }} />
+      <div role="status" aria-label="Loading lyrics" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-1 py-12">
+        {[0.65, 0.9, 0.75, 0.55].map((width, index) => (
+          <div key={index} className="wf-skeleton h-8 rounded" style={{ width: `${width * 100}%` }} />
         ))}
       </div>
     );
-  } else if (lyricsState.status === "error") {
-    body = <div className="p-6 text-white/70">Unable to load lyrics.</div>;
   } else if (lyricsState.status !== "ready" || (!synced && !plain.trim())) {
-    body = <div className="p-6 text-white/70">No lyrics available for this song.</div>;
+    body = (
+      <div role="status" className="flex h-full min-h-48 flex-col items-center justify-center gap-3 text-center">
+        <MicVocal size={28} strokeWidth={1.5} className="text-white/35" />
+        <p className="text-base font-medium text-white/80">
+          {lyricsState.status === "error" ? "Lyrics couldn’t load" : "No lyrics for this track yet"}
+        </p>
+        <p className="text-sm text-white/50">
+          {lyricsState.status === "error" ? "Try opening lyrics again in a moment." : "You can keep listening while you browse."}
+        </p>
+      </div>
+    );
   } else if (synced) {
     body = (
-      <div className="flex flex-col items-start gap-1 px-5 pb-[55%] pt-[35%] sm:px-6">
+      <div
+        className="mx-auto flex w-full max-w-3xl flex-col items-start gap-3 px-1 sm:gap-4"
+        style={{ paddingBlock: "max(24px, calc(var(--lyrics-height, 480px) / 2 - 36px))" }}
+      >
         {synced.map((line, index) => (
           <button
             key={`${line.timeMs}-${index}`}
-            ref={(node) => {
-              lineRefs.current[index] = node;
-            }}
+            ref={(node) => { lineRefs.current[index] = node; }}
             type="button"
-            disabled={!onSeek}
+            title={`Jump to ${formatTime(line.timeMs / 1000)}`}
+            aria-current={index === activeIndex ? "true" : undefined}
+            aria-label={line.text ? undefined : "Instrumental"}
             onClick={() => {
-              if (!onSeek) return;
-              // Let the highlight follow the seek immediately instead of
-              // waiting out the user-scroll hold from this tap.
-              userScrollUntilRef.current = 0;
               onSeek(line.timeMs / 1000);
+              setFollowing(true);
             }}
+            onFocus={() => { if (index !== activeIndex) setFollowing(false); }}
             className={cn(
-              "rounded-md py-1.5 text-left font-bold transition-colors duration-200",
-              lineSize,
-              index === activeIndex ? "text-white" : "text-white/[0.42]",
-              onSeek && "cursor-pointer hover:text-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50",
+              "w-full rounded-sm py-1 text-left text-[28px] font-semibold leading-[1.45] tracking-[-0.025em] transition-colors duration-200 sm:text-[36px] xl:text-[42px]",
+              index === activeIndex ? "text-white" : "text-white/[0.4]",
+              "cursor-pointer hover:text-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 motion-reduce:transition-none",
             )}
           >
             {line.text || "♪"}
@@ -121,24 +104,39 @@ export function LyricsPanel({ lyricsState, currentTime, onSeek, size = "lg", cla
     );
   } else {
     body = (
-      <div className={cn("whitespace-pre-wrap px-5 py-6 font-semibold text-white/85 sm:px-6", lineSize)}>
+      <div className="mx-auto w-full max-w-3xl whitespace-pre-wrap px-1 py-8 text-[28px] font-semibold leading-[1.65] tracking-[-0.025em] text-white/85 sm:text-[36px] xl:text-[42px]">
         {plain}
       </div>
     );
   }
 
   return (
-    <div
-      ref={containerRef}
-      onWheel={markUserScroll}
-      onTouchMove={markUserScroll}
-      onPointerDown={markUserScroll}
-      className={cn(
-        "relative overflow-y-auto overscroll-contain rounded-2xl border border-white/[0.08] bg-[#0c0c0d]",
-        className,
-      )}
-    >
-      {body}
+    <div data-preserve-playback-keys className={cn("relative flex min-h-0 flex-col", className)}>
+      <div
+        ref={containerRef}
+        role="region"
+        aria-label="Song lyrics"
+        tabIndex={0}
+        onWheel={pauseFollowing}
+        onTouchMove={pauseFollowing}
+        onPointerDown={(event) => { if (event.target === event.currentTarget) pauseFollowing(); }}
+        onKeyDown={(event) => {
+          if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key)
+            || (event.key === " " && event.target === event.currentTarget)) pauseFollowing();
+        }}
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/50"
+        style={{ maskImage: "linear-gradient(to bottom, transparent, black 20px, black calc(100% - 20px), transparent)" }}
+      >
+        {body}
+      </div>
+      {synced && !following ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+          <button type="button" onClick={() => setFollowing(true)} className="wf-button pointer-events-auto shadow-lg">
+            <AlignCenter size={16} />
+            Resume lyrics
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

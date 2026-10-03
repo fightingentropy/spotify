@@ -4,7 +4,7 @@ import { requireNativeModule, EventEmitter, type EventSubscription } from "expo-
 // AsyncFunctions and the 9 native events 1:1. The JS player (PlayerBar) owns all
 // orchestration (queue, scrobble, crossfade timing); this module owns audio
 // output so playback survives a locked screen. See docs/native-audio-engine.md
-// and docs/port-notes/native-swift-engine.md.
+// for the current platform architecture and validation checklist.
 
 // ---------------------------------------------------------------------------
 // Native module handle
@@ -162,7 +162,7 @@ export interface AudioEngineEventMap {
 export type AudioEngineEventName = keyof AudioEngineEventMap;
 
 // ---------------------------------------------------------------------------
-// Method wrappers (14) — one per native AsyncFunction
+// Typed native method wrappers
 // ---------------------------------------------------------------------------
 
 /**
@@ -172,11 +172,6 @@ export type AudioEngineEventName = keyof AudioEngineEventMap;
  */
 export function configure(): Promise<void> {
   return nativeModule().configure();
-}
-
-/** Legacy M1a path: just put the shared AVAudioSession into .playback + active. */
-export function activateSession(): Promise<void> {
-  return nativeModule().activateSession();
 }
 
 /** Load a track onto a deck (the prefetch primitive). Does not auto-start unless already wantsPlaying. */
@@ -192,11 +187,6 @@ export function play(deck: DeckId): Promise<void> {
 /** Set wantsPlaying = false, cancel any ramp, pause the player. */
 export function pause(deck: DeckId): Promise<void> {
   return nativeModule().pause(deck);
-}
-
-/** Full teardown of a deck (pause, clear item + observers). */
-export function stop(deck: DeckId): Promise<void> {
-  return nativeModule().stop(deck);
 }
 
 /** Exact seek (position clamped >= 0); emits `seeked` on completion. */
@@ -253,7 +243,7 @@ export function updateNowPlaying(args: UpdateNowPlayingArgs): Promise<void> {
   );
 }
 
-/** Same teardown as `stop` but never rejects — safe cleanup of a deck. */
+/** Tear down a deck and its observers; missing decks are safe to release. */
 export function releaseDeck(deck: DeckId): Promise<void> {
   return nativeModule().releaseDeck(deck);
 }
@@ -273,22 +263,15 @@ export function addListener<E extends AudioEngineEventName>(
   return emitter().addListener(event as any, listener as any);
 }
 
-/** Remove all listeners for a given event name. */
-export function removeAllListeners(event: AudioEngineEventName): void {
-  emitter().removeAllListeners(event as any);
-}
-
 // ---------------------------------------------------------------------------
 // Default export — the full typed API surface
 // ---------------------------------------------------------------------------
 
 export default {
   configure,
-  activateSession,
   prepare,
   play,
   pause,
-  stop,
   seek,
   setVolume,
   setRate,
@@ -298,5 +281,4 @@ export default {
   updateNowPlaying,
   releaseDeck,
   addListener,
-  removeAllListeners,
 };

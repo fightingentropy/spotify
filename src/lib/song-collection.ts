@@ -18,6 +18,26 @@ export function isSongSortMode(value: unknown): value is SongSortMode {
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
+// A library is reused across keystrokes, sort changes and like updates. Avoid
+// Unicode normalization for every field on every keystroke; WeakMap entries are
+// released with the song objects when the collection/account is replaced.
+const searchFields = new WeakMap<PlayerSong, {
+  title: string;
+  artist: string;
+  album: string | undefined;
+  normalized: string[];
+}>();
+
+function normalizedSearchFields(song: PlayerSong): string[] {
+  const cached = searchFields.get(song);
+  if (cached && cached.title === song.title && cached.artist === song.artist && cached.album === song.album) {
+    return cached.normalized;
+  }
+  const normalized = [song.title, song.artist, song.album ?? ""].map(normalizeLibrarySearchQuery);
+  searchFields.set(song, { title: song.title, artist: song.artist, album: song.album, normalized });
+  return normalized;
+}
+
 function compareText(left: string | undefined, right: string | undefined): number {
   const a = left?.trim() ?? "";
   const b = right?.trim() ?? "";
@@ -26,10 +46,15 @@ function compareText(left: string | undefined, right: string | undefined): numbe
 }
 
 export function sortCollectionSongs(songs: readonly PlayerSong[], mode: SongSortMode): PlayerSong[] {
+  // Parsing in the comparator does O(n log n) date conversions. Build these once
+  // per sort, including invalid/missing dates, without changing tie ordering.
+  const dates = mode === "uploaded_desc" || mode === "uploaded_asc"
+    ? new Map(songs.map((song) => [song, Date.parse(song.createdAt ?? "") || 0]))
+    : null;
   const sorted = mode === "default" ? songs : [...songs].sort((left, right) => {
     if (mode === "uploaded_desc" || mode === "uploaded_asc") {
-      const a = Date.parse(left.createdAt ?? "") || 0;
-      const b = Date.parse(right.createdAt ?? "") || 0;
+      const a = dates!.get(left)!;
+      const b = dates!.get(right)!;
       return mode === "uploaded_desc" ? b - a : a - b;
     }
     return compareText(left[mode], right[mode]) ||
@@ -48,7 +73,7 @@ export function filterCollectionSongs(songs: readonly PlayerSong[], query: strin
   if (!normalized) return [...songs];
   const tokens = normalized.split(/\s+/);
   const directMatches = songs.filter((song) => {
-    const fields = [song.title, song.artist, song.album ?? ""].map(normalizeLibrarySearchQuery);
+    const fields = normalizedSearchFields(song);
     return tokens.every((token) => fields.some((field) => field.includes(token)));
   });
   // A collection is also a playable selection: "Blur" must not queue "Blue"

@@ -21,7 +21,7 @@ export function PageError({
           <button
             type="button"
             onClick={onRetry}
-            className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black"
+            className="wf-button mt-4"
           >
             {retryLabel}
           </button>
@@ -31,7 +31,7 @@ export function PageError({
   }
 
   return (
-    <div role="alert" className="max-w-md rounded-lg border border-white/10 bg-white/[0.04] p-6">
+    <div role="alert" className="wf-panel max-w-md">
       {title ? <h1 className="text-xl font-semibold">{title}</h1> : null}
       <p className={title ? "mt-2 text-sm leading-6 text-white/65" : "text-sm leading-6 text-white/65"}>
         {message}
@@ -40,7 +40,7 @@ export function PageError({
         <button
           type="button"
           onClick={onRetry}
-          className="mt-5 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:scale-[1.02] hover:bg-white/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="wf-button mt-5"
         >
           {retryLabel}
         </button>

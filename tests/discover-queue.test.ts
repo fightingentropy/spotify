@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { prepareHistorySongForPlayback, stageDiscoverSong } from "../src/client/discover-queue";
 import type { PlayerSong } from "../src/types/player";
+import { catalogLikeId, songLikeId } from "../packages/shared/src/catalog-like";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -17,6 +18,15 @@ const preview: PlayerSong = {
 };
 
 describe("replaying history after the preview cache is pruned", () => {
+  test("replaying a saved catalog like keeps its durable id and heart", async () => {
+    const id = catalogLikeId(preview)!;
+    globalThis.fetch = (async () => Response.json({ ...preview, id: "local-server:new-preview" })) as unknown as typeof fetch;
+    const replay = await stageDiscoverSong({ ...preview, id, audioUrl: "" });
+    expect(replay.id).toBe(id);
+    expect(replay.audioUrl).toBe(preview.audioUrl);
+    expect(songLikeId(preview, { [id]: true })).toBe(id);
+    expect(songLikeId(preview, {})).toBe(preview.id);
+  });
   test("resolves temporary previews again without changing saved library songs", () => {
     const replay = prepareHistorySongForPlayback(preview);
     expect(replay.audioUrl).toBe("");

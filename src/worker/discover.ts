@@ -3,12 +3,14 @@ import { fetchSpotifyPlaylistCatalogPage } from "@/lib/spotify-pathfinder";
 import type { PlayerSong } from "@/types/player";
 import { LOCAL_MAC_MINI_AUTH_USER, type AppEnv } from "./env";
 import { jsonCached, jsonError, requireUser } from "./http";
-import { fetchMacMini, isMacMiniMusicConfigured } from "./mac-mini-proxy";
+import { fetchMacMini, getMacMiniOrigin, isMacMiniMusicConfigured } from "./mac-mini-proxy";
+import { createDiscoverCardCache, type DiscoverPlaylistCard } from "./discover-card-cache";
 import { readJson } from "./request";
 import { envString, toNumberValue, toStringValue } from "./values";
 import { withProviderDeadline } from "./fetch";
 import type { SongPayload } from "./payloads";
 import { parseSpotifyTrackId, resolveStreamUrl } from "./provider-download";
+import { stageDiscoverWithFallback } from "./discover-stage";
 
 // Spotify's editorial "Top 50 - Global" playlist — globally trending tracks right
 // now. Fetched via the pathfinder (works anonymously for public playlists). Each
@@ -181,6 +183,7 @@ export async function markDiscoverStaged(
 // personalized to the library owner's Premium account (the mini fetches it with the
 // owner's cookies). Playlist id is "yt-mix-<listId>"; tracks stream as Opus preview.
 const YT_DISCOVER_MIX_LIST_ID = "RDTMAK5uy_n_5IN6hzAOwdCnM8D8rzrs3vDl12UcZpA";
+const readDiscoverCards = createDiscoverCardCache();
 
 // Convert a Discover chart track (with staged status) into a player song — a real,
 // instantly-playable song when staged, else a placeholder the discover-stager
@@ -215,9 +218,9 @@ export function discoverStagedToPlayerSong(track: DiscoverStagedTrack): PlayerSo
   };
 }
 
-// Build the Home "Discover Mix" card from the mini's YT playlist. Best-effort: a
-// short timeout keeps Home fast, and on a miss the card still shows with a fallback
-// name so opening it can retry the live fetch.
+// Refresh Home's cached mix metadata from the mini in the background. Keep the
+// provider deadline inside the post-response budget; a miss retains the previous
+// card and the detail route can still retry its live playlist fetch.
 async function youtubeDiscoverMixCard(
   env: CloudflareEnv,
 ): Promise<{ id: string; name: string; imageUrl: string; songsCount: number; resolved: boolean }> {
@@ -296,27 +299,37 @@ app.get("/api/discover/trending", async (c) => {
 // Music Discover Mix (Opus preview, owner's Premium). Each card opens
 // /api/playlist/:id ("discover-top50" / "yt-mix-<listId>").
 app.get("/api/discover/playlists", async (c) => {
-  const playlists: Array<{ id: string; name: string; imageUrl: string; songsCount: number }> = [];
-  // Run the two cards concurrently so the mix's worst-case mini round-trip doesn't
-  // stack on top of the Top-50 fetch.
-  // The mix card is the OWNER's personalized YouTube mix (fetched as the owner on
-  // the mini) — like its detail route, only show it to authenticated callers.
-  const [top, mix] = await Promise.all([
-    fetchTop50DiscoverTracks(c.env).catch(() => [] as DiscoverTrendingTrack[]),
-    isMacMiniMusicConfigured(c.env) && c.get("user") ? youtubeDiscoverMixCard(c.env) : Promise.resolve(null),
-  ]);
-  playlists.push({ id: "discover-top50", name: "Top 50", imageUrl: top[0]?.imageUrl || "", songsCount: top.length });
-  if (mix) {
-    const { resolved, ...card } = mix;
-    playlists.push(card);
-    // If the mix card fell back (mini cold / slow), cache only briefly so the next
-    // load picks up the now-warm mini cache (with the real cover); cache longer once
-    // it resolved.
-    if (!resolved) {
-      return jsonCached(c, { playlists }, { cacheControl: "private, max-age=30, stale-while-revalidate=120" });
-    }
+  const user = c.get("user");
+  const sources: Array<{ fallback: DiscoverPlaylistCard; authenticatedOnly?: boolean; load: () => Promise<DiscoverPlaylistCard | null> }> = [{
+    fallback: { id: "discover-top50", name: "Top 50", imageUrl: "", songsCount: 0 },
+    load: async () => {
+      const top = await fetchTop50DiscoverTracks(c.env);
+      return top.length ? { id: "discover-top50", name: "Top 50", imageUrl: top[0]?.imageUrl || "", songsCount: top.length } : null;
+    },
+  }];
+  // The mini's mix is personalized to its owner. It stays behind the same
+  // authentication gate as before and never enters the anonymous card cache.
+  if (isMacMiniMusicConfigured(c.env) && user) {
+    sources.push({
+      authenticatedOnly: true,
+      fallback: { id: `yt-mix-${YT_DISCOVER_MIX_LIST_ID}`, name: "Discover Mix", imageUrl: "", songsCount: 0 },
+      load: async () => {
+        const { resolved, ...card } = await youtubeDiscoverMixCard(c.env);
+        return resolved ? card : null;
+      },
+    });
   }
-  return jsonCached(c, { playlists }, { cacheControl: "private, max-age=600, stale-while-revalidate=3600" });
+  const { playlists, fresh } = await readDiscoverCards({
+    requestUrl: c.req.url,
+    userId: user?.id ?? null,
+    privateOrigin: getMacMiniOrigin(c.env),
+    sources,
+    openCache: () => caches.open("discover-cards-v1"),
+    waitUntil: (work) => c.executionCtx.waitUntil(work),
+  });
+  return jsonCached(c, { playlists }, {
+    cacheControl: fresh ? "private, max-age=600, stale-while-revalidate=3600" : "private, max-age=30, stale-while-revalidate=120",
+  });
 });
 
 // Tap a not-yet-staged Discover track: resolve + materialize ONE track into the
@@ -337,28 +350,24 @@ app.post("/api/discover/stage", async (c) => {
   // A direct-videoId mix track needs only a title (artist is best-effort); a
   // Spotify-keyed track needs both to search/label.
   if (!title || (!artist && !youtubeVideoId)) return jsonError("Title and artist are required", 400);
-  // Preview (play/skip): the mini stages a YouTube Opus copy itself — skip the
-  // expensive, outage-prone lossless resolver entirely. Lossless (Add): resolve
-  // a FLAC descriptor as before. The mini enforces that a preview can't be
-  // promoted into the library (409 preview_not_lossless).
+  // Playback previews go straight to YouTube. Library saves try the configured
+  // providers first, then download YouTube's best available audio on failure.
   const preview = payload.preview === true || Boolean(youtubeVideoId);
-  const resolved = preview ? undefined : await resolveStreamUrl(c.env, payload);
-  const res = await macMiniDiscoverFetch(
-    c.env,
-    "/api/discover/stage",
-    "POST",
-    {
+  const res = await stageDiscoverWithFallback({
+    preview,
+    youtubeVideoId,
+    resolve: () => resolveStreamUrl(c.env, payload),
+    stage: (source) => macMiniDiscoverFetch(c.env, "/api/discover/stage", "POST", {
       trackId,
       title,
       artist,
       album: toStringValue(payload.album),
       imageUrl: toStringValue(payload.imageUrl),
       durationMs: toNumberValue(payload.durationMs) ?? undefined,
-      ...(preview ? { preview: true } : { resolved }),
+      ...source,
       ...(youtubeVideoId ? { youtubeVideoId } : {}),
-    },
-    120_000,
-  );
+    }, 120_000),
+  });
   return new Response(await res.text(), {
     status: res.status,
     headers: { "content-type": "application/json" },

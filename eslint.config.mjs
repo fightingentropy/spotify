@@ -5,9 +5,8 @@ const eslintConfig = [
   {
     ignores: [
       ".wrangler/**",
-      "android/app/src/main/assets/public/**",
+      ".cloudflare/**",
       "dist/**",
-      "ios/App/App/public/**",
       "mobile/.expo/**",
       "mobile/ios/**",
       "node_modules/**",
@@ -24,7 +23,7 @@ const eslintConfig = [
       "no-self-assign": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": [
-        "warn",
+        "error",
         { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" },
       ],
     },

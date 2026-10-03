@@ -48,13 +48,13 @@ export default function EmailVerificationBanner() {
     return (
       <div
         role="status"
-        className="flex items-center justify-between gap-3 border-b border-emerald-500/30 bg-emerald-500/15 px-4 py-3 text-sm text-emerald-100 sm:px-6"
+        className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[0.025] px-5 py-3 text-sm text-white/80 sm:px-8"
       >
         <span>Your email is verified. Thanks!</span>
         <button
           type="button"
           onClick={() => setResult(null)}
-          className="shrink-0 rounded px-2 py-1 text-emerald-200 underline-offset-2 hover:underline"
+          className="wf-button"
         >
           Dismiss
         </button>
@@ -73,22 +73,22 @@ export default function EmailVerificationBanner() {
   return (
     <div
       role="status"
-      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-amber-500/30 bg-amber-500/15 px-4 py-3 text-sm text-amber-100 sm:px-6"
+      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-white/10 bg-white/[0.025] px-5 py-3 text-sm text-white/80 sm:px-8"
     >
       <span>
         {linkProblem ? `${linkProblem} ` : ""}
         Please verify your email{user?.email ? <> (<span className="font-medium">{user.email}</span>)</> : ""} to secure
         your account.
       </span>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         {resendState === "sent" ? (
-          <span className="text-amber-200">Verification email sent — check your inbox.</span>
+          <span className="wf-muted">Verification email sent — check your inbox.</span>
         ) : (
           <button
             type="button"
             onClick={onResend}
             disabled={resendState === "sending"}
-            className="rounded-full border border-amber-300/50 px-3 py-1 font-medium text-amber-100 transition hover:bg-amber-400/20 disabled:opacity-50"
+            className="wf-button"
           >
             {resendState === "sending" ? "Sending…" : resendState === "error" ? "Try again" : "Resend email"}
           </button>
@@ -96,7 +96,7 @@ export default function EmailVerificationBanner() {
         <button
           type="button"
           onClick={() => setDismissed(true)}
-          className="rounded px-1 py-1 text-amber-200 underline-offset-2 hover:underline"
+          className="wf-button"
           aria-label="Dismiss"
         >
           Dismiss

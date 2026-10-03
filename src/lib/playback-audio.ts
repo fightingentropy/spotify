@@ -73,7 +73,7 @@ export function audioVolumeIsWritable(audio: HTMLAudioElement): boolean {
   return audioVolumeWritableCache;
 }
 
-// iOS (incl. iPadOS in desktop-UA mode, and the Capacitor WKWebView) never lets
+// iOS browsers (including iPadOS in desktop-UA mode) never let
 // JS change the actual output volume — but as of iOS 26 a write to .volume now
 // READS BACK the written value, so the probe above false-positives and the app
 // wrongly takes the audio.volume crossfade path (which is silent on iOS: both

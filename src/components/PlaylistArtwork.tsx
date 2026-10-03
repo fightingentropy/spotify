@@ -65,7 +65,7 @@ export function PlaylistArtwork({
       <span
         aria-hidden
         className={cn(
-          "grid aspect-square place-items-center overflow-hidden rounded-xl bg-white/[0.075] text-white/55",
+          "grid aspect-square place-items-center overflow-hidden rounded bg-white/[0.075] text-white/55",
           className,
         )}
       >
@@ -78,7 +78,7 @@ export function PlaylistArtwork({
     return (
       <span
         aria-hidden
-        className={cn("relative block aspect-square overflow-hidden rounded-xl bg-white/[0.045]", className)}
+        className={cn("relative block aspect-square overflow-hidden rounded bg-white/[0.045]", className)}
       >
         <CoverImage
           src={covers[0]}
@@ -96,7 +96,7 @@ export function PlaylistArtwork({
     <span
       aria-hidden
       className={cn(
-        "grid aspect-square overflow-hidden rounded-xl bg-white/[0.045]",
+        "grid aspect-square overflow-hidden rounded bg-white/[0.045]",
         covers.length === 2 ? "grid-cols-2" : "grid-cols-2 grid-rows-2",
         className,
       )}

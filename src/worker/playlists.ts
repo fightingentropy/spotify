@@ -585,12 +585,9 @@ app.post("/api/playlist/:id/songs", async (c) => {
   if (!userOwnsPlaylist(c, user, rows[0])) return jsonError("Forbidden", 403);
   const body = await readJson<{ song?: unknown; songId?: unknown }>(c.req.raw);
   const song = coercePlayerSongPayload(body?.song);
-  // Defense-in-depth for the FLAC-only library invariant: a Discover / preview track
-  // plays from the hidden `.discover` staging cache (a lossy YouTube-mix Opus, or a
-  // chart track not yet promoted). It must be promoted via /api/discover/promote
-  // before owning a library row — persisting a staging-path SongRef would put a lossy
-  // reference in the library AND leave a dead entry once the cache is TTL-pruned. The
-  // mobile add path promotes first; reject here in case any client doesn't.
+  // Staging audio must be promoted before a playlist owns it: the .discover
+  // cache is temporary, so persisting that URL would leave a dead reference
+  // after pruning. Both provider downloads and YouTube fallbacks can be kept.
   if (song && song.audioUrl.includes(".discover")) {
     return jsonError("Promote this track before adding it to a playlist", 409);
   }

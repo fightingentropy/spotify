@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router";
 import {
@@ -22,6 +22,7 @@ import { useAuth } from "@/client/auth";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 import { CoverImage } from "@/components/CoverImage";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 import { PageError } from "@/components/PageError";
 import { PlaylistArtwork } from "@/components/PlaylistArtwork";
 import { SongGrid } from "@/components/SongGrid";
@@ -32,9 +33,9 @@ import { deletePlaylist, removeSongFromPlaylist, renamePlaylist, reorderPlaylist
 
 function PlaylistLoadingSkeleton() {
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+    <PageLayout>
       <div className="mb-7 flex items-end gap-5 border-b border-white/[0.08] pb-7">
-        <div className="wf-skeleton hidden h-40 w-40 shrink-0 rounded-xl sm:block" />
+        <div className="wf-skeleton hidden h-40 w-40 shrink-0 rounded sm:block" />
         <div className="min-w-0 flex-1 space-y-3">
           <div className="wf-skeleton h-3 w-20 rounded-full" />
           <div className="wf-skeleton h-9 w-72 max-w-full rounded-full" />
@@ -45,7 +46,7 @@ function PlaylistLoadingSkeleton() {
         {[0, 1, 2, 3, 4, 5].map((item) => (
           <div key={item} className="flex h-16 items-center gap-3 px-2">
             <div className="wf-skeleton h-3 w-5 rounded-full" />
-            <div className="wf-skeleton h-11 w-11 rounded-md" />
+            <div className="wf-skeleton h-11 w-11 rounded" />
             <div className="min-w-0 flex-1 space-y-2">
               <div className="wf-skeleton h-4 w-48 max-w-full rounded-full" />
               <div className="wf-skeleton h-3 w-28 max-w-full rounded-full" />
@@ -53,7 +54,7 @@ function PlaylistLoadingSkeleton() {
           </div>
         ))}
       </div>
-    </div>
+    </PageLayout>
   );
 }
 
@@ -134,7 +135,7 @@ function PlaylistActionsMenu({
         title="Playlist options"
         disabled={pending}
         onClick={() => setOpen((value) => !value)}
-        className="wf-control-button grid h-11 w-11 place-items-center rounded-full border border-white/[0.12] text-white/70 hover:bg-white/[0.07] hover:text-white disabled:cursor-wait disabled:opacity-45"
+        className="wf-icon-button"
       >
         <MoreHorizontal size={20} />
       </button>
@@ -144,13 +145,13 @@ function PlaylistActionsMenu({
           role="menu"
           aria-label="Playlist options"
           onKeyDown={moveMenuFocus}
-          className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-52 rounded-xl border border-white/[0.12] bg-[#121213] p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+          className="wf-panel absolute right-0 top-[calc(100%+0.5rem)] z-40 w-52 p-1"
         >
           <button
             type="button"
             role="menuitem"
             onClick={() => runAndClose(onRename)}
-            className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-white/85 hover:bg-white/[0.08] focus:outline-none focus-visible:bg-white/[0.08]"
+            className="flex min-h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm text-white/85 hover:bg-white/[0.08] focus:outline-none focus-visible:bg-white/[0.08]"
           >
             <Pencil size={17} className="text-white/60" />
             Rename
@@ -159,7 +160,7 @@ function PlaylistActionsMenu({
             type="button"
             role="menuitem"
             onClick={() => runAndClose(onToggleManaging)}
-            className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-white/85 hover:bg-white/[0.08] focus:outline-none focus-visible:bg-white/[0.08]"
+            className="flex min-h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm text-white/85 hover:bg-white/[0.08] focus:outline-none focus-visible:bg-white/[0.08]"
           >
             <ListChecks size={17} className="text-white/60" />
             {managing ? "Finish managing" : "Manage tracks"}
@@ -171,7 +172,7 @@ function PlaylistActionsMenu({
                 type="button"
                 role="menuitem"
                 onClick={() => runAndClose(onDelete)}
-                className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-red-300 hover:bg-red-400/[0.09] focus:outline-none focus-visible:bg-red-400/[0.09]"
+                className="flex min-h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm text-red-300 hover:bg-red-400/[0.09] focus:outline-none focus-visible:bg-red-400/[0.09]"
               >
                 <Trash2 size={17} />
                 Delete playlist
@@ -226,7 +227,7 @@ function PlaylistDeleteDialog({
         aria-labelledby="delete-playlist-title"
         aria-describedby="delete-playlist-description"
         tabIndex={-1}
-        className="w-full max-w-sm rounded-2xl border border-white/[0.12] bg-[#121213] p-5 text-white shadow-[0_24px_80px_rgba(0,0,0,0.65)] outline-none"
+        className="wf-panel w-full max-w-sm text-white outline-none"
       >
         <h2 id="delete-playlist-title" className="text-lg font-semibold">
           Delete “{name}”?
@@ -244,7 +245,7 @@ function PlaylistDeleteDialog({
             type="button"
             disabled={pending}
             onClick={onCancel}
-            className="wf-control-button rounded-full px-4 py-2 text-sm font-semibold text-white/75 hover:bg-white/[0.08] hover:text-white disabled:opacity-45"
+            className="wf-button"
           >
             Cancel
           </button>
@@ -252,7 +253,7 @@ function PlaylistDeleteDialog({
             type="button"
             disabled={pending}
             onClick={onConfirm}
-            className="wf-control-button rounded-full bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-400 disabled:cursor-wait disabled:opacity-60"
+            className="wf-button border-red-400/30 bg-red-500/15 text-red-200 hover:bg-red-500/25"
           >
             {pending ? "Deleting..." : "Delete playlist"}
           </button>
@@ -276,7 +277,7 @@ function PlaylistDeleteDialog({
 const songKeyOf = (song: Pick<PlayerSong, "id" | "discoverTrackId"> | null | undefined): string | null =>
   song ? song.discoverTrackId ?? song.id : null;
 
-export function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) {
+export function CuratedPlaylistView({ data, navigation }: { data: CuratedPlaylistPayload; navigation?: ReactNode }) {
   const { playlist } = data;
   const songs = data.songs ?? [];
   const setQueue = usePlayerStore((s) => s.setQueue);
@@ -331,39 +332,41 @@ export function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) 
   const headerIsPlaying = playlistIsActive && isPlaying;
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <header className="mb-7 flex flex-col items-center gap-4 text-center sm:flex-row sm:items-end sm:text-left">
-        <div className="relative h-[132px] w-[132px] shrink-0 overflow-hidden rounded-3xl bg-white/[0.045] shadow-[0_10px_28px_rgba(0,0,0,0.45)] sm:h-44 sm:w-44 sm:rounded-2xl">
-          <CoverImage src={playlist.imageUrl || undefined} alt={playlist.name} fill sizes="176px" className="object-cover" />
+    <PageLayout>
+      {navigation}
+      <header className="mb-7 flex items-end gap-5">
+        <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded bg-white/[0.045] sm:h-40 sm:w-40">
+          <CoverImage src={playlist.imageUrl || undefined} alt={playlist.name} fill sizes="(max-width: 639px) 96px, 160px" className="object-cover" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-[1.2px] text-white/60">{playlist.collectionType === "album" ? "Album" : "Playlist"}</div>
-          <h1 className="mt-1 truncate text-3xl font-bold sm:text-4xl">{playlist.name}</h1>
+          <div className="mb-2 text-xs wf-muted">{playlist.collectionType === "album" ? "Album" : "Playlist"}</div>
+          <h1 className="wf-page-title">{playlist.name}</h1>
           {playlist.description ? (
             <p className="mt-2 line-clamp-2 text-sm text-white/[0.62]">{playlist.description}</p>
           ) : null}
-          <div className="mt-2 text-sm opacity-70">
+          <div className="mt-2 text-sm wf-muted">
             {songs.length} {songs.length === 1 ? "track" : "tracks"}
           </div>
         </div>
       </header>
 
       {songs.length === 0 ? (
-        <div className="opacity-70">This playlist is empty.</div>
+        <div className="wf-empty-state">This playlist is empty.</div>
       ) : (
         <>
-          <div className="mb-5 flex justify-end">
+          <div className="mb-5 flex items-center gap-3 border-b border-white/[0.08] pb-4">
             <button
               type="button"
               onClick={handleHeaderPlay}
               aria-label={headerIsPlaying ? `Pause ${playlist.name}` : `Play ${playlist.name}`}
-              className="wf-control-button grid h-14 w-14 place-items-center rounded-full bg-white text-black shadow-lg transition hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+              className="wf-button-primary"
             >
               {headerIsPlaying ? (
-                <Pause size={26} fill="currentColor" />
+                <Pause size={18} fill="currentColor" />
               ) : (
-                <Play size={26} fill="currentColor" className="translate-x-0.5" />
+                <Play size={18} fill="currentColor" />
               )}
+              {headerIsPlaying ? "Pause" : "Play"}
             </button>
           </div>
           <ol className="space-y-1">
@@ -400,7 +403,7 @@ export function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) 
                       <CoverImage src={track.imageUrl} alt="" fill sizes="40px" className="object-cover" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className={cn("truncate text-[15px] leading-snug text-white", active && "font-semibold")}>
+                      <div className={cn("truncate text-sm leading-5 text-white", active && "font-semibold")}>
                         {track.title}
                       </div>
                       <div className="truncate text-[13px] leading-snug text-white/[0.6]">
@@ -414,7 +417,7 @@ export function CuratedPlaylistView({ data }: { data: CuratedPlaylistPayload }) 
           </ol>
         </>
       )}
-    </div>
+    </PageLayout>
   );
 }
 
@@ -460,14 +463,15 @@ export default function PlaylistPage() {
 
   if (loading || status === "loading") return <PlaylistLoadingSkeleton />;
   if (error) return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
+    <PageLayout>
+      <PageHeader title="Playlist" />
       <PageError compact message={error} onRetry={retry} />
-    </div>
+    </PageLayout>
   );
 
   if (data.kind === "curated") return <CuratedPlaylistView data={data} />;
 
-  if (!data.playlist) return <div className="px-6 py-8 max-w-7xl mx-auto opacity-70">Playlist not found.</div>;
+  if (!data.playlist) return <PageLayout><PageHeader title="Playlist" /><div className="wf-empty-state">Playlist not found.</div></PageLayout>;
 
   const deletable = data.playlist.deletable ?? !id.startsWith("local-folder-");
   const serverCoverImageUrls = data.playlist.coverImageUrls ?? [];
@@ -486,24 +490,24 @@ export default function PlaylistPage() {
         : [];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
-      <header className="mb-6 flex flex-col items-center gap-5 border-b border-white/[0.08] pb-7 text-center sm:flex-row sm:items-end sm:text-left">
+    <PageLayout>
+      <header className="mb-7 flex items-end gap-5">
         <PlaylistArtwork
           coverImageUrls={coverImageUrls}
           imageUrl={data.playlist.imageUrl}
-          className="w-[132px] shrink-0 shadow-[0_14px_40px_rgba(0,0,0,0.42)] sm:w-44"
-          sizes="176px"
+          className="w-24 shrink-0 rounded sm:w-40"
+          sizes="(max-width: 639px) 96px, 160px"
           loading="eager"
         />
         <div className="flex min-w-0 w-full flex-1 items-end gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-semibold uppercase tracking-[1.35px] text-white/45">
+            <div className="mb-2 text-xs wf-muted">
               Playlist
             </div>
-            <h1 className="mt-1 truncate text-3xl font-bold tracking-[-0.8px] text-[#f2f2f2] sm:text-[42px] sm:leading-[1.05]">
+            <h1 className="wf-page-title">
               {data.playlist.name}
             </h1>
-            <div className="mt-3 text-sm text-white/55">
+            <div className="mt-2 text-sm wf-muted">
               {data.songs.length} {data.songs.length === 1 ? "track" : "tracks"}
             </div>
           </div>
@@ -529,7 +533,7 @@ export default function PlaylistPage() {
       </header>
       {actionError ? <div role="alert" className="mb-4 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">{actionError}</div> : null}
       {managing && data.playlist.editable && data.songs.length > 0 ? (
-        <ol className="mb-7 space-y-1 rounded-xl border border-white/[0.12] bg-white/[0.03] p-2">
+        <ol className="wf-panel mb-7 space-y-1 p-2">
           {data.songs.map((song, index) => (
             <li key={song.id} className="flex min-h-12 items-center gap-3 rounded-lg px-2">
               <span className="w-6 text-right text-xs text-white/[0.45]">{index + 1}</span>
@@ -543,7 +547,7 @@ export default function PlaylistPage() {
                   [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
                   void runAction(`up-${song.id}`, () => reorderPlaylist(id, ids));
                 }}
-                className="grid h-10 w-10 place-items-center rounded-full hover:bg-white/[0.09] disabled:opacity-30"
+                className="wf-icon-button"
               ><ArrowUp size={16} /></button>
               <button
                 type="button"
@@ -554,21 +558,21 @@ export default function PlaylistPage() {
                   [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
                   void runAction(`down-${song.id}`, () => reorderPlaylist(id, ids));
                 }}
-                className="grid h-10 w-10 place-items-center rounded-full hover:bg-white/[0.09] disabled:opacity-30"
+                className="wf-icon-button"
               ><ArrowDown size={16} /></button>
               <button
                 type="button"
                 aria-label={`Remove ${song.title} from playlist`}
                 disabled={pendingAction !== null}
                 onClick={() => void runAction(`remove-${song.id}`, () => removeSongFromPlaylist(id, song.id))}
-                className="grid h-10 w-10 place-items-center rounded-full text-red-300 hover:bg-red-400/10 disabled:opacity-30"
+                className="wf-icon-button text-red-300"
               ><X size={16} /></button>
             </li>
           ))}
         </ol>
       ) : null}
       {data.songs.length === 0 ? (
-        <div className="opacity-70">This playlist is empty.</div>
+        <div className="wf-empty-state">This playlist is empty.</div>
       ) : (
         <SongGrid
           songs={data.songs}
@@ -593,6 +597,6 @@ export default function PlaylistPage() {
           }}
         />
       ) : null}
-    </div>
+    </PageLayout>
   );
 }

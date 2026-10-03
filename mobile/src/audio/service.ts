@@ -4,8 +4,8 @@ import { usePlayerStore } from "@/store/player";
 // The RNTP playback service: registered at app entry and run in a background-
 // capable context so lock-screen / Control-Center / headphone commands work even
 // when the UI is suspended. Each remote command maps to a store action; the
-// engine (engine.ts) reacts to the store change and drives the player. This
-// replaces the entire custom Swift remote-command channel (§5/§11).
+// Android engine reacts to the store change and drives the player. The iOS
+// engine receives remote commands from its native Expo module instead.
 export async function PlaybackService(): Promise<void> {
   TrackPlayer.addEventListener(Event.RemotePlay, () => usePlayerStore.getState().play());
   TrackPlayer.addEventListener(Event.RemotePause, () => usePlayerStore.getState().pause());

@@ -18,6 +18,8 @@
     "./library-search": "./src/library-search.ts",
     "./recent-searches": "./src/recent-searches.ts",
     "./queue-editing": "./src/queue-editing.ts",
-    "./playback-source": "./src/playback-source.ts"
+    "./playback-source": "./src/playback-source.ts",
+    "./catalog-albums": "./src/catalog-albums.ts",
+    "./catalog-like": "./src/catalog-like.ts"
   }
 }

@@ -70,10 +70,6 @@ function writeState(state: ImportQueueState | null): void {
   for (const listener of listeners) listener(state);
 }
 
-export function getImportQueueState(): ImportQueueState | null {
-  return readState();
-}
-
 export function subscribeImportQueue(listener: Listener): () => void {
   listeners.add(listener);
   listener(readState());

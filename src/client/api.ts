@@ -12,6 +12,8 @@ import {
 import { updateLikedIdsInPayload, updateLikedSongsInPayload } from "@spotify/shared/like-cache";
 import { apiReadTimeoutMs } from "@spotify/shared/api-timeout-policy";
 import type { PlayerSong } from "@/types/player";
+import { createApiDataCache } from "@/client/api-data-cache";
+import { createApiAuthRequestGuard } from "@/client/api-auth-request";
 
 export { normalizeAccountScope, withAccountScope };
 
@@ -19,14 +21,14 @@ export { normalizeAccountScope, withAccountScope };
 // here (rather than in a player/store module) because api.ts owns withAccountScope
 // and patchLikeApiCache, the two things that actually read it. auth.tsx sets it on
 // every auth transition; likes.ts reads it before patching cached payloads.
-let currentAccountScope = "anonymous";
+const authRequestGuard = createApiAuthRequestGuard();
 
 export function getAccountScope(): string {
-  return currentAccountScope;
+  return authRequestGuard.getScope();
 }
 
 export function setAccountScope(scope: string | null | undefined): void {
-  currentAccountScope = normalizeAccountScope(scope);
+  authRequestGuard.setScope(scope);
 }
 
 export type PlaylistEntry = {
@@ -39,45 +41,26 @@ export type PlaylistEntry = {
   songsCount: number;
 };
 
-type ApiCacheEntry<T = unknown> = {
-  data?: T;
-  etag?: string | null;
-  fetchedAt: number;
-  promise?: Promise<T>;
-  promiseStartedAt?: number;
-};
-
 export const API_AUTH_REQUIRED_EVENT = "spotify:api-auth-required";
-const apiCache = new Map<string, ApiCacheEntry>();
-
-function getCacheEntry<T>(url: string): ApiCacheEntry<T> | undefined {
-  const memory = apiCache.get(url) as ApiCacheEntry<T> | undefined;
-  if (!memory) return undefined;
-  if (memory.promise) {
-    const startedAt = memory.promiseStartedAt ?? (memory.fetchedAt > 0 ? memory.fetchedAt : 0);
-    if (!startedAt || Date.now() - startedAt > apiReadTimeoutMs(url) + 2_000) {
-      apiCache.set(url, {
-        data: memory.data,
-        etag: memory.etag,
-        fetchedAt: memory.fetchedAt,
-      });
-      return memory.data === undefined ? undefined : getCacheEntry<T>(url);
-    }
-    return memory;
+const apiCache = createApiDataCache(async (url, cached) => {
+  const canExpireSession = authRequestGuard.capture(url);
+  const headers = new Headers({ accept: "application/json" });
+  if (cached?.etag && cached.data !== undefined) headers.set("if-none-match", cached.etag);
+  const response = await fetchWithTimeout(url, {
+    credentials: "include",
+    cache: "no-cache",
+    headers,
+  });
+  if (response.status === 304 && cached?.data !== undefined) {
+    return { data: cached.data, etag: cached.etag };
   }
-  if (memory.data !== undefined) return memory;
-  return undefined;
-}
-
-function getCachedData<T>(url: string): T | undefined {
-  return getCacheEntry<T>(url)?.data;
-}
-
-function writeApiCache<T>(url: string, data: T, etag?: string | null): T {
-  apiCache.set(url, { data, etag: etag ?? null, fetchedAt: Date.now() });
-  publishApiCacheUpdate(url, data);
-  return data;
-}
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (response.status === 401 && canExpireSession()) dispatchApiAuthRequired(url);
+    throw new Error(payload.error || `Request failed with ${response.status}`);
+  }
+  return { data: await response.json(), etag: response.headers.get("etag") };
+}, publishApiCacheUpdate);
 
 function apiErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Request failed";
@@ -122,14 +105,6 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): P
   }
 }
 
-function cloneCacheData<T>(value: T): T {
-  try {
-    return structuredClone(value);
-  } catch {
-    return JSON.parse(JSON.stringify(value)) as T;
-  }
-}
-
 export function patchLikeApiCache(
   songId: string,
   nextLiked: boolean,
@@ -143,7 +118,7 @@ export function patchLikeApiCache(
     nextLiked && song && !song.likedAt
       ? { ...song, likedAt: new Date().toISOString() }
       : song;
-  for (const [url, entry] of Array.from(apiCache.entries())) {
+  for (const [url, entry] of apiCache.entries()) {
     if (entry.data === undefined) continue;
     if (scopedAccount && getApiAuthScope(url) !== scopedAccount) continue;
     const path = getApiPath(url);
@@ -156,80 +131,29 @@ export function patchLikeApiCache(
       continue;
     }
 
-    const next = cloneCacheData(entry.data);
+    if (!entry.data || typeof entry.data !== "object" || Array.isArray(entry.data)) continue;
+    // The patch helpers replace top-level arrays; song objects are immutable.
+    // Sharing unchanged metadata avoids cloning every track for a heart toggle.
+    const next = { ...entry.data };
     let changed = updateLikedIdsInPayload(next, songId, nextLiked);
     if (path === "/api/liked") {
       changed = updateLikedSongsInPayload(next, { songId, nextLiked, song: likedSong }) || changed;
     }
-    if (changed) writeApiCache(url, next, null);
-  }
-}
-
-async function fetchApiData<T>(url: string): Promise<T> {
-  const cached = getCacheEntry<T>(url);
-  if (cached?.promise) return cached.promise;
-
-  const promise = (async () => {
-    const headers = new Headers({ accept: "application/json" });
-    if (cached?.etag && cached.data !== undefined) headers.set("if-none-match", cached.etag);
-
-    const response = await fetchWithTimeout(url, {
-      credentials: "include",
-      cache: "no-cache",
-      headers,
-    });
-    if (response.status === 304 && cached?.data !== undefined) {
-      // Prefer the live cache entry so in-flight optimistic patches
-      // (e.g. patchLikeApiCache) made while this request was flying survive.
-      const live = apiCache.get(url) as ApiCacheEntry<T> | undefined;
-      const current = live?.data !== undefined ? live : cached;
-      return writeApiCache(url, current.data as T, current.etag ?? null);
-    }
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as { error?: string };
-      if (response.status === 401) dispatchApiAuthRequired(url);
-      throw new Error(payload.error || `Request failed with ${response.status}`);
-    }
-    return writeApiCache(url, (await response.json()) as T, response.headers.get("etag"));
-  })();
-
-  apiCache.set(url, {
-    data: cached?.data,
-    etag: cached?.etag,
-    fetchedAt: cached?.fetchedAt ?? 0,
-    promise,
-    promiseStartedAt: Date.now(),
-  });
-
-  try {
-    return await promise;
-  } finally {
-    const next = apiCache.get(url);
-    if (next?.promise === promise) {
-      apiCache.set(url, {
-        data: next.data,
-        etag: next.etag,
-        fetchedAt: next.fetchedAt,
-      });
-    }
+    if (changed) apiCache.patch(url, next);
   }
 }
 
 export function invalidateApiCache(match?: string | RegExp | ((url: string) => boolean)): void {
-  if (!match) {
-    apiCache.clear();
-    return;
-  }
-
-  for (const key of Array.from(apiCache.keys())) {
-    const shouldDelete =
-      typeof match === "string"
-        ? key === match || key.startsWith(match)
-        : match instanceof RegExp
-          ? match.test(key)
-          : match(key);
-    if (shouldDelete) apiCache.delete(key);
-  }
+  // Sign-in/out clears every entry even when the same account signs in again.
+  // A 401 from the previous session must not undo that successful sign-in.
+  if (match === undefined) authRequestGuard.invalidate();
+  apiCache.invalidate(match === undefined ? undefined : (url) => (
+    typeof match === "string"
+      ? url === match || url.startsWith(match)
+      : match instanceof RegExp
+        ? match.test(url)
+        : match(url)
+  ));
 }
 
 export function invalidateLibraryApiCache(accountScope?: string): void {
@@ -260,9 +184,9 @@ export function useApiData<T>(
   const enabled = options?.enabled ?? true;
   const keepPreviousData = options?.keepPreviousData ?? false;
   const refreshOnReconnect = options?.refreshOnReconnect ?? true;
-  const cachedInitial = getCachedData<T>(url);
+  const cachedInitial = apiCache.get<T>(url)?.data;
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
-  const [loading, setLoading] = useState(enabled && !cachedInitial);
+  const [loading, setLoading] = useState(enabled && cachedInitial === undefined);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const dataUrlRef = useRef(cachedInitial !== undefined ? url : "");
@@ -281,7 +205,7 @@ export function useApiData<T>(
     let cancelled = false;
 
     async function run() {
-      const cached = getCacheEntry<T>(url);
+      const cached = apiCache.get<T>(url);
       const cachedData = cached?.data;
       // keepPreviousData should only suppress the spinner/error when data is
       // actually on screen — on a cold load (no visible data yet) it must NOT
@@ -305,7 +229,7 @@ export function useApiData<T>(
 
       if (!background || cachedData !== undefined) setError(null);
       try {
-        const payload = await fetchApiData<T>(url);
+        const payload = await apiCache.read<T>(url, background);
         if (!cancelled) {
           setDataState(payload);
           dataUrlRef.current = url;

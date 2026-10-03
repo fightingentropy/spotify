@@ -2,7 +2,7 @@
 // the native iOS app), so this replaces the old caching worker: when a client
 // running a previous build checks for an update it picks this up, deletes every
 // cache the old worker created, and unregisters itself. New visitors never
-// register a worker at all (see src/components/PwaRegister.tsx).
+// register a worker at all (see src/components/LegacyServiceWorkerCleanup.tsx).
 self.addEventListener("install", () => self.skipWaiting());
 
 self.addEventListener("activate", (event) => {

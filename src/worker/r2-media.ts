@@ -43,10 +43,9 @@ async function storageKeyBelongsToUser(db: SqlTag, key: string, userId: string):
 }
 
 export function registerR2MediaRoutes(app: Hono<AppEnv>): void {
-  // Profile avatars are served without auth: plain <img> loads from the native
-  // app don't carry session cookies (only fetch/XHR go through the CapacitorHttp
-  // bridge), so an authenticated avatar can never render there. The random UUID
-  // filename keeps the URL unguessable.
+  // Profile avatars are served without auth so native image requests do not
+  // depend on the API client's cookie handling. Their random UUID filenames
+  // keep these URLs unguessable; other media still requires ownership checks.
   app.get("/api/files/*", async (c) => {
     const key = normalizeStorageKey(parseStorageKeyFromApiPath(new URL(c.req.url).pathname));
     if (!isProfileImageKey(key)) {

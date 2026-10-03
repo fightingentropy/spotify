@@ -86,5 +86,3 @@ export function EmailVerificationBanner() {
     </View>
   );
 }
-
-export default EmailVerificationBanner;

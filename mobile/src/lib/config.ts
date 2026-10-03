@@ -14,7 +14,7 @@ export const API_ORIGIN: string = (
 
 // Prefix a path-relative URL with the API origin. Absolute (http(s)://, //host)
 // and local (file:, data:, blob:) URLs are returned UNCHANGED so signed query
-// strings survive verbatim — see §1 of the port brief: an unsigned/re-encoded
+// strings survive verbatim — an unsigned/re-encoded
 // media URL returns 403 and the track silently fails.
 export function toAbsoluteApiUrl(url: string | null | undefined): string {
   if (!url) return "";

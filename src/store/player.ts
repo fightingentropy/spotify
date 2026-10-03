@@ -9,22 +9,12 @@ import {
   getNextShufflePool,
   validShuffleRemaining,
 } from "@spotify/shared/shuffle";
-
-export {
-  PLAYBACK_RATE_CYCLE,
-  formatPlaybackRate,
-  nextPlaybackRate,
-} from "@spotify/shared/playback-rate";
+export { formatPlaybackRate, nextPlaybackRate } from "@spotify/shared/playback-rate";
 export {
   SLEEP_TIMER_MINUTE_OPTIONS,
   sleepTimerRemainingMinutes,
 } from "@spotify/shared/sleep-timer";
-export {
-  chooseNextShuffleIndex,
-  getNextShufflePool,
-} from "@spotify/shared/shuffle";
-
-export type { PlayerSong } from "@/types/player";
+export { chooseNextShuffleIndex } from "@spotify/shared/shuffle";
 
 type PlayerState = {
   queue: PlayerSong[];

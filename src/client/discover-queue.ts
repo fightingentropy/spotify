@@ -1,4 +1,5 @@
 import type { PlayerSong } from "@/types/player";
+import { catalogLikeId } from "@spotify/shared/catalog-like";
 
 // Player-queue support for the Discover playlists (Top 50 / the YouTube Music
 // Discover Mix). Their tracks play read-through like Discover — nothing is
@@ -27,9 +28,13 @@ export function prepareHistorySongForPlayback<T extends PlayerSong>(song: T): T 
 // audioUrl + stable id; we re-attach `discoverTrackId` so the now-playing
 // highlight survives the swap even if the server response omits it. Throws on
 // failure.
-export async function stageDiscoverSong(song: PlayerSong): Promise<PlayerSong> {
+export async function stageDiscoverSong(
+  song: PlayerSong,
+  options?: { preview?: boolean },
+): Promise<PlayerSong> {
   const trackId = song.discoverTrackId;
   if (!trackId) throw new Error("Not a discover track");
+  const preview = options?.preview ?? song.preview ?? false;
   // A YouTube Music mix track carries its exact videoId — the mini stages THAT
   // video's Opus directly (always a preview; there's no Spotify id to resolve).
   // A chart track goes through the Spotify-keyed path (lossless).
@@ -53,7 +58,7 @@ export async function stageDiscoverSong(song: PlayerSong): Promise<PlayerSong> {
         durationMs: song.duration ? Math.round(song.duration * 1000) : undefined,
         imageUrl: song.imageUrl,
         qualityProfile: "max",
-        ...(song.preview ? { preview: true } : {}),
+        ...(preview ? { preview: true } : {}),
       };
   const res = await fetch("/api/discover/stage", {
     method: "POST",
@@ -68,8 +73,11 @@ export async function stageDiscoverSong(song: PlayerSong): Promise<PlayerSong> {
   const real = (await res.json()) as PlayerSong;
   return {
     ...real,
+    // Saved catalog likes keep their identity when their temporary stream is
+    // recreated, so replaying a liked song cannot switch its heart off.
+    id: song.id === catalogLikeId(song) ? song.id : real.id,
     discoverTrackId: trackId,
     youtubeVideoId: song.youtubeVideoId ?? real.youtubeVideoId,
-    preview: song.preview || real.preview,
+    preview: preview || Boolean(song.youtubeVideoId) || real.preview === true,
   };
 }

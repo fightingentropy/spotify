@@ -17,9 +17,8 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/install-mini-yt-dlp.sh [options]
 
-Installs the self-updating yt-dlp the Mac mini uses to stage YouTube Opus previews
-for Smart Shuffle recommendations (the lossless resolver is reserved for the
-Add-to-library path, so the library stays FLAC-only):
+Installs the self-updating yt-dlp used for discovery playback and permanent
+YouTube downloads when the lossless providers are unavailable:
   - /Users/hermes/.local/bin/yt-dlp            (standalone macOS binary, `yt-dlp -U`)
   - /Users/hermes/.local/bin/spotify-ytdlp-update  (the weekly updater wrapper)
   - /Library/LaunchDaemons/xyz.streamarena.spotify-ytdlp-update.plist

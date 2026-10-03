@@ -24,6 +24,12 @@ describe("isSpaceKey", () => {
 });
 
 describe("shouldPreservePlaybackShortcutTarget", () => {
+  test("lets lyric controls keep native Space activation and keyboard scrolling", () => {
+    expect(shouldPreservePlaybackShortcutTarget(target({ tagName: "BUTTON", preserveKeyboardInput: true }))).toBe(true);
+    expect(shouldPreservePlaybackShortcutTarget(target({ preserveKeyboardInput: true }))).toBe(true);
+    expect(shouldPreserveEditableShortcutTarget(target({ preserveKeyboardInput: true }))).toBe(true);
+  });
+
   test("lets range inputs keep receiving space/arrows for seeking", () => {
     expect(shouldPreservePlaybackShortcutTarget(null)).toBe(false);
     expect(shouldPreservePlaybackShortcutTarget(target({}))).toBe(false);

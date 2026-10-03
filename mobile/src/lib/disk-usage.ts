@@ -15,7 +15,7 @@ export type DiskUsage = {
   total?: number;
 };
 
-// Matches src/client/offline.ts formatBytes verbatim so the two apps render
+// Formats native storage usage with binary units so the download controls render
 // sizes identically (e.g. "1.5 GB", "512 KB").
 export function formatBytes(value: number | null | undefined): string {
   if (!value || value <= 0) return "0 B";

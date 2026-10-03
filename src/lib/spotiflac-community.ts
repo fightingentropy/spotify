@@ -218,5 +218,3 @@ export async function signSpotiflacCommunityHeaders(options: {
     "x-sig-platform": options.session.platform,
   };
 }
-
-export { DEFAULT_APP_VERSION as SPOTIFLAC_COMMUNITY_APP_VERSION };

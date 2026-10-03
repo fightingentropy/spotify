@@ -5,6 +5,7 @@ import { useAuth } from "@/client/auth";
 import { useApiData, withAccountScope, type CuratedPlaylistPayload } from "@/client/api";
 import { CuratedPlaylistView } from "@/client/pages/PlaylistPage";
 import { PageError } from "@/components/PageError";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 
 export default function AlbumPage() {
   const { source, id = "" } = useParams();
@@ -17,9 +18,19 @@ export default function AlbumPage() {
     withAccountScope(albumDetailPath({ provider: source === "youtube" ? "youtube" : "spotify", id }), user?.id ?? status), null,
     { enabled: valid && status === "authenticated", keepPreviousData: false },
   );
-  return <>
-    <div className="mx-auto max-w-5xl px-4 pt-5 sm:px-6"><Link to={backToSearch} className="inline-flex min-h-11 items-center gap-2 text-sm text-white/60 hover:text-white"><ArrowLeft size={18} /> Albums</Link></div>
-    {!valid ? <PageError message="Invalid album link" /> : status === "unauthenticated" ? <div className="py-12 text-center"><Link to="/signin">Sign in to open this album</Link></div> : error ? <PageError message={error} onRetry={retry} /> : loading || !data ?
-      <div role="status" className="mx-auto max-w-5xl px-6 py-10 text-white/60">Loading album…</div> : <CuratedPlaylistView data={data} />}
-  </>;
+  const navigation = <Link to={backToSearch} className="wf-button mb-6"><ArrowLeft size={16} /> Albums</Link>;
+  if (valid && status !== "unauthenticated" && !error && !loading && data) {
+    return <CuratedPlaylistView data={data} navigation={navigation} />;
+  }
+  return (
+    <PageLayout>
+      {navigation}
+      <PageHeader title="Album" />
+      {!valid ? <PageError compact message="Invalid album link" /> : status === "unauthenticated" ? (
+        <div className="wf-empty-state"><p className="mb-4">Sign in to open this album.</p><Link className="wf-button-primary" to="/signin">Sign in</Link></div>
+      ) : error ? <PageError compact message={error} onRetry={retry} /> : (
+        <p role="status" className="wf-muted text-sm">Loading album…</p>
+      )}
+    </PageLayout>
+  );
 }

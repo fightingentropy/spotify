@@ -1,6 +1,6 @@
-// Design-system tokens for non-className contexts (icon colors, surfaces, RNTP,
-// reanimated). Mirror of tailwind.config.js + styles.css. See §4 of the port brief
-// and docs/port-notes/styles-design.md for provenance.
+// Shared native design tokens for layouts, icons, and animated styles.
+// Keep these aligned with mobile/tailwind.config.js.
+
 
 export const colors = {
   background: "#000000",

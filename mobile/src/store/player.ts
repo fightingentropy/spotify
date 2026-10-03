@@ -29,28 +29,12 @@ import {
   rewindHistory,
 } from "@/store/player-nav";
 import type { PlayerSong } from "@/types/player";
+export { formatPlaybackRate, nextPlaybackRate } from "@spotify/shared/playback-rate";
+export { sleepTimerRemainingMinutes } from "@spotify/shared/sleep-timer";
 
-export {
-  PLAYBACK_RATE_CYCLE,
-  formatPlaybackRate,
-  nextPlaybackRate,
-} from "@spotify/shared/playback-rate";
-export {
-  SLEEP_TIMER_MINUTE_OPTIONS,
-  sleepTimerRemainingMinutes,
-} from "@spotify/shared/sleep-timer";
-export {
-  chooseNextShuffleIndex,
-  getNextShufflePool,
-} from "@spotify/shared/shuffle";
-
-export type { PlayerSong } from "@/types/player";
-
-// Ported from src/store/player.ts. Logic is verbatim; the only changes are the
-// persistence layer (localStorage → synchronous MMKV `storage` shim) and the
-// removal of the SSR `typeof window` guards. The queue-index-remap invariant,
-// shuffle bookkeeping, and crossfade-commit contracts are preserved exactly —
-// dropping any of them silently corrupts shuffle / back-forward navigation.
+// Native queue and transport state with synchronous MMKV persistence. Queue
+// edits must preserve index remapping, shuffle bookkeeping, and crossfade commit
+// identity so playback and back/forward navigation keep pointing at the same song.
 
 type PlayerState = {
   queue: PlayerSong[];

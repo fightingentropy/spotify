@@ -4,17 +4,20 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { ChevronDown, LogIn, LogOut, Settings, UserRound } from "lucide-react";
 import { useAuth } from "@/client/auth";
+import { artworkSrcSet } from "@/lib/artwork-url";
 
 export function AccountAvatar({
   src,
   alt,
   className,
   iconSize = 17,
+  size = 40,
 }: {
   src?: string | null;
   alt: string;
   className: string;
   iconSize?: number;
+  size?: number;
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const displaySrc = src && src !== failedSrc ? src : null;
@@ -23,6 +26,9 @@ export function AccountAvatar({
     return (
       <img
         src={displaySrc}
+        srcSet={artworkSrcSet(displaySrc)}
+        sizes={`${size}px`}
+        decoding="async"
         alt={alt}
         className={className}
         onError={() => setFailedSrc(displaySrc)}
@@ -48,7 +54,7 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
     if (status === "loading") {
       return (
         <div
-          className="h-10 w-10 shrink-0 rounded-full border border-white/[0.12] bg-white/[0.06]"
+          className="h-10 w-10 shrink-0 rounded-md border border-white/10 bg-white/[0.04]"
           aria-label="Checking session"
           title="Checking session"
         />
@@ -59,7 +65,7 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
       return (
         <Link
           to="/signin"
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.06] text-white/[0.76] transition hover:border-white/[0.32] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+          className="wf-icon-button"
           aria-label="Sign in"
           title="Sign in"
         >
@@ -71,28 +77,29 @@ export function AuthButtons({ compact = false }: { compact?: boolean }) {
     return (
       <Link
         to="/profile"
-        className="block h-10 w-10 shrink-0 rounded-full border border-white/[0.16] bg-white/[0.06] p-0.5 transition hover:border-white/[0.32] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+        className="wf-icon-button"
         aria-label="Open profile"
         title="Profile"
       >
         <AccountAvatar
           src={user.image}
           alt={user?.name || "Profile"}
-          className="h-full w-full rounded-full object-cover"
-          iconSize={20}
+          className="h-6 w-6 rounded-full object-cover"
+          iconSize={18}
+          size={24}
         />
       </Link>
     );
   }
 
   if (status === "loading") {
-    return <div className="truncate text-[15px] text-white/[0.62]">Checking...</div>;
+    return <div className="wf-muted truncate text-sm">Checking...</div>;
   }
 
   if (!user) {
     return (
       <div className="flex min-w-0 shrink-0 items-center justify-end gap-2 text-[15px] whitespace-nowrap">
-        <Link className="text-white/[0.76] underline underline-offset-2 transition hover:text-white" to="/signin">
+        <Link className="wf-button" to="/signin">
           Sign in
         </Link>
       </div>
@@ -161,24 +168,24 @@ function UserMenu({
     <div className="relative" ref={menuRef}>
       <button
         ref={triggerRef}
-        className="inline-flex h-9 items-center gap-2 rounded-full border border-white/[0.12] px-2.5 text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
+        className="wf-button"
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="true"
         aria-expanded={open}
         aria-label="Account menu"
      >
-        <AccountAvatar src={imageUrl} alt="" className="h-6 w-6 rounded-full object-cover" iconSize={15} />
-        <span className="max-w-[180px] truncate text-[15px]">{name}</span>
+        <AccountAvatar src={imageUrl} alt="" className="h-6 w-6 rounded-full object-cover" iconSize={15} size={24} />
+        <span className="max-w-[180px] truncate">{name}</span>
         <ChevronDown size={16} className="text-white/[0.62]" />
       </button>
       {open && (
         <div
           ref={panelRef}
-          className="absolute right-0 mt-2 w-48 rounded-md border border-white/[0.12] bg-background text-white shadow-lg z-50 overflow-hidden"
+          className="absolute right-0 z-50 mt-2 w-48 overflow-hidden rounded-md border border-white/[0.12] bg-[var(--surface)] p-1 text-white"
         >
           <Link
             to="/profile"
-            className="flex items-center gap-2 px-3 py-2.5 text-[15px] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
+            className="flex min-h-10 items-center gap-2 rounded px-3 py-2 text-sm text-white/75 hover:bg-white/[0.07] hover:text-white focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white/60"
             onClick={() => setOpen(false)}
           >
             <UserRound size={16} />
@@ -186,14 +193,14 @@ function UserMenu({
           </Link>
           <Link
             to="/settings"
-            className="flex items-center gap-2 px-3 py-2.5 text-[15px] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
+            className="flex min-h-10 items-center gap-2 rounded px-3 py-2 text-sm text-white/75 hover:bg-white/[0.07] hover:text-white focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white/60"
             onClick={() => setOpen(false)}
           >
             <Settings size={16} />
             <span>Settings</span>
           </Link>
           <button
-            className="w-full text-left flex items-center gap-2 px-3 py-2.5 text-[15px] text-white/[0.76] transition hover:bg-white/[0.09] hover:text-white"
+            className="flex min-h-10 w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-white/75 hover:bg-white/[0.07] hover:text-white focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-white/60"
             onClick={onSignOut}
           >
             <LogOut size={16} />

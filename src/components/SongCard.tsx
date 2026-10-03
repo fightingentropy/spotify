@@ -78,10 +78,10 @@ const SongCardComponent = function SongCard({
         aria-pressed={isActiveAndPlaying}
         onClick={handlePlay}
         onFocus={() => warmPlaybackSong(song, true)}
-        className="wf-pressable block w-full cursor-pointer rounded-[10px] text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+        className="wf-pressable block w-full cursor-pointer rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
       >
         <span className={cn(
-          "relative block aspect-square overflow-hidden rounded-[10px] bg-[#0c0c0d]",
+          "relative block aspect-square overflow-hidden rounded bg-[#0c0c0d]",
           isActive && "ring-1 ring-inset ring-white/40",
         )}>
           <CoverImage
@@ -95,7 +95,7 @@ const SongCardComponent = function SongCard({
             loading={priority ? "eager" : "lazy"}
           />
           <span aria-hidden className={cn(
-            "absolute bottom-2 right-2 grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-black/60 text-white backdrop-blur transition-opacity",
+            "absolute bottom-2 right-2 grid h-10 w-10 place-items-center rounded-full bg-[#ededed] text-[#121212] transition-opacity",
             isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
           )}>
             {isActiveAndPlaying

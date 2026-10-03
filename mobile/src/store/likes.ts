@@ -16,6 +16,7 @@ import {
   updateAuthoritativeLikedIds,
 } from "@/lib/like-intent-overlay";
 import { storage } from "@/lib/storage";
+import { downloadedLikedSongs } from "@/lib/downloaded-likes";
 import {
   getOfflineAccountScope,
   getOfflineAccountIdentity,
@@ -28,11 +29,8 @@ import {
 import type { OfflineMutation } from "@/lib/offline-mutation-policy";
 import type { PlayerSong } from "@/types/player";
 
-// Ported from src/store/likes.ts. Changes: relative fetch("/api/likes") →
-// apiFetch (origin + cookie); Capacitor haptics → expo-haptics shim; localStorage
-// → MMKV storage shim. The optimistic toggle + pending map + rollback, the staged
-// Discover promote-before-like flow, local-song likes, the offline-mutation-queue
-// fallback, auto-download-on-like, and API-cache patching are all preserved.
+// Native optimistic likes with pending-state protection, promotion of discovery
+// tracks, offline mutation replay, automatic downloads, and API-cache updates.
 
 type LikeToggleResult = {
   ok: boolean;
@@ -54,6 +52,23 @@ type LikesState = {
 };
 
 const LOCAL_LIKED_SONG_IDS_KEY = "spotify_local_liked_song_ids";
+const DOWNLOADED_UNLIKES_PREFIX = "spotify_downloaded_unlikes:";
+
+function readDownloadedUnlikes(): string[] {
+  try {
+    const ids: unknown = JSON.parse(storage.getItem(DOWNLOADED_UNLIKES_PREFIX + getOfflineAccountScope()) || "[]");
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberDownloadedLikeIntent(songId: string, nextLiked: boolean): void {
+  const related = new Set(relatedLikeIds(songId));
+  const ids = readDownloadedUnlikes().filter((id) => !related.has(id));
+  if (!nextLiked) ids.push(...related);
+  storage.setItem(DOWNLOADED_UNLIKES_PREFIX + getOfflineAccountScope(), JSON.stringify(ids));
+}
 
 function removeKey(source: Record<string, true>, key: string): Record<string, true> {
   if (!Object.prototype.hasOwnProperty.call(source, key)) return source;
@@ -128,7 +143,13 @@ export const useLikesStore = create<LikesState>((set, get) => ({
     );
     // Canonical like-once: also light every retired copy id of each liked
     // (anchor) song. Identity while the id-map is empty (flag off / not loaded).
-    const list = expandLikedSet(raw);
+    const downloaded = downloadedLikedSongs(
+      useOfflineStore.getState().records,
+      getOfflineAccountScope(),
+      readDownloadedUnlikes(),
+      canonicalOf,
+    );
+    const list = expandLikedSet(Array.from(new Set([...raw, ...downloaded.map((song) => canonicalOf(song.id))])));
     const current = get().likedSongIds;
     const pending = get().pending;
     let next: Record<string, true> = {};
@@ -421,6 +442,7 @@ export const useLikesStore = create<LikesState>((set, get) => ({
 }));
 
 function confirmAuthoritativeLike(songId: string, nextLiked: boolean): void {
+  rememberDownloadedLikeIntent(songId, nextLiked);
   const state = useLikesStore.getState();
   const raw = updateAuthoritativeLikedIds(
     state.rawRemoteLiked,
@@ -504,3 +526,9 @@ on(OFFLINE_MUTATION_OUTBOX_CHANGED_EVENT, (detail) => {
 // Canonical ids arrive asynchronously. Re-expand the raw server set as soon as
 // the map changes so every retired copy reflects the same liked state.
 onIdMapChange(() => useLikesStore.getState().reexpand());
+
+// Downloads hydrate after the first API response and can change while this
+// screen is mounted. Reconcile hearts as soon as the saved records arrive.
+useOfflineStore.subscribe((state, previous) => {
+  if (state.records !== previous.records) useLikesStore.getState().reexpand();
+});

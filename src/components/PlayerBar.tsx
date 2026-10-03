@@ -19,4 +19,3 @@ function PlayerBar(): React.ReactElement {
 }
 
 export { PlayerBar };
-export default PlayerBar;

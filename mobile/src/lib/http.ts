@@ -10,7 +10,7 @@ export function apiUrl(path: string): string {
 
 // Low-level data fetch. Data/API calls authenticate with the session cookie, which
 // RN's fetch persists in the native cookie store (NSHTTPCookieStorage /
-// CookieManager) — see §2 of the port brief. Media streaming does NOT share this
+// CookieManager). Media streaming does NOT share this
 // jar, which is why media URLs are signed instead.
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   try {

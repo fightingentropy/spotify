@@ -209,13 +209,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   }
 
   return (
-    <div
-      className={cn(
-        "fixed inset-0 z-50 transition",
-        open ? "pointer-events-auto" : "pointer-events-none",
-      )}
-      aria-hidden={!open}
-    >
+    <div className="fixed inset-0 z-50" aria-hidden={!open}>
       <button
         type="button"
         className={cn(
@@ -224,6 +218,9 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
           "hidden lg:block",
         )}
         onClick={onClose}
+        disabled={!open}
+        data-open={open ? "true" : "false"}
+        data-preserve-playback-keys
         aria-label="Close queue"
       />
 
@@ -233,6 +230,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
         aria-modal="true"
         aria-label="Playback queue"
         tabIndex={-1}
+        inert={!open}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         className={cn(
@@ -257,19 +255,20 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
               <button
                 type="button"
                 onClick={onClose}
+                data-preserve-playback-keys
                 className="wf-control-button h-11 w-11 -ml-1 rounded-full grid place-items-center active:bg-black/10 dark:active:bg-white/10 touch-manipulation"
                 aria-label="Close queue"
               >
                 <ChevronDown size={24} />
               </button>
-              <div className="text-xs uppercase tracking-wide opacity-70">Queue</div>
+              <div className="text-sm font-medium text-white/60">Queue</div>
               <div aria-hidden className="h-11 w-11 -mr-1" />
             </div>
 
             <div className="max-w-md mx-auto w-full lg:max-w-none">
               {currentSong && currentIndex >= 0 ? (
                 <>
-                  <div className="text-xs uppercase tracking-wide opacity-70 mb-2">Now playing</div>
+                  <div className="text-sm font-medium text-white/60 mb-2">Now playing</div>
                   {renderRow(
                     { song: currentSong, queueIndex: currentIndex },
                     { highlighted: true, removable: false },
@@ -277,7 +276,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
                 </>
               ) : null}
 
-              <div className="text-xs uppercase tracking-wide opacity-70 mb-2 mt-6">Next up</div>
+              <div className="text-sm font-medium text-white/60 mb-2 mt-6">Next up</div>
               {upNext.length === 0 ? (
                 <div className="text-sm opacity-60 px-2 py-2">Nothing queued</div>
               ) : (

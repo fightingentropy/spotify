@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
-import { parseCredits, useLyrics } from "@/lib/credits";
+import { parseCredits } from "@/lib/credits";
 import {
   Check,
   CheckCircle2,
@@ -21,12 +21,13 @@ import {
 import { useNavigate } from "react-router";
 import { formatPlaybackRate, nextPlaybackRate, SLEEP_TIMER_MINUTE_OPTIONS, sleepTimerRemainingMinutes, usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
+import { songLikeId } from "@spotify/shared/catalog-like";
 import type { PlayerSong } from "@/types/player";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn, formatTime } from "@/lib/utils";
 import { CoverImage } from "@/components/CoverImage";
-import { LyricsPanel } from "@/components/LyricsPanel";
+import { useLyricsNavigation } from "@/lib/use-lyrics-navigation";
 import { MarqueeText } from "@/components/MarqueeText";
 import { useModalDialogFocus } from "@/lib/use-modal-dialog";
 
@@ -59,6 +60,7 @@ export default function NowPlayingSheet({
   onSeek,
 }: NowPlayingSheetProps) {
   const navigate = useNavigate();
+  const { openLyrics } = useLyricsNavigation();
   const play = usePlayerStore((s) => s.play);
   const pause = usePlayerStore((s) => s.pause);
   const next = usePlayerStore((s) => s.next);
@@ -83,11 +85,10 @@ export default function NowPlayingSheet({
   const liveStream = isRadioSong(song);
   const podcastEpisode = isPodcastSong(song);
   const showLibraryActions = !liveStream && !podcastEpisode;
-  const songIsLiked = !!likedLookup[song.id];
-  const likePending = !!pendingLookup[song.id];
+  const songIsLiked = !!likedLookup[songLikeId(song, likedLookup)];
+  const likePending = !!pendingLookup[songLikeId(song, pendingLookup)];
   const podcastDescription = song.description?.trim() ?? "";
 
-  const [showLyrics, setShowLyrics] = useState(false);
   const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
   // UI nicety only (refreshes the remaining-minutes label); expiry enforcement
   // lives in PlayerBar's timeupdate handler and 8s sync interval.
@@ -113,16 +114,10 @@ export default function NowPlayingSheet({
   const [coverDragX, setCoverDragX] = useState(0);
   const [coverSwiping, setCoverSwiping] = useState(false);
 
-  const lyricsSong = song;
-
   const credits = useMemo(() => parseCredits(song.artist), [song.artist]);
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
-  // Prefetch whenever the sheet is open so toggling the lyrics view is
-  // instant; the files are tiny and HTTP/offline-cached.
-  const lyricsAvailable = !!lyricsSong.lyricsUrl;
-  const lyricsState = useLyrics(lyricsSong.id, lyricsSong.lyricsUrl, open && lyricsAvailable);
-  const lyricsViewOpen = showLyrics && lyricsAvailable;
+  const lyricsAvailable = showLibraryActions && !!song.lyricsUrl;
 
   useEffect(() => {
     if (!open || escapeDisabled) return;
@@ -242,13 +237,7 @@ export default function NowPlayingSheet({
   }
 
   return (
-    <div
-      className={cn(
-        "fixed inset-0 z-50 transition",
-        open ? "pointer-events-auto" : "pointer-events-none",
-      )}
-      aria-hidden={!open}
-    >
+    <div className="fixed inset-0 z-50" aria-hidden={!open}>
       <button
         type="button"
         className={cn(
@@ -256,6 +245,9 @@ export default function NowPlayingSheet({
           open ? "opacity-100" : "opacity-0",
         )}
         onClick={onClose}
+        disabled={!open}
+        data-open={open ? "true" : "false"}
+        data-preserve-playback-keys
         aria-label="Close now playing view"
       />
 
@@ -265,11 +257,12 @@ export default function NowPlayingSheet({
         aria-modal="true"
         aria-label={`Now playing: ${song.title}`}
         tabIndex={-1}
+        inert={!open}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
         className={cn(
-          "wf-now-playing-panel absolute inset-x-0 bottom-0 top-[6dvh] overflow-hidden rounded-t-[28px] border-t border-white/[0.08] bg-[#0c0c0d]",
-          "lg:inset-auto lg:left-0 lg:right-0 lg:top-14 lg:bottom-[84px] lg:mx-auto lg:max-w-3xl lg:rounded-t-[28px] lg:border lg:border-white/[0.08]",
+          "wf-now-playing-panel absolute inset-x-0 bottom-0 top-[6dvh] overflow-hidden rounded-t-2xl border-t border-white/[0.08] bg-[#1a1a1a]",
+          "lg:inset-auto lg:left-0 lg:right-0 lg:top-14 lg:bottom-[84px] lg:mx-auto lg:max-w-3xl lg:rounded-lg lg:border lg:border-white/[0.08]",
           open
             ? "translate-y-0 opacity-100"
             : "translate-y-full opacity-0 lg:translate-y-8 lg:opacity-0",
@@ -285,12 +278,13 @@ export default function NowPlayingSheet({
               <button
                 type="button"
                 onClick={onClose}
+                data-preserve-playback-keys
                 className="wf-control-button -ml-2 grid h-11 w-11 place-items-center rounded-full text-white/60 touch-manipulation active:bg-white/[0.06]"
                 aria-label="Collapse now playing"
               >
                 <ChevronDown size={24} />
               </button>
-              <div className="text-xs font-semibold uppercase tracking-[1.2px] text-white/[0.58]">
+              <div className="text-sm font-medium text-white/[0.58]">
                 {liveStream ? "Radio" : podcastEpisode ? "Podcast" : "Now Playing"}
               </div>
               <div className="h-11 w-11" />
@@ -301,13 +295,14 @@ export default function NowPlayingSheet({
                   <>
                     <button
                       type="button"
-                      aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
+                      aria-label={likePending ? "Updating liked songs" : songIsLiked ? "In liked songs" : "Save to liked songs"}
+                      aria-busy={likePending}
                       onClick={handleToggleLike}
                       disabled={!likesHydrated || likePending}
                       className={cn(
                         "h-11 w-11 rounded-full grid place-items-center touch-manipulation",
                         "wf-control-button",
-                        likePending ? "opacity-60" : "active:bg-white/[0.06]",
+                        likePending ? "animate-pulse opacity-60" : "active:bg-white/[0.06]",
                         songIsLiked ? "text-white/[0.94]" : "text-white/50",
                       )}
                     >
@@ -318,14 +313,11 @@ export default function NowPlayingSheet({
                 {lyricsAvailable ? (
                   <button
                     type="button"
-                    aria-label={lyricsViewOpen ? "Hide lyrics" : "Show lyrics"}
-                    title={lyricsViewOpen ? "Hide lyrics" : "Show lyrics"}
-                    aria-pressed={lyricsViewOpen}
-                    onClick={() => setShowLyrics((value) => !value)}
-                    className={cn(
-                      "wf-control-button h-11 w-11 rounded-full grid place-items-center active:bg-white/[0.06] touch-manipulation",
-                      lyricsViewOpen ? "text-white/[0.94]" : "text-white/50",
-                    )}
+                    aria-label="Open lyrics"
+                    data-preserve-playback-keys
+                    title="Open lyrics"
+                    onClick={() => { onClose(); openLyrics(); }}
+                    className="wf-control-button h-11 w-11 rounded-full grid place-items-center text-white/50 active:bg-white/[0.06] touch-manipulation"
                   >
                     <MicVocal size={22} />
                   </button>
@@ -361,16 +353,6 @@ export default function NowPlayingSheet({
             </div>
 
             <div className="mx-auto flex w-full max-w-[356px] flex-1 flex-col justify-center gap-5 lg:max-w-md">
-              {lyricsViewOpen ? (
-                // Same square footprint as the art so toggling never reflows
-                // the title/progress/controls below.
-                <LyricsPanel
-                  lyricsState={lyricsState}
-                  currentTime={currentTime}
-                  onSeek={liveStream ? undefined : onSeek}
-                  className="mx-auto aspect-square w-[min(100%,39dvh)] shadow-2xl shadow-black/30 lg:w-full"
-                />
-              ) : (
                 <div
                   className="mx-auto w-[min(100%,39dvh)] lg:w-full"
                   onTouchStart={handleCoverTouchStart}
@@ -383,7 +365,7 @@ export default function NowPlayingSheet({
                     touchAction: "pan-y",
                   }}
                 >
-                  <div className="wf-now-playing-art w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0c0c0d] shadow-[0_10px_30px_rgba(0,0,0,0.34)]">
+                  <div className="wf-now-playing-art w-full overflow-hidden rounded bg-[#1a1a1a]">
                     <CoverImage
                       src={song.imageUrl || "/apple-icon.png"}
                       networkSrc={song.networkImageUrl}
@@ -396,8 +378,6 @@ export default function NowPlayingSheet({
                     />
                   </div>
                 </div>
-              )}
-
               <div className="mt-[-1px] text-left">
                 <MarqueeText text={song.title} className="text-[23px] font-semibold leading-7 text-white/[0.94]" />
                 <MarqueeText text={song.artist} className="mt-0.5 text-[15px] text-white/[0.58]" />
@@ -505,7 +485,7 @@ export default function NowPlayingSheet({
               // Credits card is desktop-only; hide the wrapper on mobile so
               // its margin doesn't add dead space under the controls.
               <div className="hidden lg:block lg:mt-5 space-y-4">
-                <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 hidden lg:block">
+                <div className="rounded-md border border-black/10 dark:border-white/10 p-4 hidden lg:block">
                   <div className="font-medium mb-3">Credits</div>
                   <div className="space-y-3">
                     {credits.map((credit) => (
@@ -521,7 +501,7 @@ export default function NowPlayingSheet({
                 </div>
               </div>
             ) : podcastEpisode ? (
-              <div className="mt-6 rounded-xl border border-white/[0.08] p-4 lg:mt-5">
+              <div className="mt-6 rounded-md border border-white/[0.08] p-4 lg:mt-5">
                 <div className="flex items-center gap-3">
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
                     <Podcast size={18} />
@@ -565,7 +545,7 @@ export default function NowPlayingSheet({
           aria-label="Sleep timer"
           aria-hidden={!sleepMenuOpen}
           className={cn(
-            "absolute inset-x-0 bottom-0 z-40 rounded-t-[28px] border-t border-white/[0.08] bg-[#0c0c0d] pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-2xl transition-transform duration-300",
+            "absolute inset-x-0 bottom-0 z-40 rounded-t-2xl border-t border-white/[0.08] bg-[#1a1a1a] pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-2xl transition-transform duration-300",
             sleepMenuOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
           )}
         >

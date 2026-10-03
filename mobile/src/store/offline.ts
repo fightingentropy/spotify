@@ -79,18 +79,15 @@ import {
   type NativeBackgroundDownloadState,
 } from "../../modules/background-downloads";
 
-// Offline downloads. Ports the model from src/client/offline.ts to RN: files →
-// expo-file-system (file:// in documentDirectory), records → expo-sqlite,
-// reference-counted scopes, account scoping, a serial download pump, and offline
-// playback resolution. The blob: materialization is gone — RN plays file://
-// directly with Range support (§6/§8).
+// Account-scoped offline files, SQLite records, reference-counted pinning,
+// download queues, and mutation replay. Native playback resolves device-local
+// file:// URLs directly.
 
 export { PLAYBACK_CACHE_SCOPE };
-export type { DownloadScope, DownloadStatus, OfflineDownloadRecord };
+export type { DownloadScope, OfflineDownloadRecord };
 export type { OfflineMutation };
 
-// Mirrors the web store's OfflineSyncStatus / OfflineVerificationStatus so the
-// management UI reads the same state machine (see src/client/offline.ts).
+// Status exposed to the native download and verification controls.
 export type OfflineSyncStatus = "idle" | "syncing" | "failed" | "auth-required";
 export type OfflineVerificationStatus = "idle" | "checking" | "ok" | "repair-needed" | "failed";
 
@@ -1930,7 +1927,7 @@ export function initOfflineSync(): () => void {
 }
 
 // Swap a song's URLs for its downloaded file:// copies when a ready record exists.
-// networkImageUrl stays remote so the lock-screen artwork still resolves (§11).
+// networkImageUrl stays remote so the lock-screen artwork still resolves.
 export function resolveOfflinePlaybackSong(song: PlayerSong): PlayerSong {
   const record = useOfflineStore.getState().records[keyFor(accountScope, song.id)];
   // Resolve the stored (relative) path against the live container; the native

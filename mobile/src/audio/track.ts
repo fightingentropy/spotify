@@ -20,7 +20,7 @@ export function lockScreenArtwork(song: PlayerSong): string | undefined {
 
 // Convert a PlayerSong into an RNTP track. The signed audioUrl is passed VERBATIM
 // (only the origin is prepended for relative URLs) — re-encoding or stripping the
-// signature returns 403 and the track silently fails (§1).
+// signature returns 403 and the track silently fails.
 export function buildTrack(song: PlayerSong): AddTrack {
   return {
     id: song.id,

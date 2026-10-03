@@ -27,18 +27,13 @@ export function AddToPlaylistSheet() {
   );
   const editable = data.playlists.filter((p) => p.editable);
 
-  // A Discover track (Top 50 / YouTube Discover Mix) isn't in the library yet — it
-  // plays from the hidden .discover staging cache. Promote it FIRST (exactly like
-  // the like path), so we add the real, scanned library song. A lossless chart
-  // track promotes cleanly; a stream-only YouTube-mix track is rejected by the mini
-  // (409 preview_not_lossless), so adding it would otherwise write a lossy /
-  // soon-to-be-pruned .discover reference into the library — abort with a message
-  // instead. Keeps the library FLAC-only.
+  // Promote discovery audio before adding it, so the playlist references a
+  // permanent library file instead of the temporary .discover cache.
   const resolveAddable = async (current: PlayerSong): Promise<PlayerSong> => {
     if (!current.discoverTrackId) return current;
     const promoted = await promoteStagedSong(current);
     if (!promoted) {
-      throw new Error("This track streams from a mix and can't be saved to a playlist.");
+      throw new Error("Couldn't prepare this track for the playlist. Please try again.");
     }
     return promoted;
   };

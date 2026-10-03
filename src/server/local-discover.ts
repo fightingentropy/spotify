@@ -115,8 +115,10 @@ type DiscoverStageItem = {
   // Lossless (Add path): the Worker ships a resolved Spotiflac descriptor.
   resolved?: DiscoverResolved;
   // Preview/play path: stage a YouTube Opus copy on the mini instead (no resolver).
-  // Preview entries are lossy and must be re-staged via the resolver before promote.
   preview?: boolean;
+  // Set by the Worker after provider failure, or for a direct YouTube song.
+  // Download the best available YouTube format and allow keeping that file.
+  libraryFallback?: boolean;
   // When set (YouTube Music mix tracks), the preview stages THIS exact video's
   // Opus directly — no title/artist search — since we already know the videoId.
   youtubeVideoId?: string;
@@ -135,10 +137,10 @@ type DiscoverStagingEntry = {
   durationMs?: number;
   firstSeenAt: number;
   lastSeenAt: number; // last time this track appeared in a Top-50 sync
-  // false => YouTube Opus preview (lossy). Such an entry is playable but must be
-  // re-staged via the lossless resolver before it can be promoted into the
-  // library. Absent/true => lossless (resolver) — safe to promote.
+  // false => YouTube audio (lossy); only libraryFallback copies can be kept
+  // without another attempt through the lossless providers.
   lossless?: boolean;
+  libraryFallback?: boolean;
 };
 
 type DiscoverManifest = {
@@ -348,6 +350,7 @@ async function writeDiscoverStagedFile(
     firstSeenAt: now,
     lastSeenAt: now,
     lossless: !item.preview,
+    libraryFallback: item.preview && item.libraryFallback === true,
   };
 }
 
@@ -364,7 +367,10 @@ async function stageDiscoverTrack(source: LibrarySource, item: DiscoverStageItem
       // Reuse a staged copy when it satisfies the request. This check runs after
       // any earlier same-track request finishes. A lossy preview does NOT satisfy
       // a lossless (Add) request, so that waiter falls through and upgrades it.
-      return existingUsable && (item.preview || existing.lossless !== false) ? existing : null;
+      // Refresh ordinary previews for a fallback save, so current Premium
+      // credentials and the best audio selector get a chance to upgrade them.
+      const fallbackReady = !item.libraryFallback || existing?.libraryFallback || existing?.lossless !== false;
+      return existingUsable && (item.preview || existing.lossless !== false) && fallbackReady ? existing : null;
     },
     async () => {
       const audio = item.preview
@@ -437,6 +443,16 @@ function discoverEntryToSong(entry: DiscoverStagingEntry): PlayerSong {
   };
 }
 
+export async function discoverCatalogMetadata(source: LibrarySource, trackId: string): Promise<Partial<PlayerSong>> {
+  const entry = (await readDiscoverManifest(source)).entries[trackId];
+  return entry ? {
+    title: entry.title,
+    artist: entry.artist,
+    album: entry.album,
+    imageUrl: entry.imageUrl,
+  } : {};
+}
+
 // Discover staging files live in the shared root but are streamed by clients
 // that can't present private-proxy auth or a session cookie — notably the native
 // iOS AVPlayer, which fetches the URL directly (bypassing the Worker). Sign
@@ -484,6 +500,7 @@ function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
     imageUrl: typeof value.imageUrl === "string" ? value.imageUrl.trim() : undefined,
     durationMs: typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : undefined,
     preview,
+    libraryFallback: preview && value.libraryFallback === true,
     resolved: resolved && typeof resolved === "object" ? (resolved as DiscoverResolved) : undefined,
     youtubeVideoId: youtubeVideoId || undefined,
   };
@@ -752,15 +769,14 @@ export async function handleDiscoverPromote(request: Request): Promise<Response>
     return json(signDiscoverSong(duplicate.song));
   }
 
-  // A YouTube preview is lossy — never promote it into the FLAC library. The
-  // client must re-stage this track via the lossless resolver first (POST
-  // /api/discover/stage WITHOUT preview), which overwrites the entry as
-  // lossless; promote then succeeds.
-  if (entry.lossless === false) {
+  // An ordinary preview must first try the providers. The Worker marks a
+  // YouTube fallback only after those fail (or for a direct YouTube track).
+  // Promotion preserves its original codec and extension; no fake FLAC encode.
+  if (entry.lossless === false && !entry.libraryFallback) {
     return json(
       {
         error: "preview_not_lossless",
-        message: "Re-stage this track losslessly before adding it to the library.",
+        message: "Prepare this track for the library before adding it.",
       },
       { status: 409 },
     );

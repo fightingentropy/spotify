@@ -1,7 +1,7 @@
 # Music
 
 Self-hosted personal music app with a React client, Cloudflare Worker APIs, an
-optional private media server, and an Expo mobile client. Accounts must sign in
+optional private media server, an Expo mobile client, and a Rust desktop client. Accounts must sign in
 before accessing a library.
 
 This is an independent, unofficial project. It is not affiliated with or
@@ -18,6 +18,11 @@ permitted to access and copy.
 - Preserve legacy R2 media support while using a private host for large files.
 
 See [FEATURES.md](FEATURES.md) for the current product-level feature list.
+Mobile setup is in [mobile/README.md](mobile/README.md). The native desktop app,
+based on Spotifast and connected to our music API, is documented in
+[desktop/README.md](desktop/README.md). Discovery download
+fallback, Premium audio, and durable likes are described in
+[docs/library-saves.md](docs/library-saves.md).
 
 ## Architecture
 
@@ -76,9 +81,10 @@ terms, copyright, and rate-limit restrictions.
 - `src/lib/http-range.ts` — shared browser/Worker byte-range validation.
 - `tests/` — policy, range, upload, proxy, playback, and persistence tests.
 - `mobile/` — Expo native client with its own locked dependencies.
+- `desktop/` — native Rust/egui client with its own Cargo lockfile and tests.
 - `db/d1-migrations/` — versioned D1 schema changes.
 - `scripts/` — local development and private-host deployment helpers.
-- `wrangler.jsonc` — Cloudflare bindings with placeholder-safe configuration.
+- `cloudflare.config.ts` — Cloudflare deployment bindings and non-secret settings; `wrangler.jsonc` remains for local data and generated types.
 
 ## Local development
 
@@ -107,19 +113,26 @@ The required web/Worker gate is:
 bun run check
 ```
 
-It runs ESLint, strict type checking, the complete Bun test suite, and a
-production build. Pull requests run it after a frozen install. Mobile CI uses a
+It runs ESLint, unused-code/dependency checks across both clients, strict type
+checking, the complete Bun test suite, and a production build. Pull requests
+run it after frozen installs of the root and mobile dependencies. Mobile CI uses a
 frozen `npm ci` install and runs type checking, lint, and tests independently.
 
 Useful focused commands:
 
 ```bash
 bun run lint
+bun run lint:unused
 bun run typecheck
 bun test
 bun run build
 cd mobile && npm ci && npm run typecheck && npm run lint && npm test
 ```
+
+`knip.jsonc` records executable scripts, routed screens, native modules, and the
+few dependencies loaded indirectly by platform tooling. Update those entry
+points when adding a new runtime; do not suppress a finding without checking
+its callers. Unused local variables are ESLint errors.
 
 ## Private media-host deployment
 
@@ -221,3 +234,12 @@ Consult the route definitions and tests for the authoritative contract.
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The presence of a provider
 adapter does not grant rights to download, redistribute, or retain provider
 media.
+
+
+## Cloudflare CLI
+
+Use `bun run upload` for a dry run and `bun run deploy` to publish through the Node-based `cf` CLI. The Cloudflare Vite plugin beta reads `cloudflare.config.ts`. Existing local D1 state and type-generation commands remain on Wrangler.
+
+Pinned CLI: `cf@1.0.0-beta.12` on Node 22.18 or newer. `cf auth login` is separate from Wrangler login. Verify the selected account before remote operations. Deployment settings live in `cloudflare.config.ts`; keep the original Wrangler configuration for local data and any remaining Wrangler commands.
+
+`bun run build` also copies the generated Cloudflare static assets to `dist/client`, preserving the Mac mini static-server and deployment paths. Use this script before a Mini deployment; direct `vite build` does not stage that copy.

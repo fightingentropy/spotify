@@ -9,6 +9,9 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { EmptyState, ErrorText, SignedOutPrompt } from "@/components/ui/States";
 import { type LikedPayload, useApiData, withAccountScope } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { canonicalOf } from "@/lib/canonical-ids";
+import { downloadedLikedSongs, mergeDownloadedLikes } from "@/lib/downloaded-likes";
+import { useOfflineStore } from "@/store/offline";
 import { playSongs } from "@/audio/actions";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
@@ -29,6 +32,12 @@ export default function LikedScreen() {
     { enabled: status === "authenticated", keepPreviousData: true },
   );
   const mergeInitialLikes = useLikesStore((s) => s.mergeInitial);
+  const likedIds = useLikesStore((s) => s.likedSongIds);
+  const records = useOfflineStore((s) => s.records);
+  const downloaded = useMemo(
+    () => downloadedLikedSongs(records, user?.id ?? ""),
+    [records, user?.id],
+  );
   useEffect(() => {
     if (Array.isArray(data.likedSongIds)) mergeInitialLikes(data.likedSongIds);
   }, [mergeInitialLikes, data.likedSongIds]);
@@ -47,7 +56,10 @@ export default function LikedScreen() {
   // The sorted list feeds the big Play button, batch download, and the rows alike
   // so a tap always plays what's visible.
   const sort = useSongSort(LIKED_CONTEXT_KEY);
-  const songs = useMemo(() => sortSongs(data.songs, sort), [data.songs, sort]);
+  const songs = useMemo(
+    () => sortSongs(mergeDownloadedLikes(data.songs, downloaded, likedIds, canonicalOf), sort),
+    [data.songs, downloaded, likedIds, sort],
+  );
   const count = songs.length;
   const showPause = isLikedContext && isPlaying;
 

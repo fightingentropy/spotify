@@ -8,11 +8,11 @@ import {
   ExternalLink,
   Pause,
   Play,
-  Podcast,
   RefreshCw,
 } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { CoverImage } from "@/components/CoverImage";
+import { PageHeader, PageLayout, SectionHeader } from "@/components/PageLayout";
 import {
   PODCAST_SHOWS,
   parsePodcastFeed,
@@ -53,14 +53,14 @@ function remainingLabel(progress: PodcastEpisodeProgress): string {
 
 function EpisodeSkeletonRows() {
   return (
-    <div className="space-y-2" aria-hidden>
+    <div className="divide-y divide-white/[0.08]" aria-hidden>
       {[0, 1, 2, 3].map((item) => (
-        <div key={item} className="flex min-h-[88px] items-center gap-4 rounded-xl px-3 py-3">
-          <div className="wf-skeleton h-14 w-14 shrink-0 rounded-lg" />
+        <div key={item} className="flex min-h-[88px] items-center gap-4 py-4">
+          <div className="wf-skeleton h-14 w-14 shrink-0 rounded-md" />
           <div className="min-w-0 flex-1 space-y-2">
-            <div className="wf-skeleton h-4 w-2/3 rounded-full" />
-            <div className="wf-skeleton h-3 w-full rounded-full" />
-            <div className="wf-skeleton h-3 w-36 rounded-full" />
+            <div className="wf-skeleton h-4 w-2/3 rounded" />
+            <div className="wf-skeleton h-3 w-full rounded" />
+            <div className="wf-skeleton h-3 w-36 rounded" />
           </div>
         </div>
       ))}
@@ -169,211 +169,146 @@ export default function PodcastsPage() {
   }
 
   return (
-    <div className="min-h-[calc(100dvh-3.5rem)] bg-background px-4 py-6 text-white sm:px-6">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex items-center gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white/[0.075] text-white/60">
-              <Podcast size={23} />
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-2xl font-semibold">Podcasts</h1>
-              <div className="mt-1 text-sm text-white/[0.62]">
-                {PODCAST_SHOWS.length} shows
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-          {PODCAST_SHOWS.map((podcastShow, index) => {
-            const selected = podcastShow.id === selectedShowId;
-            return (
-              <button
-                key={podcastShow.id}
-                type="button"
-                onClick={() => selectShow(podcastShow.id)}
-                aria-expanded={selected}
-                aria-controls={selected ? "podcast-episodes" : undefined}
-                aria-label={`Show episodes for ${podcastShow.title}`}
-                className={cn(
-                  "group relative aspect-square overflow-hidden rounded-[10px] bg-white/[0.045] text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
-                  selected && "ring-1 ring-white/30",
-                )}
-              >
+    <PageLayout>
+      <PageHeader title="Podcasts" description={`${PODCAST_SHOWS.length} shows`} />
+      <div className="grid min-w-0 grid-cols-1 gap-x-6 md:grid-cols-2">
+        {PODCAST_SHOWS.map((podcastShow, index) => {
+          const selected = podcastShow.id === selectedShowId;
+          return (
+            <button
+              key={podcastShow.id}
+              type="button"
+              onClick={() => selectShow(podcastShow.id)}
+              aria-expanded={selected}
+              aria-controls={selected ? "podcast-episodes" : undefined}
+              aria-label={`Show episodes for ${podcastShow.title}`}
+              className={cn(
+                "flex w-full min-w-0 items-center gap-4 rounded-md border-b border-white/[0.08] p-3 text-left transition-colors hover:bg-white/[0.035] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                selected && "bg-white/[0.05]",
+              )}
+            >
+              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-white/[0.05]">
                 <CoverImage
                   src={podcastMediaProxyUrl(podcastShow.id, podcastShow.imageUrl)}
                   alt={podcastShow.title}
                   fill
                   loading={index === 0 ? "eager" : "lazy"}
                   className="object-cover"
-                  sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
+                  sizes="64px"
                 />
-                <div className="absolute inset-x-0 bottom-0 h-28 bg-black/[0.76]" />
-                <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/80 backdrop-blur">
-                  <Podcast size={11} />
-                  Show
-                </div>
-                <div className="absolute inset-x-2 bottom-2">
-                  <h2 className="truncate text-[15px] font-semibold leading-5 text-white drop-shadow sm:text-base">
-                    {podcastShow.title}
-                  </h2>
-                  <div className="mt-0.5 truncate text-xs leading-4 text-white/80 drop-shadow">
-                    {podcastShow.author}
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-white/65 drop-shadow">
-                    {podcastShow.description}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {selectedShow ? (
-          <section id="podcast-episodes" className="mt-8">
-            <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
-              <div className="flex min-w-0 gap-3">
-                <CoverImage
-                  src={podcastMediaProxyUrl(selectedShow.id, selectedShow.imageUrl)}
-                  alt={selectedShow.title}
-                  width={72}
-                  height={72}
-                  loading="eager"
-                  className="h-[72px] w-[72px] shrink-0 rounded-md object-cover"
-                  sizes="72px"
-                />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-white/60">Episodes</div>
-                  <h2 className="mt-0.5 text-2xl font-semibold leading-tight text-white">
-                    {selectedShow.title}
-                  </h2>
-                  <p className="mt-1 max-w-4xl text-[14px] leading-6 text-white/[0.66]">
-                    {selectedShow.description}
-                  </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-white/[0.62]">
-                    {status === "ready" ? <span>{episodes.length} latest episodes</span> : null}
-                    {loadedLabel ? <span>Updated {loadedLabel}</span> : null}
-                    <a
-                      href={selectedShow.websiteUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-white/[0.72] transition hover:text-white"
-                    >
-                      <ExternalLink size={14} />
-                      Website
-                    </a>
-                  </div>
-                </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => void loadFeed()}
-                disabled={status === "loading"}
-                aria-label="Refresh podcasts"
-                title="Refresh podcasts"
-                className="wf-control-button grid h-10 w-10 place-items-center rounded-full text-white/[0.68] transition hover:bg-white/[0.09] hover:text-white disabled:cursor-wait disabled:opacity-60"
-              >
-                <RefreshCw size={18} className={cn(status === "loading" && "animate-spin")} />
-              </button>
-            </div>
-
-            {status === "loading" && episodes.length === 0 ? (
-              <EpisodeSkeletonRows />
-            ) : status === "error" && episodes.length === 0 ? (
-              <div className="rounded-lg border border-red-400/20 bg-red-500/10 px-4 py-6 text-sm text-red-100">
-                {error ?? "Could not load podcast feed."}
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate text-[15px] font-semibold leading-6">{podcastShow.title}</h2>
+                <p className="wf-muted truncate text-sm">{podcastShow.author}</p>
+                <p className="wf-muted mt-1 line-clamp-2 text-xs leading-5">{podcastShow.description}</p>
               </div>
-            ) : (
-              <div className="space-y-2">
-                {episodes.map((episode, index) => {
-                  const active = currentPodcastEpisodeId === episode.id;
-                  const playing = active && isPlaying;
-                  const progress = progressByEpisodeId[episode.id];
-                  const finished = progress ? isEpisodeFinished(progress) : false;
-                  const inProgress = !finished && progress != null && progress.duration > 0 && progress.time > 0;
-                  return (
-                    <article
-                      key={episode.id}
-                      className={cn(
-                        "wf-list-row flex min-h-[92px] items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-white/[0.07] sm:gap-4",
-                        active && "bg-white/[0.08] ring-1 ring-white/20",
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => playEpisode(index)}
-                        aria-label={`${playing ? "Pause" : "Play"} ${episode.title}`}
-                        aria-pressed={playing}
-                        className={cn(
-                          "wf-control-button grid h-11 w-11 shrink-0 place-items-center rounded-full transition",
-                          "bg-white text-black",
-                        )}
-                      >
-                        {playing ? <Pause size={18} /> : <Play size={18} className="translate-x-[1px]" />}
-                      </button>
-
-                      <CoverImage
-                        src={episode.imageUrl}
-                        alt={episode.podcastTitle}
-                        width={64}
-                        height={64}
-                        loading={index < 4 ? "eager" : "lazy"}
-                        className="hidden h-16 w-16 shrink-0 rounded-md object-cover sm:block"
-                        sizes="64px"
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() => playEpisode(index)}
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <h3 className="line-clamp-2 text-[15px] font-semibold leading-5 text-white">
-                          {episode.title}
-                        </h3>
-                        <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-white/[0.62]">
-                          {episodeDescription(episode.description)}
-                        </p>
-                        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-white/[0.55]">
-                          <span className="inline-flex items-center gap-1">
-                            <CalendarDays size={13} />
-                            {formatEpisodeDate(episode.publishedAt)}
-                          </span>
-                          {episode.duration ? (
-                            <span className="inline-flex items-center gap-1">
-                              <Clock3 size={13} />
-                              {formatTime(episode.duration)}
-                            </span>
-                          ) : null}
-                          {finished ? (
-                            <span className="inline-flex items-center gap-1 text-white/80">
-                              <CheckCircle2 size={13} />
-                              Played
-                            </span>
-                          ) : inProgress && progress ? (
-                            <span className="inline-flex items-center gap-2">
-                              <span className="h-1 w-16 overflow-hidden rounded-full bg-white/[0.12]">
-                                <span
-                                  className="block h-full rounded-full bg-white/80"
-                                  style={{
-                                    width: `${Math.min(100, Math.max(0, (progress.time / progress.duration) * 100))}%`,
-                                  }}
-                                />
-                              </span>
-                              {remainingLabel(progress)}
-                            </span>
-                          ) : null}
-                        </div>
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        ) : null}
+            </button>
+          );
+        })}
       </div>
-    </div>
+
+      {selectedShow ? (
+        <section id="podcast-episodes" className="mt-8">
+          <SectionHeader
+            title={selectedShow.title}
+            description={<span className="whitespace-normal break-words">{selectedShow.description}</span>}
+            actions={(
+              <>
+                <a href={selectedShow.websiteUrl} target="_blank" rel="noopener noreferrer" className="wf-button">
+                  <ExternalLink size={15} /> Website
+                </a>
+                <button
+                  type="button"
+                  onClick={() => void loadFeed()}
+                  disabled={status === "loading"}
+                  aria-label="Refresh podcasts"
+                  title="Refresh podcasts"
+                  className="wf-icon-button disabled:cursor-wait disabled:opacity-60"
+                >
+                  <RefreshCw size={18} className={cn(status === "loading" && "animate-spin")} />
+                </button>
+              </>
+            )}
+          />
+          <div className="wf-muted mb-4 mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            {status === "ready" ? <span>{episodes.length} latest episodes</span> : null}
+            {loadedLabel ? <span>Updated {loadedLabel}</span> : null}
+          </div>
+
+          {status === "loading" && episodes.length === 0 ? (
+            <EpisodeSkeletonRows />
+          ) : status === "error" && episodes.length === 0 ? (
+            <div className="wf-empty-state" role="alert">{error ?? "Could not load podcast feed."}</div>
+          ) : (
+            <div className="divide-y divide-white/[0.08] border-t border-white/[0.08]">
+              {episodes.map((episode, index) => {
+                const active = currentPodcastEpisodeId === episode.id;
+                const playing = active && isPlaying;
+                const progress = progressByEpisodeId[episode.id];
+                const finished = progress ? isEpisodeFinished(progress) : false;
+                const inProgress = !finished && progress != null && progress.duration > 0 && progress.time > 0;
+                return (
+                  <article
+                    key={episode.id}
+                    className={cn(
+                      "flex min-h-[92px] min-w-0 items-center gap-3 px-2 py-4 transition-colors hover:bg-white/[0.03] sm:gap-4",
+                      active && "bg-white/[0.04]",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => playEpisode(index)}
+                      aria-label={`${playing ? "Pause" : "Play"} ${episode.title}`}
+                      aria-pressed={playing}
+                      className="wf-icon-button shrink-0"
+                    >
+                      {playing ? <Pause size={18} /> : <Play size={18} />}
+                    </button>
+                    <CoverImage
+                      src={episode.imageUrl}
+                      alt={episode.podcastTitle}
+                      width={56}
+                      height={56}
+                      loading={index < 4 ? "eager" : "lazy"}
+                      className="hidden h-14 w-14 shrink-0 rounded-md object-cover sm:block"
+                      sizes="56px"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => playEpisode(index)}
+                      className="min-w-0 flex-1 rounded-md text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                    >
+                      <h3 className="line-clamp-2 text-[15px] font-medium leading-5">{episode.title}</h3>
+                      <p className="wf-muted mt-1 line-clamp-2 text-[13px] leading-5">{episodeDescription(episode.description)}</p>
+                      <div className="wf-muted mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                        <span className="inline-flex items-center gap-1">
+                          <CalendarDays size={13} /> {formatEpisodeDate(episode.publishedAt)}
+                        </span>
+                        {episode.duration ? (
+                          <span className="inline-flex items-center gap-1"><Clock3 size={13} /> {formatTime(episode.duration)}</span>
+                        ) : null}
+                        {finished ? (
+                          <span className="inline-flex items-center gap-1"><CheckCircle2 size={13} /> Played</span>
+                        ) : inProgress && progress ? (
+                          <span className="inline-flex items-center gap-2">
+                            <span className="h-1 w-16 overflow-hidden rounded-full bg-white/[0.12]">
+                              <span
+                                className="block h-full rounded-full bg-white/80"
+                                style={{ width: `${Math.min(100, Math.max(0, (progress.time / progress.duration) * 100))}%` }}
+                              />
+                            </span>
+                            {remainingLabel(progress)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      ) : null}
+    </PageLayout>
   );
 }

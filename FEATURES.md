@@ -24,9 +24,31 @@ it.
   limits and upload magic-byte validation.
 - Playlist creation, editing, reordering, artwork, and folder conversion.
 - Weekly playback history with top tracks, artists, and listening time.
+- Discovery saves try SpotiFLAC first, then download YouTube audio with yt-dlp.
+  A valid Premium session selects Premium Opus or AAC when available, preserving
+  the original codec. See [library saves](docs/library-saves.md).
 
 The route-level parity contract and intentional platform differences are in
 [`docs/client-parity.md`](docs/client-parity.md).
+
+## Browser performance
+
+- All browser routes share page spacing, headings, neutral controls, and focus
+  states through `PageLayout` and the shared component styles.
+- Home sections load independently, with compact listening cards and responsive
+  artwork. Local artwork uses cached WebP thumbnails; source files stay intact.
+- API reads use a bounded cache with request deduplication and account isolation.
+  Like changes update cached data immediately without stale reads undoing them.
+- Routes preload on navigation intent. Large libraries use virtualized rows,
+  cached search fields, and deferred filtering.
+- Discover cards return cached metadata or fallback cards immediately while
+  provider metadata refreshes in the background.
+- Playback warms upcoming media only while playing and stops on pause or queue
+  changes.
+- The Now Playing sidebar previews live lyrics. The player microphone opens a
+  shared, full-height lyrics view on desktop and mobile web, with timed line
+  highlighting, click-to-seek, and explicit resume after scrolling. Plain-text
+  lyrics remain readable without simulated timing.
 
 ## Native-only features
 

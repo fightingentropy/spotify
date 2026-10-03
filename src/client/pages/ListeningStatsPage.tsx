@@ -1,4 +1,4 @@
-import { BarChart3, Clock3, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import {
   type ListeningStatsPayload,
   type ListeningWeek,
@@ -8,6 +8,7 @@ import {
 import { useAuth } from "@/client/auth";
 import { CoverImage } from "@/components/CoverImage";
 import { PageError } from "@/components/PageError";
+import { PageHeader, PageLayout, SectionHeader } from "@/components/PageLayout";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { usePlayerStore } from "@/store/player";
 
@@ -47,31 +48,25 @@ function WeekCard({ week }: { week: ListeningWeek }) {
   };
 
   return (
-    <section className="rounded-2xl border border-white/[0.1] bg-white/[0.035] p-4 sm:p-5">
-      <div>
-        <h2 className="text-xl font-bold text-white">{heading ?? weekRange(week)}</h2>
-        {heading ? <p className="mt-0.5 text-sm text-white/50">{weekRange(week)}</p> : null}
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl bg-white/[0.055] p-4">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-white/50">
-            <Clock3 size={15} /> Minutes listened
-          </div>
-          <p className="mt-2 text-4xl font-extrabold tabular-nums text-white">{week.minutesListened}</p>
+    <section className="border-b border-white/[0.08] pb-6 last:border-0">
+      <SectionHeader title={heading ?? weekRange(week)} description={heading ? weekRange(week) : undefined} />
+      <div className="grid min-w-0 grid-cols-1 divide-y divide-white/[0.08] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <div className="min-w-0 py-4 first:pt-0 sm:px-4 sm:py-0 sm:first:pl-0">
+          <p className="wf-muted text-sm">Minutes listened</p>
+          <p className="mt-2 text-[28px] font-semibold tabular-nums leading-10">{week.minutesListened}</p>
         </div>
 
-        <div className="rounded-xl bg-white/[0.055] p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-white/50">Top artist</p>
+        <div className="min-w-0 py-4 first:pt-0 sm:px-4 sm:py-0 sm:first:pl-0">
+          <p className="wf-muted text-sm">Top artist</p>
           {week.topArtist ? (
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex min-w-0 items-center gap-3">
               <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-white/[0.06]">
                 <CoverImage src={week.topArtist.image ?? undefined} alt={week.topArtist.name} fill sizes="56px" />
               </div>
-              <p className="min-w-0 truncate font-semibold text-white">{week.topArtist.name}</p>
+              <p className="min-w-0 truncate text-[15px] font-medium">{week.topArtist.name}</p>
             </div>
           ) : (
-            <p className="mt-3 text-sm text-white/45">No artist yet</p>
+            <p className="wf-muted mt-3 text-sm">No artist yet</p>
           )}
         </div>
 
@@ -79,11 +74,11 @@ function WeekCard({ week }: { week: ListeningWeek }) {
           type="button"
           disabled={!week.topSong}
           onClick={playTopSong}
-          className="group rounded-xl bg-white/[0.055] p-4 text-left transition hover:bg-white/[0.09] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-default disabled:hover:bg-white/[0.055]"
+          className="group min-w-0 rounded-md py-4 text-left sm:py-0 sm:pl-4 transition-colors hover:bg-white/[0.035] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60 disabled:cursor-default disabled:hover:bg-transparent"
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-white/50">Top song</p>
+          <p className="wf-muted text-sm">Top song</p>
           {week.topSong ? (
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex min-w-0 items-center gap-3">
               <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-md bg-white/[0.06]">
                 <CoverImage
                   src={week.topSong.imageUrl}
@@ -97,12 +92,12 @@ function WeekCard({ week }: { week: ListeningWeek }) {
                 </span>
               </div>
               <div className="min-w-0">
-                <p className="truncate font-semibold text-white">{week.topSong.title}</p>
-                <p className="truncate text-sm text-white/50">{week.topSong.artist}</p>
+                <p className="truncate text-[15px] font-medium">{week.topSong.title}</p>
+                <p className="wf-muted truncate text-sm">{week.topSong.artist}</p>
               </div>
             </div>
           ) : (
-            <p className="mt-3 text-sm text-white/45">No song yet</p>
+            <p className="wf-muted mt-3 text-sm">No song yet</p>
           )}
         </button>
       </div>
@@ -119,30 +114,17 @@ export default function ListeningStatsPage() {
   );
 
   return (
-    <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-10">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-7 flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-full bg-emerald-500 text-black">
-            <BarChart3 size={22} />
-          </div>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Listening stats</h1>
-            <p className="mt-0.5 text-sm text-white/55">Your last six weeks of listening.</p>
-          </div>
+    <PageLayout>
+      <PageHeader title="Listening stats" />
+      {loading && data.weeks.length === 0 ? <p className="wf-muted text-sm">Loading listening stats…</p> : null}
+      {error ? <PageError compact message={error} onRetry={retry} retryLabel="Retry" /> : null}
+      {!loading && !error && data.weeks.length === 0 ? (
+        <div className="wf-empty-state">
+          <h2 className="wf-section-title">No listening yet</h2>
+          <p className="wf-muted mt-1 text-sm">Play some music and your weekly stats will show up here.</p>
         </div>
-
-        {loading && data.weeks.length === 0 ? <p className="text-white/55">Loading listening stats…</p> : null}
-        {error ? (
-          <PageError compact message={error} onRetry={retry} retryLabel="Retry" />
-        ) : null}
-        {!loading && !error && data.weeks.length === 0 ? (
-          <div className="rounded-2xl border border-white/[0.1] bg-white/[0.035] p-8 text-center">
-            <h2 className="text-lg font-semibold">No listening yet</h2>
-            <p className="mt-1 text-sm text-white/55">Play some music and your weekly stats will show up here.</p>
-          </div>
-        ) : null}
-        <div className="grid gap-4">{data.weeks.map((week) => <WeekCard key={week.weekStart} week={week} />)}</div>
-      </div>
-    </div>
+      ) : null}
+      <div className="space-y-6">{data.weeks.map((week) => <WeekCard key={week.weekStart} week={week} />)}</div>
+    </PageLayout>
   );
 }

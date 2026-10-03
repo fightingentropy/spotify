@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { NavLink } from "react-router";
 import { ChevronLeft, ChevronRight, Heart, Library, ListMusic, Music2, Podcast, RadioTower, Ticket } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -32,14 +32,14 @@ export default function LibrarySidebarClient({
   return (
     <aside
       className={cn(
-        "hidden lg:flex fixed top-14 bottom-0 left-0 z-40 border-r border-white/[0.08] bg-black text-white transition-[width] duration-200",
+        "wf-library-sidebar hidden lg:flex fixed top-14 bottom-[84px] left-0 z-40 bg-black text-white transition-[width] duration-200",
         collapsed ? "w-16" : "w-[13.5rem]",
       )}
     >
       <div className={cn("flex-1 overflow-y-auto", collapsed ? "p-2" : "p-4")}>
         <div className={cn("mb-4 flex items-center", collapsed ? "justify-center" : "justify-between")}>
           {!collapsed && (
-            <div className="inline-flex items-center gap-2 pl-2 text-[16px] font-medium text-white/[0.82]">
+            <div className="inline-flex items-center gap-2 pl-2 text-[14px] font-medium text-white/[0.82]">
               <Library size={18} />
               <span>Your Library</span>
             </div>
@@ -58,52 +58,52 @@ export default function LibrarySidebarClient({
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <Link
+        <div className="space-y-1">
+          <NavLink
             to="/liked"
             title="Liked Songs"
             className={cn(
-                "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+                "wf-list-row wf-pressable flex min-h-11 items-center rounded-md transition hover:bg-white/[0.09]",
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white">
+            <div className="grid h-7 w-7 shrink-0 place-items-center text-white">
               <Heart size={18} />
             </div>
             {!collapsed && (
               <div className="min-w-0">
-                <div className="text-[16px] font-medium leading-6 text-white">Liked Songs</div>
+                <div className="text-[14px] font-medium leading-6 text-white">Liked Songs</div>
               </div>
             )}
-          </Link>
+          </NavLink>
 
-          <Link
+          <NavLink
             to="/playlists"
             title="Playlists"
             className={cn(
-              "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+              "wf-list-row wf-pressable flex min-h-11 items-center rounded-md transition hover:bg-white/[0.09]",
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
+            <div className="grid h-7 w-7 shrink-0 place-items-center text-white/60">
               <ListMusic size={18} />
             </div>
-            {!collapsed && <div className="text-[16px] font-medium leading-6 text-white">Playlists</div>}
-          </Link>
+            {!collapsed && <div className="text-[14px] font-medium leading-6 text-white">Playlists</div>}
+          </NavLink>
 
-          <Link
+          <NavLink
             to="/songs"
             title="All Songs"
             className={cn(
-              "wf-list-row wf-pressable flex min-h-12 items-center rounded-md transition hover:bg-white/[0.09]",
+              "wf-list-row wf-pressable flex min-h-11 items-center rounded-md transition hover:bg-white/[0.09]",
               collapsed ? "justify-center px-0 py-2" : "gap-3 px-2.5 py-2",
             )}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/[0.075] text-white/60">
+            <div className="grid h-7 w-7 shrink-0 place-items-center text-white/60">
               <Music2 size={18} />
             </div>
-            {!collapsed && <div className="text-[16px] font-medium leading-6 text-white">All Songs</div>}
-          </Link>
+            {!collapsed && <div className="text-[14px] font-medium leading-6 text-white">All Songs</div>}
+          </NavLink>
 
           <details className="group/more mt-5 border-t border-white/[0.08] pt-3">
             <summary title="More music" className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-2 text-[13px] text-white/50 hover:text-white [&::-webkit-details-marker]:hidden">
@@ -115,9 +115,9 @@ export default function LibrarySidebarClient({
               { href: "/podcasts", label: "Podcasts", Icon: Podcast },
               { href: "/events", label: "Live Events", Icon: Ticket },
             ].map(({ href, label, Icon }) => (
-              <Link key={href} to={href} title={label} className={cn("flex min-h-11 items-center gap-3 rounded-lg px-3 text-[14px] text-white/60 transition hover:bg-white/[0.06] hover:text-white", collapsed && "justify-center px-0")}>
+              <NavLink key={href} to={href} title={label} className={cn("flex min-h-11 items-center gap-3 rounded-lg px-3 text-[14px] text-white/60 transition hover:bg-white/[0.06] hover:text-white", collapsed && "justify-center px-0")}>
                 <Icon size={17} />{collapsed ? null : label}
-              </Link>
+              </NavLink>
             ))}
           </details>
 

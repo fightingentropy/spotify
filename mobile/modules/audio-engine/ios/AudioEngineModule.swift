@@ -4,8 +4,7 @@ import Foundation
 import MediaPlayer
 import UIKit
 
-// Native AVFoundation playback engine, ported 1:1 from the Capacitor plugin
-// (ios/App/App/AudioEnginePlugin.swift) to an Expo Module. The JS player keeps
+// Native AVFoundation playback engine exposed as an Expo Module. The JS player keeps
 // all orchestration (queue, scrobble, podcast resume, *when* to crossfade); this
 // module owns audio output so it survives a locked screen — two AVPlayer "decks"
 // (A/B) for crossfade, the AVAudioSession, the equal-power crossfade ramp, and
@@ -61,7 +60,7 @@ public class AudioEngineModule: Module {
 
         Events("time", "loaded", "ended", "seeked", "error", "crossfadeComplete", "playing", "waiting", "remote")
 
-        // Equivalent of Capacitor's load() — runs during module init on the main
+        // Run module initialization on the main
         // thread, before any JS method, so the decks exist before first prepare().
         OnCreate {
             self.ensureConfigured()
@@ -82,15 +81,6 @@ public class AudioEngineModule: Module {
             }
         }
 
-        // Public: just put the shared AVAudioSession into .playback + active. Used by
-        // the M1a path where audio still plays from the WebView <audio> element — this
-        // keeps that audio alive when the screen locks (combined with UIBackgroundModes).
-        AsyncFunction("activateSession") {
-            DispatchQueue.main.async {
-                self.configureSession()
-            }
-        }
-
         // MARK: Load / transport
 
         AsyncFunction("prepare") { (deck: String, url: String, id: String?, startAt: Double?) in
@@ -100,7 +90,7 @@ public class AudioEngineModule: Module {
             let urlString = url
             let songId = id ?? ""
             let startAtValue = startAt ?? 0
-            // URL handling (spec §7.3 hazard #4): accept a bare leading-"/" path
+            // URL handling: accept a bare leading-"/" path
             // (local file), a "file://" URI (offline-cached local files), and
             // normal http(s) URLs.
             let resolvedUrl: URL
@@ -203,15 +193,6 @@ public class AudioEngineModule: Module {
                 deckObj.wantsPlaying = false
                 self.cancelRamp()
                 deckObj.player.pause()
-            }
-        }
-
-        AsyncFunction("stop") { (deck: String) in
-            guard let deckObj = self.decks[deck] else {
-                throw Exception(name: "AudioEngine", description: "deck not configured")
-            }
-            DispatchQueue.main.async {
-                self.teardownDeck(deckObj)
             }
         }
 

@@ -10,13 +10,15 @@ import {
   usePlayerStore,
 } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
+import { songLikeId } from "@spotify/shared/catalog-like";
 import type { PlayerSong } from "@/types/player";
 import { cn, formatTime } from "@/lib/utils";
-import { ChevronDown, ChevronUp, Heart, ListMusic, Moon, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
+import { ChevronDown, ChevronUp, Heart, ListMusic, MicVocal, Moon, Pause, Play, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX } from "lucide-react";
 import { CoverImage } from "@/components/CoverImage";
 import { MarqueeText } from "@/components/MarqueeText";
 import { isPodcastSong, isRadioSong } from "@/lib/player-song";
 import { subscribePlaybackPosition } from "@/lib/playback-position";
+import { useLyricsNavigation } from "@/lib/use-lyrics-navigation";
 
 const NowPlayingSheet = lazy(() => import("@/components/NowPlayingSheet"));
 const QueueSheet = lazy(() => import("@/components/QueueSheet"));
@@ -59,6 +61,7 @@ export function PlayerBarChrome({
   onToggleQueue,
 }: PlayerBarChromeProps): React.ReactElement {
   const navigate = useNavigate();
+  const { lyricsOpen, openLyrics, closeLyrics } = useLyricsNavigation();
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const volume = usePlayerStore((s) => s.volume);
   const isMuted = usePlayerStore((s) => s.isMuted);
@@ -95,8 +98,8 @@ export function PlayerBarChrome({
   const songId = song.id;
   const songIsRadio = isRadioSong(song);
   const songIsPodcast = isPodcastSong(song);
-  const songIsLiked = !!likedLookup[songId];
-  const likePending = !!pendingLookup[songId];
+  const songIsLiked = !!likedLookup[songLikeId(song, likedLookup)];
+  const likePending = !!pendingLookup[songLikeId(song, pendingLookup)];
   const hasSeekableDuration = duration > 0 && Number.isFinite(duration) && !songIsRadio;
   const safeCurrentTime = hasSeekableDuration ? Math.min(currentTime, duration) : 0;
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : Volume2;
@@ -147,7 +150,7 @@ export function PlayerBarChrome({
         </div>
       ) : null}
       {/* Mobile mini player */}
-      <div className="relative mx-[var(--wf-floating-inset)] overflow-hidden rounded-[18px] border border-white/[0.13] bg-[rgba(10,12,16,0.84)] shadow-[0_8px_24px_rgba(0,0,0,0.34)] backdrop-blur-2xl lg:hidden">
+      <div className="relative mx-[var(--wf-floating-inset)] overflow-hidden rounded-lg border border-white/[0.13] bg-[#202020] lg:hidden">
         <div
           className="absolute inset-x-0 bottom-0 z-10 h-0.5 bg-white/[0.12]"
           aria-hidden
@@ -162,6 +165,9 @@ export function PlayerBarChrome({
           <button
             type="button"
             onClick={onOpenNowPlaying}
+            data-preserve-playback-keys
+            aria-haspopup="dialog"
+            aria-expanded={nowPlayingOpen}
             className="wf-pressable flex items-center gap-3 min-w-0 flex-1 text-left touch-manipulation"
             aria-label="Open now playing"
           >
@@ -183,12 +189,13 @@ export function PlayerBarChrome({
           {!songIsRadio && !songIsPodcast ? (
             <button
               type="button"
-              aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
+              aria-label={likePending ? "Updating liked songs" : songIsLiked ? "In liked songs" : "Save to liked songs"}
+              aria-busy={likePending}
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending}
               className={cn(
                 "wf-control-button h-11 w-11 rounded-full grid place-items-center touch-manipulation shrink-0",
-                likePending ? "opacity-60" : "",
+                likePending ? "animate-pulse opacity-60" : "",
                 songIsLiked ? "text-white" : "text-white/[0.68]",
               )}
             >
@@ -213,30 +220,42 @@ export function PlayerBarChrome({
       {/* Desktop player */}
       <div className="hidden h-[84px] grid-cols-[minmax(15rem,1fr)_minmax(27rem,44rem)_minmax(15rem,1fr)] items-center gap-4 px-4 py-3 sm:px-6 lg:grid">
         <div className="flex min-w-0 items-center justify-start gap-3 sm:gap-4">
-          <CoverImage
-            src={song.imageUrl || "/apple-icon.png"}
-            networkSrc={song.networkImageUrl}
-            alt=""
-            width={48}
-            height={48}
-            loading="eager"
-            className="wf-song-cover h-12 w-12 shrink-0 rounded-[5px] object-cover"
-            sizes="48px"
-          />
-          <div className="min-w-0 max-w-[20rem]">
-            <div className="truncate text-[15px] font-medium leading-5 text-white">{song.title}</div>
-            <div className="truncate text-[13px] leading-5 text-white/[0.62]">{song.artist}</div>
-          </div>
+          <button
+            type="button"
+            onClick={onOpenNowPlaying}
+            data-preserve-playback-keys
+            aria-label="Open now playing"
+            aria-haspopup="dialog"
+            aria-expanded={nowPlayingOpen}
+            title="Open now playing"
+            className="wf-pressable -m-1 flex min-w-0 items-center gap-3 rounded-md p-1 text-left transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:gap-4"
+          >
+            <CoverImage
+              src={song.imageUrl || "/apple-icon.png"}
+              networkSrc={song.networkImageUrl}
+              alt=""
+              width={48}
+              height={48}
+              loading="eager"
+              className="wf-song-cover h-12 w-12 shrink-0 rounded-[5px] object-cover"
+              sizes="48px"
+            />
+            <div className="min-w-0 max-w-[20rem]">
+              <div className="truncate text-[15px] font-medium leading-5 text-white">{song.title}</div>
+              <div className="truncate text-[13px] leading-5 text-white/[0.62]">{song.artist}</div>
+            </div>
+          </button>
           {!songIsRadio && !songIsPodcast ? (
             <button
               type="button"
-              aria-label={songIsLiked ? "In liked songs" : "Save to liked songs"}
-              title={songIsLiked ? "In liked songs" : "Save to liked songs"}
+              aria-label={likePending ? "Updating liked songs" : songIsLiked ? "In liked songs" : "Save to liked songs"}
+              aria-busy={likePending}
+              title={likePending ? "Updating liked songs…" : songIsLiked ? "In liked songs" : "Save to liked songs"}
               onClick={handleToggleLike}
               disabled={!likesHydrated || likePending}
               className={cn(
                 "wf-control-button flex-shrink-0 h-9 w-9 rounded-full grid place-items-center transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
-                likePending ? "cursor-wait opacity-60" : "hover:bg-white/[0.09] hover:text-white",
+                likePending ? "cursor-wait animate-pulse opacity-60" : "hover:bg-white/[0.09] hover:text-white",
                 songIsLiked ? "text-white" : "text-white/[0.68]",
               )}
             >
@@ -292,6 +311,23 @@ export function PlayerBarChrome({
         </div>
 
         <div className="flex min-w-0 items-center justify-end gap-2">
+          {!songIsRadio && !songIsPodcast ? (
+            <button
+              type="button"
+              aria-label={lyricsOpen ? "Close lyrics" : "Open lyrics"}
+              aria-pressed={lyricsOpen}
+              data-preserve-playback-keys
+              title={!song.lyricsUrl && !lyricsOpen ? "No lyrics available" : lyricsOpen ? "Close lyrics" : "Open lyrics"}
+              disabled={!song.lyricsUrl && !lyricsOpen}
+              onClick={lyricsOpen ? closeLyrics : openLyrics}
+              className={cn(
+                "wf-control-button grid h-9 w-9 flex-shrink-0 place-items-center rounded-full transition hover:bg-white/[0.09] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:opacity-30 disabled:hover:bg-transparent",
+                lyricsOpen ? "bg-white/[0.08] text-white" : "text-white/[0.68]",
+              )}
+            >
+              <MicVocal size={18} />
+            </button>
+          ) : null}
           {songIsPodcast ? (
             <button
               type="button"
@@ -326,9 +362,9 @@ export function PlayerBarChrome({
                   className="fixed inset-0 z-40 cursor-default"
                   onClick={() => setSleepMenuOpen(false)}
                 />
-                <div className="absolute bottom-11 right-0 z-50 w-48 rounded-xl border border-white/15 bg-zinc-950/95 p-1 shadow-2xl">
+                <div className="absolute bottom-11 right-0 z-50 w-48 rounded-lg border border-white/15 bg-[#1a1a1a] p-1 shadow-2xl">
                   <div className="flex items-center justify-between gap-2 px-3 py-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-white/[0.62]">Sleep timer</span>
+                    <span className="text-[13px] font-medium text-white/[0.62]">Sleep timer</span>
                     {sleepTimerRemaining != null ? (
                       <span className="text-[11px] font-semibold tabular-nums text-white">{sleepTimerRemaining} min left</span>
                     ) : null}

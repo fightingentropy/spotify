@@ -1,12 +1,3 @@
-import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-// Ported from src/lib/utils.ts — both are pure and work in RN unchanged.
-// NativeWind consumes the merged className; tailwind-merge dedupes conflicts.
-export function cn(...inputs: ClassValue[]): string {
-  return twMerge(clsx(inputs));
-}
-
 export function formatTime(totalSeconds: number | null | undefined): string {
   if (totalSeconds == null || Number.isNaN(totalSeconds)) return "--:--";
   const seconds = Math.max(0, Math.floor(totalSeconds));

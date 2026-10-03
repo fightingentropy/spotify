@@ -29,13 +29,9 @@ export async function addRecommendationToContext(song: PlayerSong, _index?: numb
   if (addInFlight.has(guardKey)) return;
   addInFlight.add(guardKey);
   try {
-    // Add commits the rec to the LOSSLESS library, so always (re)stage it via the
-    // resolver first: a rec played from the queue is a lossy YouTube preview, and
-    // an unplayed one is a bare placeholder. A lossless stage overwrites a preview
-    // with FLAC (or returns the existing FLAC fast); the mini refuses to promote a
-    // lossy preview (409 preview_not_lossless), so this re-stage is what keeps the
-    // library FLAC-only. (Add therefore depends on the resolver, like before; only
-    // playback was decoupled from it.)
+    // Prepare a permanent copy: prefer the lossless providers, then let the
+    // Worker download YouTube audio if they fail. Playback previews alone are
+    // temporary and must be promoted before saving a library reference.
     let target = song;
     if (song.discoverTrackId) {
       target = await stageDiscoverSong(song, { preview: false });

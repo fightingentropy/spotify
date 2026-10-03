@@ -522,10 +522,6 @@ export type DiscoverTrack = {
   audioUrl?: string;
 };
 
-export type DiscoverPayload = {
-  tracks: DiscoverTrack[];
-};
-
 // The Home "Discover" first row as clickable, auto-updating playlists (Top 50 +
 // the YouTube Music Discover Mix) instead of a scroll of individual tracks. Each
 // opens /api/playlist/:id like any other playlist.

@@ -9,19 +9,6 @@ export type UserRow = {
   updatedAt: Date;
 };
 
-export type SessionRow = {
-  id: string;
-  sessionToken: string;
-  userId: string;
-  expires: Date;
-};
-
-export type VerificationTokenRow = {
-  identifier: string;
-  token: string;
-  expires: Date;
-};
-
 export type SongRow = {
   id: string;
   title: string;
@@ -42,29 +29,6 @@ export type PlaylistRow = {
   name: string;
   imageUrl: string | null;
   userId: string;
-  createdAt: Date;
-};
-
-export type PlaylistSongRow = {
-  id: string;
-  playlistId: string;
-  songId: string;
-  order: number;
-};
-
-export type LikeRow = {
-  id: string;
-  userId: string;
-  songId: string;
-  createdAt: Date;
-};
-
-export type PlayEventRow = {
-  id: string;
-  userId: string;
-  songId: string;
-  songJson: string;
-  durationMs: number | null;
   createdAt: Date;
 };
 

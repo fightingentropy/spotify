@@ -209,7 +209,7 @@ function TrackActionsSheet({
         onTouchEnd={handleTouchEnd}
         className={cn(
           "absolute inset-x-0 bottom-0 mx-auto w-full max-w-md",
-          "rounded-t-3xl border-t border-white/10 bg-background text-white",
+          "rounded-t-2xl border-t border-white/10 bg-background text-white",
           "shadow-[0_-16px_50px_rgba(0,0,0,0.55)] outline-none",
           "pb-[calc(env(safe-area-inset-bottom)+0.5rem)]",
           "transition-transform duration-[260ms] ease-out will-change-transform motion-reduce:transition-none",
@@ -304,7 +304,7 @@ function ActionRow({
         onClick();
       }}
       className={cn(
-        "flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left text-[15px] font-medium text-white/90",
+        "flex w-full items-center gap-4 rounded-md px-3 py-3 text-left text-[15px] font-medium text-white/90",
         "transition hover:bg-white/10 active:bg-white/10 focus:outline-none focus-visible:bg-white/10",
         "touch-manipulation disabled:cursor-wait disabled:opacity-60",
       )}

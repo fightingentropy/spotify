@@ -1,7 +1,15 @@
 import { Children, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-export function HomeRow({ title, children }: { title: string; children: ReactNode }) {
+export function HomeRow({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
   const rowRef = useRef<HTMLDivElement>(null);
   const rowId = useId();
   const count = Children.count(children);
@@ -27,7 +35,8 @@ export function HomeRow({ title, children }: { title: string; children: ReactNod
     const row = rowRef.current;
     if (!row) return;
     const tile = row.firstElementChild?.getBoundingClientRect().width ?? 190;
-    const step = tile + 12;
+    const gap = Number.parseFloat(window.getComputedStyle(row).columnGap) || 12;
+    const step = tile + gap;
     const page = Math.max(1, Math.floor(row.clientWidth / step)) * step;
     row.scrollBy({
       left: direction * page,
@@ -36,9 +45,12 @@ export function HomeRow({ title, children }: { title: string; children: ReactNod
   };
 
   return (
-    <section aria-label={title} className="mb-[34px]">
-      <div className="mb-3.5 flex min-h-10 items-center justify-between gap-3">
-        <h2 className="text-[22px] font-bold tracking-[-0.35px]">{title}</h2>
+    <section aria-labelledby={`${rowId}-heading`} className="home-row">
+      <div className="home-row-heading">
+        <div className="min-w-0">
+          <h2 id={`${rowId}-heading`} className="wf-section-title">{title}</h2>
+          {description ? <p className="mt-1 text-[13px] leading-5 text-white/45">{description}</p> : null}
+        </div>
         {edges.overflow ? (
           <div className="flex shrink-0 gap-1">
             {[-1, 1].map((direction) => (
@@ -49,7 +61,7 @@ export function HomeRow({ title, children }: { title: string; children: ReactNod
                 aria-controls={rowId}
                 disabled={direction < 0 ? edges.start : edges.end}
                 onClick={() => move(direction)}
-                className="wf-control-button grid h-9 w-9 place-items-center rounded-full border border-white/10 text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-default disabled:opacity-25 disabled:hover:bg-transparent"
+                className="wf-icon-button disabled:opacity-25"
               >
                 {direction < 0 ? <ChevronLeft size={19} /> : <ChevronRight size={19} />}
               </button>
@@ -61,7 +73,7 @@ export function HomeRow({ title, children }: { title: string; children: ReactNod
         ref={rowRef}
         id={rowId}
         onScroll={updateEdges}
-        className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0"
+        className="home-rail"
       >
         {children}
       </div>

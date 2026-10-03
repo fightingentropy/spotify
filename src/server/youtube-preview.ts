@@ -6,8 +6,8 @@
 // recs are skipped before they are ever added to the library. So for the
 // PREVIEW/play path we resolve the rec to a YouTube video and stage its Opus
 // audio (~140 kbps anonymous) — near-total coverage, small payload, no resolver
-// dependency. The lossless resolver is reserved for the "Add to library" path so
-// the library stays FLAC-only (see handleDiscoverPromote / the worker stage modes).
+// dependency. Library saves try the lossless resolver first, then keep YouTube
+// audio in its original format if those providers are unavailable.
 //
 // Resolution is "confident-match-or-nothing": if we can't find a YouTube result
 // whose artist and (Spotify-known) duration line up, we return null so the caller
@@ -46,10 +46,8 @@ export type YouTubePreviewConfig = {
   cookiesFile?: string; // optional; anonymous if unset (caps at ~131k opus)
   searchCount: number;
   minConfidence: number;
-  // yt-dlp format selector. 774 (~257k opus) is the YouTube Premium tier — it only
-  // appears when cookiesFile carries an active-Premium session AND a JS runtime
-  // (deno) is available to solve the n-challenge; otherwise this falls through to
-  // 251 (~131k opus, anonymous).
+  // Prefer Premium Opus (774) or AAC (141), then the best available audio.
+  // Premium formats require a valid account session and extraction support.
   format: string;
   // Extra dirs prepended to PATH for the yt-dlp subprocess. yt-dlp's standalone
   // binary shells out to `deno` (the JS challenge solver) by PATH lookup; under
@@ -64,7 +62,7 @@ export const DEFAULT_YOUTUBE_PREVIEW_CONFIG: YouTubePreviewConfig = {
   cookiesFile: process.env.YOUTUBE_COOKIES_FILE || undefined,
   searchCount: 6,
   minConfidence: 0.5,
-  format: "774/251/250/249/bestaudio[acodec=opus]/bestaudio",
+  format: "774/141/bestaudio",
 };
 
 export type YouTubePlaylistSearchResult = {
@@ -413,7 +411,11 @@ export async function downloadYouTubePreviewAudio(
       join(dir, "audio.%(ext)s"),
     ];
     if (config.ffmpegLocation) args.push("--ffmpeg-location", config.ffmpegLocation);
-    args.push(`https://www.youtube.com/watch?v=${videoId}`);
+    // The ordinary logged-in web client can omit all audio-only formats even
+    // with valid Premium cookies. The Music client exposes Premium 774/141.
+    if (config.cookiesFile) args.push("--extractor-args", "youtube:player_client=web_music,default");
+    const origin = config.cookiesFile ? "https://music.youtube.com" : "https://www.youtube.com";
+    args.push(`${origin}/watch?v=${videoId}`);
     await execFileAsync(config.ytDlpPath, args, { maxBuffer: 8 * 1024 * 1024, timeout: 120_000, env: execEnv(config) });
 
     const files = await readdir(dir);

@@ -156,7 +156,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
         aria-keyshortcuts="Meta+K Control+K"
         title="Search (Command K)"
         onClick={() => setOpen(true)}
-        className="group flex h-12 w-full min-w-0 items-center gap-3 rounded-full bg-[#1f1f1f] pl-4 pr-3 text-left text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] transition hover:bg-[#2a2a2a] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/45"
+        className="group flex h-10 w-full min-w-0 items-center gap-3 rounded-md border border-white/10 bg-[#1a1a1a] pl-4 pr-3 text-left text-white transition hover:bg-[#2a2a2a] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/45"
       >
         <Search size={25} strokeWidth={2.15} className="shrink-0 text-white/70 transition group-hover:text-white" />
         <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-white/[0.64]">
@@ -174,7 +174,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
             role="dialog"
             aria-modal="true"
             aria-label="Search music"
-            className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-3xl border border-white/15 bg-zinc-950/95 shadow-2xl sm:mt-16"
+            className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-lg border border-white/15 bg-[#1a1a1a] shadow-2xl sm:mt-16"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex h-14 items-center gap-3 border-b border-white/10 px-4">
@@ -240,8 +240,8 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                   if (entry.kind === "album") return <button key={`album:${entry.album.provider}:${entry.album.id}`} id={`home-search-option-${index}`}
                     role="option" aria-selected={index === activeIndex} type="button"
                     onClick={() => { remember(query); navigate(albumPagePath(entry.album)); setOpen(false); }}
-                    className={cn("flex min-h-16 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition", index === activeIndex ? "bg-white/10" : "hover:bg-white/5")}>
-                    <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md"><CoverImage src={entry.album.imageUrl ?? undefined} alt="" className="h-full w-full object-cover" /></div>
+                    className={cn("flex min-h-16 w-full items-center gap-3 rounded px-3 py-2 text-left transition", index === activeIndex ? "bg-white/10" : "hover:bg-white/5")}>
+                    <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md"><CoverImage src={entry.album.imageUrl ?? undefined} alt="" sizes="44px" className="h-full w-full object-cover" /></div>
                     <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{entry.album.name}</div><div className="truncate text-xs text-white/60">Album · {entry.album.artist} · {entry.album.releaseDate?.slice(0, 4)}</div></div>
                     <span className="text-[11px] text-white/40">{entry.album.provider === "youtube" ? "YouTube" : "Spotify"}</span>
                   </button>;
@@ -262,7 +262,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                       setOpen(false);
                     }}
                     className={cn(
-                      "flex h-14 w-full items-center gap-3 rounded-xl px-3 text-left transition",
+                      "flex h-14 w-full items-center gap-3 rounded px-3 text-left transition",
                       index === activeIndex ? "bg-white/10" : "hover:bg-white/5",
                     )}
                   >
@@ -270,6 +270,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                       <CoverImage
                         src={song.imageUrl}
                         alt={song.title}
+                        sizes="40px"
                         className="h-full w-full object-cover"
                       />
                     </div>

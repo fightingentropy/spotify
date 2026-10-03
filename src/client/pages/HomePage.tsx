@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { Link } from "react-router";
-import { Pause, Play } from "lucide-react";
+import { ArrowUpRight, Music2, Pause, Play } from "lucide-react";
 import { AuthButtons } from "@/components/AuthButtons";
 import { CoverImage } from "@/components/CoverImage";
 import { HomeRow } from "@/components/HomeRow";
+import { PageHeader, PageLayout } from "@/components/PageLayout";
 import { PageError } from "@/components/PageError";
 import {
   useApiData,
@@ -20,6 +21,7 @@ import { useLikesStore } from "@/store/likes";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { cn } from "@/lib/utils";
 import type { PlayerSong } from "@/types/player";
+import "./home.css";
 
 type HomeSong = PlayerSong & {
   album?: string | null;
@@ -32,6 +34,41 @@ function greetingForNow(): string {
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
   return "Good evening";
+}
+
+function HomeLoadingRow({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="home-row" aria-hidden="true">
+      <div className="home-row-heading">
+        <div>
+          <div className="wf-skeleton h-[26px] w-40 rounded-md" />
+        </div>
+      </div>
+      <div className="home-rail">
+        {Array.from({ length: compact ? 4 : 7 }, (_, index) => (
+          compact ? (
+            <div key={index} className="home-recent-card pointer-events-none">
+              <div className="wf-skeleton h-[68px] w-[68px] shrink-0 rounded" />
+              <div className="flex-1 space-y-2">
+                <div className="wf-skeleton h-3.5 w-3/4 rounded" />
+                <div className="wf-skeleton h-3 w-1/2 rounded" />
+              </div>
+            </div>
+          ) : (
+            <div key={index} className="home-art-card pointer-events-none">
+              <div className="wf-skeleton aspect-square rounded" />
+              <div className="h-13 pt-3">
+                <div className="wf-skeleton h-3.5 w-4/5 rounded" />
+                <div className="wf-skeleton mt-1.5 h-3.5 w-3/5 rounded" />
+              </div>
+              <div className="wf-skeleton mt-1.5 h-3 w-3/5 rounded" />
+              <div className="wf-skeleton mt-2.5 mb-1 h-2.5 w-2/5 rounded" />
+            </div>
+          )
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function HomePage() {
@@ -54,7 +91,12 @@ export default function HomePage() {
   useEffect(() => {
     if (!loading && !error) mergeInitialLikes(homeData.likedSongIds);
   }, [mergeInitialLikes, homeData.likedSongIds, loading, error]);
-  const { data: statsData } = useApiData<StatsHomePayload>(
+  const {
+    data: statsData,
+    loading: statsLoading,
+    error: statsError,
+    retry: retryStats,
+  } = useApiData<StatsHomePayload>(
     withAccountScope("/api/stats/home", user?.id ?? status),
     {
       recentlyPlayed: [],
@@ -69,7 +111,12 @@ export default function HomePage() {
   // Discover Mix), not individual tracks — same as the iOS app. Each card opens
   // its playlist detail page. Scoped by account: the mix card is only returned
   // for signed-in callers.
-  const { data: discoverData } = useApiData<DiscoverPlaylistsPayload>(
+  const {
+    data: discoverData,
+    loading: discoverLoading,
+    error: discoverError,
+    retry: retryDiscover,
+  } = useApiData<DiscoverPlaylistsPayload>(
     withAccountScope("/api/discover/playlists", user?.id ?? status),
     { playlists: [] },
     {
@@ -84,8 +131,6 @@ export default function HomePage() {
   const pause = usePlayerStore((state) => state.pause);
   const currentSongId = usePlayerStore((state) => state.currentSong?.id ?? null);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
-
-  const resolveHomeSong = useCallback((song: HomeSong): HomeSong => song, []);
 
   const warmSongSoon = useCallback((song: HomeSong) => {
     warmPlaybackSong(song, true);
@@ -115,10 +160,9 @@ export default function HomePage() {
     setQueue(songs, index);
   };
 
-  const renderScrollerTile = (songs: HomeSong[], index: number, subtitle?: string) => {
+  const renderScrollerTile = (songs: HomeSong[], index: number, compact = false, subtitle?: string) => {
     const song = songs[index];
     if (!song) return null;
-    const displaySong = resolveHomeSong(song);
     const active = currentSongId === song.id;
 
     const playing = active && isPlaying;
@@ -126,55 +170,56 @@ export default function HomePage() {
       <button
         key={song.id}
         type="button"
-        aria-label={`${playing ? "Pause" : "Play"} ${displaySong.title}`}
+        aria-label={`${playing ? "Pause" : "Play"} ${song.title}${song.artist ? ` by ${song.artist}` : ""}`}
         aria-pressed={playing}
-        onPointerEnter={() => warmSongSoon(displaySong)}
-        onFocus={() => warmSongSoon(displaySong)}
+        onPointerEnter={() => warmSongSoon(song)}
+        onFocus={() => warmSongSoon(song)}
         onClick={() => handlePlayScrollerSong(songs, index)}
         className={cn(
-          "wf-song-card group w-[164px] shrink-0 lg:w-[190px] cursor-pointer touch-manipulation text-left",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+          "group touch-manipulation text-left",
+          compact ? "home-recent-card" : "home-art-card",
+          active && "home-card-active",
         )}
       >
         <div
           className={cn(
-            "relative aspect-square overflow-hidden rounded-xl bg-white/[0.045]",
-            active && "ring-1 ring-inset ring-white/30",
+            "home-card-art",
+            compact ? "home-recent-art" : "aspect-square",
           )}
         >
           <CoverImage
-            src={displaySong.imageUrl}
-            networkSrc={displaySong.networkImageUrl}
+            src={song.imageUrl}
+            networkSrc={song.networkImageUrl}
             alt=""
             fill
-            sizes="(min-width: 1024px) 190px, 164px"
-            className="wf-song-cover object-cover"
-            loading={index < 6 ? "eager" : "lazy"}
+            sizes={compact ? "68px" : "(min-width: 1440px) 172px, (min-width: 640px) 160px, 148px"}
+            className="object-cover"
+            loading={compact && index < 2 ? "eager" : "lazy"}
           />
           <span
             aria-hidden
             className={cn(
-              "absolute bottom-2.5 right-2.5 grid h-[42px] w-[42px] place-items-center rounded-full border border-white/25 bg-black/55 text-white shadow-lg backdrop-blur-xl transition",
-              "wf-control-button",
-              active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+              "home-play-control",
+              compact && "home-play-control-compact",
+              active && "home-play-control-active",
             )}
           >
             {playing ? (
-              <Pause size={21} fill="currentColor" />
+              <Pause size={compact ? 17 : 19} fill="currentColor" />
             ) : (
-              <Play size={21} fill="currentColor" className="translate-x-0.5" />
+              <Play size={compact ? 17 : 19} fill="currentColor" className="translate-x-px" />
             )}
           </span>
         </div>
-        <div className="min-h-12 min-w-0 px-px pt-[9px]">
-          <div className="line-clamp-2 text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
-            {displaySong.title}
+        <div className={cn("home-track-details", !compact && "pt-3")}>
+          <div className="home-card-title">
+            {song.title}
           </div>
-          <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.62]">
-            {displaySong.artist || "Unknown Artist"}
+          <div className="home-card-artist">
+            {song.artist || "Unknown Artist"}
           </div>
           {subtitle ? (
-            <div className="mt-0.5 truncate text-[12.5px] leading-[17px] text-white/40">{subtitle}</div>
+            <div className="home-card-note">{subtitle}</div>
           ) : null}
         </div>
       </button>
@@ -185,103 +230,87 @@ export default function HomePage() {
     <Link
       key={playlist.id}
       to={`/playlist/${playlist.id}`}
-      className="wf-song-card group w-[164px] shrink-0 lg:w-[190px] cursor-pointer touch-manipulation"
+      className="home-art-card group touch-manipulation"
     >
-      <div className="relative aspect-square overflow-hidden rounded-xl bg-white/[0.045]">
+      <div className="home-card-art aspect-square">
         <CoverImage
           src={playlist.imageUrl || undefined}
-          alt={playlist.name}
+          alt=""
           fill
-          sizes="(min-width: 1024px) 190px, 164px"
-          className="wf-song-cover object-cover"
+          sizes="(min-width: 1440px) 172px, (min-width: 640px) 160px, 148px"
+          className="object-cover"
           loading="lazy"
         />
+        <span className="home-play-control" aria-hidden="true"><ArrowUpRight size={21} /></span>
       </div>
-      <div className="min-h-12 min-w-0 px-px pt-[9px]">
-        <div className="line-clamp-2 text-[15.5px] font-bold leading-[21px] tracking-[-0.15px] text-[#f2f2f2]">
+      <div className="home-track-details pt-3">
+        <div className="home-card-title">
           {playlist.name}
         </div>
-        <div className="mt-px truncate text-[13.5px] leading-[19px] text-white/[0.58]">
+        <div className="home-card-artist">
           {playlist.songsCount > 0 ? `Playlist • ${playlist.songsCount} songs` : "Playlist"}
         </div>
       </div>
     </Link>
   );
 
-  if (loading || status === "loading") {
-    return (
-      <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
-        <div className="opacity-70">Loading library...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-[calc(100vh-3.5rem)] bg-background px-4 py-8 text-white sm:px-6 lg:px-12">
-        <PageError title="Your library couldn’t load" message={error} onRetry={retry} retryLabel="Retry" />
-      </div>
-    );
-  }
+  const historyPending = status === "loading" || statsLoading;
+  const discoverPending = status === "loading" || discoverLoading;
+  const hasHistory = recentlyPlayedSongs.length > 0 || mostPlayedSongs.length > 0;
 
   return (
-    <div className="relative min-h-[calc(100vh-3.5rem)] overflow-x-hidden bg-background text-white">
-      <div className="relative px-4 pb-10 pt-3.5 sm:px-6 lg:px-6 lg:pt-8 xl:px-8 2xl:px-10">
-        <div className="mb-7 flex items-center gap-3.5">
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold leading-[18px] text-white/60">
-              {user?.name?.trim()
-                ? `${greetingForNow()}, ${user.name.trim().split(/\s+/)[0]}`
-                : greetingForNow()}
-            </p>
-            <h1 className="mt-1 text-[34px] font-bold leading-[39px] tracking-[-0.9px] text-[#f2f2f2]">
-              Listen now
-            </h1>
-          </div>
-          <div className="lg:hidden">
-            <AuthButtons compact />
-          </div>
-        </div>
+    <PageLayout className="home-page">
+        <PageHeader
+          title="Listen now"
+          description={user?.name?.trim()
+            ? `${greetingForNow()}, ${user.name.trim().split(/\s+/)[0]}`
+            : greetingForNow()}
+          actions={<div className="lg:hidden"><AuthButtons compact /></div>}
+        />
+
+        {historyPending && !hasHistory ? <p role="status" className="sr-only">Loading your listening history…</p> : null}
+
+        {recentlyPlayedSongs.length > 0 ? (
+          <HomeRow title="Continue listening">
+            {recentlyPlayedSongs.map((_, index) => renderScrollerTile(recentlyPlayedSongs, index, true))}
+          </HomeRow>
+        ) : historyPending ? <HomeLoadingRow compact /> : null}
+
+        {statsData.mostPlayed.length > 0 ? (
+          <HomeRow title="Most played">
+            {statsData.mostPlayed.map((entry, index) =>
+              renderScrollerTile(
+                mostPlayedSongs,
+                index,
+                false,
+                entry.playCount > 0
+                  ? `${entry.playCount} ${entry.playCount === 1 ? "play" : "plays"}`
+                  : undefined,
+              ),
+            )}
+          </HomeRow>
+        ) : historyPending ? <HomeLoadingRow /> : null}
+
+        {statsError ? <div className="mb-6"><PageError compact message={statsError} onRetry={retryStats} retryLabel="Retry listening history" /></div> : null}
 
         {discoverPlaylists.length > 0 ? (
           <HomeRow title="Discover">
             {discoverPlaylists.map((playlist) => renderDiscoverPlaylistTile(playlist))}
           </HomeRow>
-        ) : null}
+        ) : discoverPending && !historyPending ? <HomeLoadingRow /> : null}
 
-        {recentlyPlayedSongs.length > 0 ? (
-          <HomeRow title="Continue listening">
-            {recentlyPlayedSongs.map((_, index) => renderScrollerTile(recentlyPlayedSongs, index))}
-          </HomeRow>
-        ) : null}
+        {discoverError ? <div className="mb-6"><PageError compact message={discoverError} onRetry={retryDiscover} retryLabel="Retry Discover" /></div> : null}
 
-        {statsData.mostPlayed.length > 0 ? (
-          <HomeRow title="Most played">
-              {statsData.mostPlayed.map((entry, index) =>
-                renderScrollerTile(
-                  mostPlayedSongs,
-                  index,
-                  entry.playCount > 0
-                    ? `${entry.playCount} ${entry.playCount === 1 ? "play" : "plays"}`
-                    : undefined,
-                ),
-              )}
-          </HomeRow>
-        ) : null}
+        {error ? <div className="mb-6"><PageError compact message={error} onRetry={retry} retryLabel="Retry library sync" /></div> : null}
 
-        {discoverPlaylists.length === 0 &&
-        recentlyPlayedSongs.length === 0 &&
-        statsData.mostPlayed.length === 0 ? (
-          <div className="mx-auto mt-9 max-w-[270px] px-7 py-6 text-center">
-            <h2 className="text-[17px] font-bold text-[#f2f2f2]">Nothing here yet</h2>
-            <p className="mt-1.5 text-sm leading-5 text-white/60">
-              Start playing something and it will appear here.
-            </p>
+        {!historyPending && !discoverPending && !statsError && !discoverError && !hasHistory && discoverPlaylists.length === 0 ? (
+          <div className="wf-empty-state">
+            <div className="mb-4 flex justify-center"><Music2 size={24} /></div>
+            <h2 className="wf-section-title">No listening history yet</h2>
+            <p className="mx-auto mt-2 max-w-sm">Songs you play will appear here.</p>
+            <Link to="/songs" className="wf-button mt-5">Open library <ArrowUpRight size={16} /></Link>
           </div>
         ) : null}
-
-        <div className="h-8 lg:h-20" />
-      </div>
-    </div>
+    </PageLayout>
   );
 }

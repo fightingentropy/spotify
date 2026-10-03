@@ -37,7 +37,7 @@ export function DownloadButton({
   const queueDownloads = useOfflineStore((s) => s.queueDownloads);
   const unpinScope = useOfflineStore((s) => s.unpinScope);
   // Radio is live; a Discover track must be promoted into the library before it can
-  // be downloaded (a placeholder has no audioUrl; a staged copy is lossy/transient).
+  // be downloaded (a placeholder has no audioUrl; a staged copy expires).
   if (isRadioSong(song) || isDiscoverTrack(song)) return null;
 
   const songScope: DownloadScope = scope ?? `song:${song.id}`;

@@ -5,7 +5,7 @@ import type { PlayerSong } from "@/types/player";
 // Just-in-time staging for Discover queues. Tapping a Discover track queues the
 // whole row; the not-yet-staged entries enter as placeholders (empty audioUrl)
 // and this materializes them on demand — the current placeholder so it can play,
-// plus a one-ahead prefetch so linear advances stay gapless. Both audio engines
+// plus upcoming-track prefetch so linear advances stay gapless. Both audio engines
 // idle on a placeholder (never load an empty URL) and reload once
 // replaceStagedSong swaps in the real source.
 //
@@ -13,7 +13,7 @@ import type { PlayerSong } from "@/types/player";
 // plain store subscription that runs engine-side. Two things make the module-global
 // bookkeeping race-safe (the web per-component refs hid these):
 //   1. A request's role (current vs prefetch) is decided at RESOLUTION time from
-//      the LIVE store, not captured at call time — a one-ahead prefetch that catches
+//      the LIVE store, not captured at call time — a prefetch that catches
 //      up to become the current track before it resolves is then driven through the
 //      same retry/skip path as any current track, so the queue can never hang on it.
 //   2. The transient failure state is reset on the store's queueToken (bumped only
@@ -52,8 +52,8 @@ function stage(song: PlayerSong, intent: "current" | "prefetch"): void {
   // prefetchFailed after the new-queue reset cleared it.
   const epoch = usePlayerStore.getState().queueToken;
   // Smart Shuffle recs, YouTube Music mix tracks, AND catalog search results all
-  // preview from YouTube (cheap, resolver-independent); the curated Discover/Top-50
-  // row stays lossless. Rec membership lives in recommendedIds (the placeholder id
+  // preview from YouTube; the curated Discover/Top-50 row tries SpotiFLAC first
+  // and falls back to YouTube. Rec membership lives in recommendedIds (the placeholder id
   // is still current here, before the staged-id swap); a mix track carries its own
   // youtubeVideoId; a catalog result carries song.preview.
   const preview =

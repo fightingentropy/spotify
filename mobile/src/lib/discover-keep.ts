@@ -28,17 +28,9 @@ export async function promoteStagedSong(
   try {
     let current = song;
     let res = await promote(current);
-    // Two reasons a first promote fails and a lossless (re)stage fixes it:
-    //   409 preview_not_lossless — the track was played, so it's staged, but only as
-    //     a lossy YouTube PREVIEW (catalog search / Discover), which the mini won't
-    //     promote into the FLAC library.
-    //   404 staged-track-not-found — the track was never played, so there's no
-    //     .discover entry to promote at all (e.g. liked straight from a list).
-    // Either way, stage it losslessly (resolver → FLAC) once and promote the real
-    // source — this keeps the library FLAC-only while playback stays resolver-free.
-    // (A song you already own short-circuits to 200 before the 409 when it's staged;
-    // a stream-only YouTube-mix track has no lossless source so the retry promote
-    // still fails and the keep aborts cleanly.)
+    // An ordinary preview (409) or missing staging entry (404) needs a library
+    // copy. The Worker tries SpotiFLAC, then YouTube if providers fail. Direct
+    // YouTube tracks can be kept in their original format as well.
     if (res.status === 409 || res.status === 404) {
       const previous = current;
       current = await stageDiscoverSong(song, { preview: false });

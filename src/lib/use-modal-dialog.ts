@@ -22,7 +22,7 @@ export function useModalDialogFocus(
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const raf = requestAnimationFrame(() => {
       const focusable = panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      (focusable[0] ?? panel).focus();
+      (focusable[0] ?? panel).focus({ preventScroll: true });
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -50,7 +50,7 @@ export function useModalDialogFocus(
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onKeyDown);
-      previouslyFocused?.focus?.();
+      previouslyFocused?.focus?.({ preventScroll: true });
     };
   }, [open, enabled, panelRef]);
 }

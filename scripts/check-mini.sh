@@ -9,7 +9,7 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_codex_m4mini}"
 REMOTE_APP="${REMOTE_APP:-/Users/hermes/Developer/spotify}"
 PORT="${PORT:-5174}"
 REMOTE_MUSIC_DIR="${REMOTE_MUSIC_DIR:-/Users/hermes/Music}"
-SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-app}"
+SERVICE_LABEL="${SERVICE_LABEL:-}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://music.streamarena.xyz}"
 WORKER_ORIGIN="${WORKER_ORIGIN:-https://spotify.erlinhoxha.workers.dev}"
 
@@ -53,12 +53,32 @@ remote_output="$(ssh "${SSH_OPTS[@]}" "$MINI_HOST" \
 set -euo pipefail
 
 app="$REMOTE_APP"
+service_label="$SERVICE_LABEL"
+if [[ -z "$service_label" ]]; then
+  # Match the installer: prefer a loaded service over an obsolete plist under
+  # the other label, and keep supporting existing installations after renames.
+  for candidate in xyz.streamarena.spotify-app com.fightingentropy.spotify-app; do
+    if launchctl print "system/$candidate" >/dev/null 2>&1; then
+      service_label="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$service_label" ]]; then
+    for candidate in xyz.streamarena.spotify-app com.fightingentropy.spotify-app; do
+      if [[ -f "/Library/LaunchDaemons/$candidate.plist" ]]; then
+        service_label="$candidate"
+        break
+      fi
+    done
+  fi
+  service_label="${service_label:-xyz.streamarena.spotify-app}"
+fi
 source_status=$(curl -sS -o /tmp/spotify-source.json -w "%{http_code}" --max-time 15 "http://127.0.0.1:$PORT/api/music/source" || true)
 home_status=$(curl -sS -o /tmp/spotify-home.json -w "%{http_code}" --max-time 15 "http://127.0.0.1:$PORT/api/home" || true)
 app_status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "http://127.0.0.1:$PORT/" || true)
 listener=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR == 2 {print $9}')
 pid=$(pgrep -f "spotify-run-server|local-music-server.ts" | head -1 || true)
-launch_output="$(launchctl print "system/$SERVICE_LABEL" 2>/dev/null || true)"
+launch_output="$(launchctl print "system/$service_label" 2>/dev/null || true)"
 launch_pid=$(printf '%s\n' "$launch_output" | awk -F= '/pid =/ {gsub(/[ ";]/, "", $2); print $2; exit}')
 launch_state=$(printf '%s\n' "$launch_output" | awk -F= '/state =/ {gsub(/[ ";]/, "", $2); print $2; exit}')
 audio_files=$(find "$REMOTE_MUSIC_DIR" -type f \( -iname '*.aac' -o -iname '*.aif' -o -iname '*.aiff' -o -iname '*.flac' -o -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.oga' -o -iname '*.ogg' -o -iname '*.opus' -o -iname '*.wav' \) | wc -l | tr -d ' ')
@@ -77,6 +97,7 @@ printf 'home_status=%s\n' "$home_status"
 printf 'app_status=%s\n' "$app_status"
 printf 'listener=%s\n' "${listener:-missing}"
 printf 'pid=%s\n' "${pid:-missing}"
+printf 'service_label=%s\n' "$service_label"
 printf 'launch_pid=%s\n' "${launch_pid:-missing}"
 printf 'launch_state=%s\n' "${launch_state:-missing}"
 printf 'audio_files=%s\n' "$audio_files"
@@ -96,6 +117,7 @@ home_status=$(value_for home_status)
 app_status=$(value_for app_status)
 listener=$(value_for listener)
 pid=$(value_for pid)
+service_label=$(value_for service_label)
 launch_pid=$(value_for launch_pid)
 launch_state=$(value_for launch_state)
 audio_files=$(value_for audio_files)
@@ -113,7 +135,7 @@ elif [[ "$launch_pid" != "missing" ]]; then
 else
   bad "server process missing"
 fi
-[[ "$launch_state" == "running" ]] && pass "launchd state is running" || bad "launchd state is $launch_state"
+[[ "$launch_state" == "running" ]] && pass "launchd service $service_label is running" || bad "launchd service $service_label state is $launch_state"
 [[ "$audio_files" =~ ^[0-9]+$ && "$audio_files" -gt 0 ]] && pass "remote music has $audio_files audio files" || bad "remote music has no audio files yet"
 [[ "$songs_count" =~ ^[0-9]+$ && "$songs_count" -gt 0 ]] && pass "server scanned $songs_count songs" || bad "server scanned $songs_count songs"
 

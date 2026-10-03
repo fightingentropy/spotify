@@ -9,6 +9,7 @@ import { readSpotifyCookie, writeSpotifyCookie } from "@/lib/spotify-cookie";
 import { formatTime } from "@/lib/utils";
 import { resolveSpotifyBatchOnClient } from "@/lib/spotify-batch-client";
 import { formatSpotifyImportErrorMessage } from "@/lib/spotify-import-error";
+import { PageHeader, PageLayout, SectionHeader } from "@/components/PageLayout";
 
 type SpotifyTrack = {
   spotifyId: string;
@@ -407,13 +408,16 @@ export default function UploadPage() {
     };
   }, [showReplaceModal]);
 
-  if (status === "loading") return <div className="max-w-md mx-auto py-16 px-4">Loading...</div>;
+  if (status === "loading") return <PageLayout narrow><PageHeader title="Add music" /><p className="wf-muted" role="status">Loading...</p></PageLayout>;
   if (!user) {
     return (
-      <div className="max-w-md mx-auto py-16 px-4">
-        <p className="mb-4">You must be signed in to upload songs.</p>
-        <Link className="underline" to="/signin">Sign in</Link>
-      </div>
+      <PageLayout narrow>
+        <PageHeader title="Add music" />
+        <div className="wf-empty-state">
+          <p className="wf-muted mb-4">Sign in to add songs to your library.</p>
+          <Link className="wf-button-primary" to="/signin">Sign in</Link>
+        </div>
+      </PageLayout>
     );
   }
 
@@ -955,54 +959,54 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto py-12 px-4">
-      <h1 className="text-2xl font-semibold mb-6">Add a song</h1>
-      <div className="mb-8 inline-flex rounded-2xl border border-white/25 bg-white/[0.02] p-1.5">
-        <button type="button" aria-pressed={mode === "spotify"} onClick={() => { setError(null); setMode("spotify"); }} className={`h-10 px-5 rounded-xl text-sm font-medium transition-colors ${mode === "spotify" ? "bg-foreground text-background" : "text-foreground/80 hover:text-foreground"}`}>
+    <PageLayout narrow>
+      <PageHeader title="Add music" description="Import a Spotify link or upload audio from your device." />
+      <div className="wf-tabs mb-6" role="group" aria-label="Add music method">
+        <button type="button" aria-pressed={mode === "spotify"} data-active={mode === "spotify"} onClick={() => { setError(null); setMode("spotify"); }} className="wf-tab">
           Spotify link
         </button>
-        <button type="button" aria-pressed={mode === "upload"} onClick={() => { setError(null); setMode("upload"); }} className={`h-10 px-5 rounded-xl text-sm font-medium transition-colors ${mode === "upload" ? "bg-foreground text-background" : "text-foreground/80 hover:text-foreground"}`}>
+        <button type="button" aria-pressed={mode === "upload"} data-active={mode === "upload"} onClick={() => { setError(null); setMode("upload"); }} className="wf-tab">
           Upload files
         </button>
       </div>
 
       {mode === "upload" ? (
-        <form onSubmit={onUploadSubmit} className="max-w-2xl rounded-3xl border border-white/20 bg-white/[0.02] p-6 md:p-7 space-y-5">
+        <form onSubmit={onUploadSubmit} className="wf-panel space-y-5 p-5">
           <div className="grid gap-5 md:grid-cols-2">
             <div>
               <label htmlFor="upload-title" className="block text-sm mb-2 text-foreground/80">Title</label>
-              <input id="upload-title" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" required />
+              <input id="upload-title" value={title} onChange={(e) => setTitle(e.target.value)} className="wf-input w-full" required />
             </div>
             <div>
               <label htmlFor="upload-artist" className="block text-sm mb-2 text-foreground/80">Artist</label>
-              <input id="upload-artist" value={artist} onChange={(e) => setArtist(e.target.value)} className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" required />
+              <input id="upload-artist" value={artist} onChange={(e) => setArtist(e.target.value)} className="wf-input w-full" required />
             </div>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <label className="rounded-2xl border border-dashed border-white/30 bg-black/20 p-4 cursor-pointer transition-colors hover:border-yellow-500/60 focus-within:border-yellow-500/60 focus-within:ring-2 focus-within:ring-yellow-500/50">
+            <label className="cursor-pointer rounded-md border border-dashed border-white/20 p-4 transition-colors hover:border-white/40 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-white/60">
               <span className="block text-sm font-medium">Cover image</span>
               <span className="block text-xs text-foreground/60 mt-1">JPG, PNG, WEBP</span>
-              <span className="mt-3 inline-block text-xs px-2.5 py-1 rounded-lg bg-white/10">{image ? image.name : "Choose image file"}</span>
+              <span className="mt-3 block break-words text-sm text-white/80">{image ? image.name : "Choose image file"}</span>
               <input type="file" accept="image/*" aria-label="Cover image file" onChange={(e) => setImage(e.target.files?.[0] ?? null)} className="sr-only" />
             </label>
-            <label className="rounded-2xl border border-dashed border-white/30 bg-black/20 p-4 cursor-pointer transition-colors hover:border-yellow-500/60 focus-within:border-yellow-500/60 focus-within:ring-2 focus-within:ring-yellow-500/50">
+            <label className="cursor-pointer rounded-md border border-dashed border-white/20 p-4 transition-colors hover:border-white/40 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-white/60">
               <span className="block text-sm font-medium">Audio file</span>
               <span className="block text-xs text-foreground/60 mt-1">FLAC, MP3, WAV</span>
-              <span className="mt-3 inline-block text-xs px-2.5 py-1 rounded-lg bg-white/10">{audio ? audio.name : "Choose audio file"}</span>
+              <span className="mt-3 block break-words text-sm text-white/80">{audio ? audio.name : "Choose audio file"}</span>
               <input type="file" accept="audio/*" aria-label="Audio file" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} className="sr-only" />
             </label>
           </div>
-          {error && <div className="text-sm text-red-500">{error}</div>}
-          <button type="submit" disabled={loading} className="h-11 px-5 rounded-2xl bg-yellow-500 text-black font-semibold disabled:opacity-50 inline-flex items-center gap-2">
+          {error && <div role="alert" className="text-sm text-red-300">{error}</div>}
+          <button type="submit" disabled={loading} className="wf-button-primary">
             {loading && <Loader2 size={16} className="animate-spin" />}
-            {loading ? "Uploading..." : "Upload Song"}
+            {loading ? "Uploading..." : "Upload song"}
           </button>
         </form>
       ) : (
         <div className="space-y-5">
           <div className="flex flex-col md:flex-row gap-3">
-            <input aria-label="Spotify URL" value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="flex-1 border border-white/25 rounded-2xl px-4 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50" placeholder="Spotify playlist, album, or Liked Songs URL" />
-            <button type="button" onClick={handleFetchSpotify} disabled={fetchStatus === "loading" || batchStatus === "loading" || !spotifyUrl.trim()} className="h-11 px-5 rounded-2xl bg-yellow-500 text-black font-medium disabled:opacity-50 inline-flex items-center gap-2">
+            <input aria-label="Spotify URL" value={spotifyUrl} onChange={(e) => setSpotifyUrl(e.target.value)} className="wf-input min-w-0 flex-1" placeholder="Spotify playlist, album, or Liked Songs URL" />
+            <button type="button" onClick={handleFetchSpotify} disabled={fetchStatus === "loading" || batchStatus === "loading" || !spotifyUrl.trim()} className="wf-button-primary">
               {fetchStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
               Fetch
             </button>
@@ -1010,16 +1014,16 @@ export default function UploadPage() {
 
           {/* Format and Quality Settings */}
           {(spotifyTrack || batchInfo) && (
-            <div className="rounded-3xl border border-white/20 bg-white/[0.02] p-6 space-y-4">
-              <h3 className="text-lg font-semibold">Download Settings</h3>
+            <div className="wf-panel space-y-4 p-5">
+              <SectionHeader title="Download settings" />
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label htmlFor="upload-output-format" className="block text-sm mb-2 text-foreground/80">Output Format</label>
+                  <label htmlFor="upload-output-format" className="block text-sm mb-2 text-foreground/80">Output format</label>
                   <select
                     id="upload-output-format"
                     value={requestedOutputFormat}
                     disabled
-                    className="w-full border border-white/25 rounded-xl px-3.5 py-2.5 bg-transparent focus:outline-none focus:ring-2 focus:ring-yellow-500/50 disabled:opacity-70"
+                    className="wf-input w-full disabled:opacity-70"
                   >
                     <option value="flac">FLAC (Lossless)</option>
                   </select>
@@ -1030,20 +1034,20 @@ export default function UploadPage() {
 
           {/* Batch Info Display */}
           {batchInfo && (
-            <div className="rounded-3xl border border-white/20 bg-white/[0.02] p-6">
-              <h3 className="text-xl font-semibold mb-4">Batch Download</h3>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
+            <div className="wf-panel p-5">
+              <SectionHeader title="Batch download" />
+              <div className="space-y-3 text-sm">
+                <div className="flex items-start justify-between gap-5">
                   <span className="text-foreground/70">Type:</span>
                   <span className="font-medium capitalize">{batchInfo.type}</span>
                 </div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between gap-5">
                   <span className="text-foreground/70">Title:</span>
-                  <span className="font-medium">{batchInfo.title}</span>
+                  <span className="min-w-0 break-words text-right font-medium">{batchInfo.title}</span>
                 </div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between gap-5">
                   <span className="text-foreground/70">Artist:</span>
-                  <span className="font-medium">{batchInfo.artist}</span>
+                  <span className="min-w-0 break-words text-right font-medium">{batchInfo.artist}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-foreground/70">Tracks:</span>
@@ -1054,24 +1058,24 @@ export default function UploadPage() {
                   <span className="font-medium uppercase">{batchInfo.format}</span>
                 </div>
               </div>
-              <div className="flex gap-3 mt-6">
+              <div className="mt-5 flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={handleBatchDownload}
                   disabled={batchStatus === "loading"}
-                  className="flex-1 h-11 rounded-2xl bg-yellow-500 text-black font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                  className="wf-button-primary max-w-full"
                 >
                   {batchStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                   {batchStatus === "idle" && batchProgress && batchProgress.current > 0
                     ? `Resume batch (${batchInfo.trackCount} tracks)`
-                    : `Download All (${batchInfo.trackCount} tracks)`}
+                    : `Download all (${batchInfo.trackCount} tracks)`}
                   <ActionIcon status={batchStatus} />
                 </button>
                 {batchStatus === "loading" && (
                   <button
                     type="button"
                     onClick={cancelBatchDownload}
-                    className="h-11 px-5 rounded-2xl border border-white/30 font-semibold inline-flex items-center justify-center"
+                    className="wf-button"
                   >
                     Cancel
                   </button>
@@ -1087,9 +1091,9 @@ export default function UploadPage() {
                       {batchProgress.current}/{batchProgress.total}
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
                     <div
-                      className="h-full bg-yellow-500 transition-all duration-300"
+                      className="h-full bg-white/70 transition-[width] duration-300 motion-reduce:transition-none"
                       style={{
                         width: `${batchProgress.total > 0 ? (batchProgress.current / batchProgress.total) * 100 : 0}%`,
                       }}
@@ -1118,36 +1122,36 @@ export default function UploadPage() {
 
           {/* Single Track Display */}
           {spotifyTrack && !batchInfo && (
-            <div className="rounded-3xl border p-5 bg-black/[0.03] dark:bg-white/[0.03]">
-              <div className="flex flex-col lg:flex-row gap-6">
+            <div className="wf-panel p-5">
+              <div className="flex flex-col gap-5 sm:flex-row">
                 <div className="shrink-0">
                   {spotifyTrack.imageUrl ? (
-                    <div className="relative w-56 h-56 rounded-2xl overflow-hidden bg-black/10">
+                    <div className="relative h-40 w-40 overflow-hidden rounded-md bg-white/[0.04]">
                       <img src={spotifyTrack.imageUrl} alt={spotifyTrack.title} className="w-full h-full object-cover" />
-                      <div className="absolute bottom-2 right-2 bg-black/80 text-white text-xs px-2 py-0.5 rounded-lg">{formatDuration(spotifyTrack.durationMs)}</div>
+                      <div className="absolute bottom-2 right-2 rounded bg-black/80 px-1.5 py-0.5 text-xs text-white">{formatDuration(spotifyTrack.durationMs)}</div>
                     </div>
                   ) : (
-                    <div className="w-56 h-56 rounded-2xl bg-black/10 grid place-items-center text-sm opacity-70">No Cover</div>
+                    <div className="grid h-40 w-40 place-items-center rounded-md bg-white/[0.04] text-sm text-white/50">No Cover</div>
                   )}
                 </div>
                 <div className="flex-1 min-w-0 space-y-4">
                   <div>
-                    <h2 className="text-4xl font-bold leading-tight break-words">{spotifyTrack.title}</h2>
-                    <p className="text-2xl text-foreground/70 mt-1">{spotifyTrack.artist}</p>
+                    <h2 className="wf-section-title break-words">{spotifyTrack.title}</h2>
+                    <p className="wf-muted mt-1 text-sm">{spotifyTrack.artist}</p>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-3 break-words text-sm">
                     <div><div className="text-foreground/60">Album</div><div className="font-medium">{spotifyTrack.album || "N/A"}</div></div>
-                    <div><div className="text-foreground/60">Release Date</div><div className="font-medium">{spotifyTrack.releaseDate || "N/A"}</div></div>
-                    <div><div className="text-foreground/60">Total Plays</div><div className="font-medium">{formatPlays(spotifyTrack.totalPlays)}</div></div>
+                    <div><div className="text-foreground/60">Release date</div><div className="font-medium">{spotifyTrack.releaseDate || "N/A"}</div></div>
+                    <div><div className="text-foreground/60">Total plays</div><div className="font-medium">{formatPlays(spotifyTrack.totalPlays)}</div></div>
                   </div>
                   <div className="flex flex-wrap gap-2 items-center">
-                    <button type="button" onClick={handleAddFromSpotify} disabled={downloadStatus === "loading"} className="h-11 flex-1 justify-center rounded-2xl bg-yellow-500 px-5 text-black font-semibold inline-flex items-center gap-2 disabled:opacity-50 sm:flex-none">
+                    <button type="button" onClick={handleAddFromSpotify} disabled={downloadStatus === "loading"} className="wf-button-primary">
                       {downloadStatus === "loading" ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                       Download
                       <ActionIcon status={downloadStatus} />
                     </button>
                     {spotifyTrack.previewUrl && (
-                      <button type="button" onClick={handlePreviewToggle} className="h-11 w-11 rounded-2xl border inline-flex items-center justify-center" aria-label={isPreviewPlaying ? "Stop preview" : "Play preview"}>
+                      <button type="button" onClick={handlePreviewToggle} className="wf-icon-button" aria-label={isPreviewPlaying ? "Stop preview" : "Play preview"}>
                         {isPreviewPlaying ? <Pause size={16} /> : <Play size={16} />}
                       </button>
                     )}
@@ -1164,9 +1168,9 @@ export default function UploadPage() {
                               : ""}
                         </span>
                       </div>
-                      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
                         <div
-                          className={`h-full bg-yellow-500 transition-all duration-300 ${importIsDeterminate(importProgress) ? "" : "animate-pulse"}`}
+                          className={`h-full bg-white/70 transition-[width] duration-300 motion-reduce:transition-none ${importIsDeterminate(importProgress) ? "" : "animate-pulse"}`}
                           style={{ width: `${importBarPercent(importProgress)}%` }}
                         />
                       </div>
@@ -1188,16 +1192,16 @@ export default function UploadPage() {
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="replace-song-title"
-                className="w-full max-w-md rounded-2xl border border-white/20 bg-zinc-950 p-5 space-y-4"
+                className="wf-panel w-full max-w-md space-y-4 p-5"
                 onClick={(event) => event.stopPropagation()}
               >
                 <div>
-                  <h3 id="replace-song-title" className="text-lg font-semibold">Song already exists</h3>
+                  <h3 id="replace-song-title" className="wf-section-title">Song already exists</h3>
                   <p className="text-sm text-zinc-300 mt-1">{replaceModalMessage || "This song is already in your library."}</p>
                 </div>
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={closeReplaceModal} className="h-10 px-4 rounded border border-white/30">Keep Existing</button>
-                  <button type="button" onClick={handleConfirmReplaceSong} className="h-10 px-4 rounded bg-yellow-500 text-black font-medium inline-flex items-center gap-2">Replace Song</button>
+                  <button type="button" onClick={closeReplaceModal} className="wf-button">Keep existing</button>
+                  <button type="button" onClick={handleConfirmReplaceSong} className="wf-button-primary">Replace song</button>
                 </div>
               </div>
             </div>
@@ -1206,13 +1210,13 @@ export default function UploadPage() {
           {error && (
             <div
               role="alert"
-              className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm leading-relaxed text-red-300"
+              className="rounded-md border border-red-400/20 bg-red-400/[0.06] px-4 py-3 text-sm leading-6 text-red-300"
             >
               {formatSpotifyImportErrorMessage(error)}
             </div>
           )}
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }

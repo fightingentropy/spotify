@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { LayoutGrid, Pause, Play, Rows3, Search, Shuffle, X } from "lucide-react";
 import { usePlayerStore } from "@/store/player";
 import { useLikesStore } from "@/store/likes";
+import { songLikeId } from "@spotify/shared/catalog-like";
 import type { PlayerSong } from "@/types/player";
 import { cn } from "@/lib/utils";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
@@ -69,6 +70,58 @@ function parseCssPixels(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Playback changes belong to the controls and the two affected song rows. A
+// play/pause click must not remap an entire (keyboard-accessible) playlist.
+const CollectionPlaybackControls = memo(function CollectionPlaybackControls({ songs }: { songs: PlayerSong[] }) {
+  const currentSongId = usePlayerStore((state) => state.currentSong?.id);
+  const isPlaying = usePlayerStore((state) => state.isPlaying);
+  const shuffle = usePlayerStore((state) => state.shuffle);
+  const songIds = useMemo(() => new Set(songs.map((song) => song.id)), [songs]);
+  const currentSongIsInList = !!currentSongId && songIds.has(currentSongId);
+  const listIsPlaying = currentSongIsInList && isPlaying;
+
+  const handlePlay = () => {
+    if (songs.length === 0) return;
+    const player = usePlayerStore.getState();
+    if (player.currentSong && songIds.has(player.currentSong.id)) {
+      if (player.isPlaying) player.pause();
+      else {
+        requestImmediatePlayback(player.currentSong);
+        player.play();
+      }
+      return;
+    }
+    const startedSong = player.setQueue(songs, 0, { respectShuffle: true });
+    requestImmediatePlayback(startedSong);
+  };
+
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        aria-label={listIsPlaying ? "Pause songs" : "Play songs"}
+        title={listIsPlaying ? "Pause songs" : "Play songs"}
+        onClick={handlePlay}
+        disabled={songs.length === 0}
+        className="wf-button-primary w-10 px-0"
+      >
+        {listIsPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="translate-x-0.5" />}
+      </button>
+      <button
+        type="button"
+        aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
+        title={shuffle ? "Disable shuffle" : "Enable shuffle"}
+        onClick={() => usePlayerStore.getState().toggleShuffle()}
+        aria-pressed={shuffle}
+        className={cn("wf-icon-button relative", shuffle && "border-white/40 bg-white/10")}
+      >
+        <Shuffle size={19} />
+        <span className={cn("absolute bottom-1 h-1 w-1 rounded-full bg-white transition-opacity", shuffle ? "opacity-100" : "opacity-0")} />
+      </button>
+    </div>
+  );
+});
+
 export function SongGrid({
   songs,
   variant = "default",
@@ -92,6 +145,7 @@ export function SongGrid({
   );
   const [sortMode, setSortMode] = useState<SongSortMode>("default");
   const [filterQuery, setFilterQuery] = useState("");
+  const deferredFilterQuery = useDeferredValue(filterQuery);
   const filterInputRef = useRef<HTMLInputElement>(null);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [virtualRange, setVirtualRange] = useState({ start: 0, end: 0 });
@@ -104,12 +158,6 @@ export function SongGrid({
   });
   const navigate = useNavigate();
   const setQueue = usePlayerStore((state) => state.setQueue);
-  const currentSong = usePlayerStore((state) => state.currentSong);
-  const isPlaying = usePlayerStore((state) => state.isPlaying);
-  const play = usePlayerStore((state) => state.play);
-  const pause = usePlayerStore((state) => state.pause);
-  const shuffle = usePlayerStore((state) => state.shuffle);
-  const toggleShuffle = usePlayerStore((state) => state.toggleShuffle);
   const mergeInitial = useLikesStore((state) => state.mergeInitial);
   const toggleLike = useLikesStore((state) => state.toggleLike);
   const likedLookup = useLikesStore((state) => state.likedSongIds);
@@ -176,22 +224,16 @@ export function SongGrid({
 
   const collectionSongs = useMemo(() => {
     if (!hideIfUnliked) return sortedDedupedSongs;
-    return sortedDedupedSongs.filter((song) => !!likedMap[song.id]);
+    return sortedDedupedSongs.filter((song) => !!likedMap[songLikeId(song, likedMap)]);
   }, [hideIfUnliked, likedMap, sortedDedupedSongs]);
   const visibleSongs = useMemo(
-    () => filterCollectionSongs(collectionSongs, filterQuery),
-    [collectionSongs, filterQuery],
+    () => filterCollectionSongs(collectionSongs, deferredFilterQuery),
+    [collectionSongs, deferredFilterQuery],
   );
-  const clearFilter = () => {
+  const clearFilter = useCallback(() => {
     setFilterQuery("");
     filterInputRef.current?.focus();
-  };
-
-  const currentSongId = currentSong?.id ?? null;
-  const currentSongIsInList = useMemo(() => {
-    return currentSongId ? visibleSongs.some((song) => song.id === currentSongId) : false;
-  }, [currentSongId, visibleSongs]);
-  const listIsPlaying = currentSongIsInList && isPlaying;
+  }, []);
 
   const visibleSongsRef = useRef<PlayerSong[]>([]);
   useEffect(() => {
@@ -286,6 +328,8 @@ export function SongGrid({
 
     let frameId = 0;
     let resizeObserver: ResizeObserver | null = null;
+    let measurements: Pick<VirtualGridRange, "columns" | "rowHeight" | "rowGap"> | null = null;
+    let measuredWidth = -1;
     const updateRange = () => {
       frameId = 0;
       const containerEl = gridContainerRef.current;
@@ -303,31 +347,38 @@ export function SongGrid({
         return;
       }
 
-      const styles = window.getComputedStyle(measureEl);
-      const columns =
-        styles.gridTemplateColumns
-          .split(/\s+/)
-          .filter((column) => column && column !== "none").length ||
-        VIRTUAL_GRID_FALLBACK_COLUMNS;
-      const columnGap = Math.max(
-        0,
-        parseCssPixels(styles.columnGap) ??
-          parseCssPixels(styles.gap) ??
-          VIRTUAL_GRID_FALLBACK_ROW_GAP,
-      );
-      const rowGap = Math.max(
-        0,
-        parseCssPixels(styles.rowGap) ??
-          parseCssPixels(styles.gap) ??
-          VIRTUAL_GRID_FALLBACK_ROW_GAP,
-      );
-      const measuredCardHeight =
-        measureEl.querySelector<HTMLElement>(".wf-song-card")?.getBoundingClientRect().height ?? 0;
-      const calculatedCardHeight =
-        measureEl.clientWidth > 0
-          ? (measureEl.clientWidth - columnGap * (columns - 1)) / columns
-          : virtualGridFallbackRowHeight;
-      const rowHeight = Math.max(1, measuredCardHeight || calculatedCardHeight);
+      // Width and card geometry change on resize, not on each scroll frame.
+      // Keep only viewport positioning in the scroll hot path.
+      if (!measurements) {
+        const styles = window.getComputedStyle(measureEl);
+        const columns =
+          styles.gridTemplateColumns
+            .split(/\s+/)
+            .filter((column) => column && column !== "none").length ||
+          VIRTUAL_GRID_FALLBACK_COLUMNS;
+        const columnGap = Math.max(
+          0,
+          parseCssPixels(styles.columnGap) ??
+            parseCssPixels(styles.gap) ??
+            VIRTUAL_GRID_FALLBACK_ROW_GAP,
+        );
+        const rowGap = Math.max(
+          0,
+          parseCssPixels(styles.rowGap) ??
+            parseCssPixels(styles.gap) ??
+            VIRTUAL_GRID_FALLBACK_ROW_GAP,
+        );
+        const measuredCardHeight =
+          measureEl.querySelector<HTMLElement>(".wf-song-card")?.getBoundingClientRect().height ?? 0;
+        const calculatedCardHeight =
+          measureEl.clientWidth > 0
+            ? (measureEl.clientWidth - columnGap * (columns - 1)) / columns + 72
+            : virtualGridFallbackRowHeight;
+        const rowHeight = Math.max(1, measuredCardHeight || calculatedCardHeight);
+        measuredWidth = measureEl.getBoundingClientRect().width;
+        measurements = { columns, rowHeight, rowGap };
+      }
+      const { columns, rowHeight, rowGap } = measurements;
       const rowStride = rowHeight + rowGap;
       const totalRows = Math.ceil(visibleSongs.length / columns);
 
@@ -375,14 +426,22 @@ export function SongGrid({
       frameId = window.requestAnimationFrame(updateRange);
     };
 
+    const scheduleMeasurement = () => {
+      measurements = null;
+      scheduleRangeUpdate();
+    };
     const scrollContainer = gridContainerRef.current?.closest(".wf-main") as HTMLElement | null;
     const observedEl = gridMeasureRef.current ?? gridContainerRef.current;
     updateRange();
     scrollContainer?.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
     window.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
-    window.addEventListener("resize", scheduleRangeUpdate);
+    window.addEventListener("resize", scheduleMeasurement);
     if (observedEl && typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(scheduleRangeUpdate);
+      resizeObserver = new ResizeObserver((entries) => {
+        if (entries.some((entry) => Math.abs(entry.contentRect.width - measuredWidth) > 0.5)) {
+          scheduleMeasurement();
+        }
+      });
       resizeObserver.observe(observedEl);
     }
 
@@ -393,30 +452,13 @@ export function SongGrid({
       resizeObserver?.disconnect();
       scrollContainer?.removeEventListener("scroll", scheduleRangeUpdate);
       window.removeEventListener("scroll", scheduleRangeUpdate);
-      window.removeEventListener("resize", scheduleRangeUpdate);
+      window.removeEventListener("resize", scheduleMeasurement);
     };
   }, [enableVirtualGrid, virtualGridFallbackRowHeight, visibleSongs.length]);
 
   const onPlayAt = useCallback((index: number) => {
     setQueue(visibleSongsRef.current, index);
   }, [setQueue]);
-
-  const handlePlayVisibleSongs = useCallback(() => {
-    const songsToPlay = visibleSongsRef.current;
-    if (songsToPlay.length === 0) return;
-
-    if (currentSongIsInList) {
-      if (isPlaying) pause();
-      else {
-        requestImmediatePlayback(currentSong);
-        play();
-      }
-      return;
-    }
-
-    const startedSong = setQueue(songsToPlay, 0, { respectShuffle: true });
-    requestImmediatePlayback(startedSong);
-  }, [currentSong, currentSongIsInList, isPlaying, pause, play, setQueue]);
 
   const handleToggleLike = useCallback(async (songId: string, nextLiked: boolean) => {
     if (!canLike) {
@@ -443,73 +485,154 @@ export function SongGrid({
     Math.floor(virtualGridRange.start / virtualGridRange.columns) *
     (virtualGridRange.rowHeight + virtualGridRange.rowGap);
 
-  const renderSongCard = (song: PlayerSong, index: number) => (
-    <SongCard
-      key={song.id}
-      song={song}
-      songIndex={index}
-      onPlayAt={onPlayAt}
-      liked={!!likedMap[song.id]}
-      likePending={!!pendingLookup[song.id]}
-      canLike={canLike}
-      showLike={showLikeControls}
-      showQueue={showQueueButton}
-      onToggleLike={handleToggleLike}
-      hideIfUnliked={hideIfUnliked}
-      priority={index < 6}
-    />
-  );
+  // Reuse the results tree during the urgent input update. Filtering and the
+  // matching rows can then commit together on React's deferred render.
+  const songContent = useMemo(() => {
+    const renderSongCard = (song: PlayerSong, index: number) => (
+      <SongCard
+        key={song.id}
+        song={song}
+        songIndex={index}
+        onPlayAt={onPlayAt}
+        liked={!!likedMap[songLikeId(song, likedMap)]}
+        likePending={!!pendingLookup[songLikeId(song, pendingLookup)]}
+        canLike={canLike}
+        showLike={showLikeControls}
+        showQueue={showQueueButton}
+        onToggleLike={handleToggleLike}
+        hideIfUnliked={hideIfUnliked}
+        priority={index < 6}
+      />
+    );
+    return visibleSongs.length === 0 ? (
+      <div className="wf-empty-state">
+        <p className="text-base font-semibold">No matching songs</p>
+        <p className="mt-2 text-sm text-white/55">Try a song, artist, or album name.</p>
+        <button type="button" onClick={clearFilter} className="wf-button-primary mt-4">Clear filter</button>
+      </div>
+    ) : viewMode === "grid" ? (
+      enableVirtualGrid ? (
+        <div
+          ref={gridContainerRef}
+          className="relative"
+          style={{ height: `${virtualGridHeight}px` }}
+        >
+          <div
+            ref={gridMeasureRef}
+            className={cn(
+              "absolute left-0 right-0 grid gap-x-4 gap-y-6",
+              playlistPresentation
+                ? "[grid-template-columns:repeat(auto-fill,minmax(150px,190px))]"
+                : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
+            )}
+            style={{ top: `${virtualGridTop}px` }}
+          >
+            {visibleSongs
+              .slice(virtualGridRange.start, virtualGridRange.end)
+              .map((song, offset) => renderSongCard(song, virtualGridRange.start + offset))}
+          </div>
+        </div>
+      ) : (
+        <div
+          ref={gridContainerRef}
+          className={cn(
+            "grid gap-x-4 gap-y-6",
+            playlistPresentation
+              ? "[grid-template-columns:repeat(auto-fill,minmax(150px,190px))]"
+              : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
+          )}
+        >
+          {visibleSongs.map(renderSongCard)}
+        </div>
+      )
+    ) : (
+      <>
+        {playlistPresentation ? (
+          <div
+            aria-hidden
+            className="mb-1 hidden grid-cols-[minmax(14rem,2fr)_minmax(7rem,1fr)_3.5rem_2.25rem] items-center gap-3 border-b border-white/[0.06] px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.8px] text-white/35 sm:grid"
+          >
+            <span className="pl-24">Title</span>
+            <span>Album</span>
+            <span className="text-right">Time</span>
+            <span />
+          </div>
+        ) : null}
+        <div ref={listContainerRef}>
+          {enableVirtualList ? (
+            <div
+              className="relative"
+              style={{ height: `${visibleSongs.length * VIRTUAL_ROW_HEIGHT}px` }}
+            >
+              {visibleSongs.slice(virtualRange.start, virtualRange.end).map((song, offset) => {
+                const index = virtualRange.start + offset;
+                return (
+                  <div
+                    key={song.id}
+                    className="absolute left-0 right-0 pb-2"
+                    style={{ top: `${index * VIRTUAL_ROW_HEIGHT}px` }}
+                  >
+                    <SongListItem
+                      song={song}
+                      songIndex={index}
+                      onPlayAt={onPlayAt}
+                      variant={variant}
+                      liked={!!likedMap[songLikeId(song, likedMap)]}
+                      likePending={!!pendingLookup[songLikeId(song, pendingLookup)]}
+                      canLike={canLike}
+                      showLike={showLikeControls}
+                      showQueue={showQueueButton}
+                      onToggleLike={handleToggleLike}
+                      priority={index < 6}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {visibleSongs.map((song, index) => (
+                <SongListItem
+                  key={song.id}
+                  song={song}
+                  songIndex={index}
+                  onPlayAt={onPlayAt}
+                  variant={variant}
+                  liked={!!likedMap[songLikeId(song, likedMap)]}
+                  likePending={!!pendingLookup[songLikeId(song, pendingLookup)]}
+                  canLike={canLike}
+                  showLike={showLikeControls}
+                  showQueue={showQueueButton}
+                  onToggleLike={handleToggleLike}
+                  priority={index < 6}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </>
+    );
+  }, [
+    canLike, clearFilter, enableVirtualGrid, enableVirtualList, handleToggleLike,
+    hideIfUnliked, likedMap, onPlayAt, pendingLookup, playlistPresentation,
+    showLikeControls, showQueueButton, variant, viewMode, virtualGridHeight,
+    virtualGridRange.end, virtualGridRange.start, virtualGridTop, virtualRange.end,
+    virtualRange.start, visibleSongs,
+  ]);
 
   if (collectionSongs.length === 0) {
-    return <div className="text-sm text-white/60">{emptyLabel ?? "No songs in this collection yet."}</div>;
+    return <div className="wf-empty-state">{emptyLabel ?? "No songs in this collection yet."}</div>;
   }
 
   return (
-    <div className={cn(!preferencesReady && "opacity-0")}>
+    <div className={cn(!preferencesReady && "opacity-0")} aria-busy={filterQuery !== deferredFilterQuery}>
       <div
-        className={cn(
-          "flex w-full flex-wrap items-center gap-3",
-          playlistPresentation ? "mb-5 border-y border-white/[0.08] py-3" : "mb-3",
-        )}
+        className="mb-5 flex w-full flex-wrap items-center gap-3 border-b border-white/[0.08] pb-4"
         role={playlistPresentation ? "group" : undefined}
         aria-label={playlistPresentation ? "Playlist controls" : undefined}
       >
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 flex-wrap items-center gap-3",
-          )}
-        >
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              aria-label={listIsPlaying ? "Pause songs" : "Play songs"}
-              title={listIsPlaying ? "Pause songs" : "Play songs"}
-              onClick={handlePlayVisibleSongs}
-              disabled={visibleSongs.length === 0}
-              className="wf-control-button grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-black shadow-[0_8px_18px_rgba(0,0,0,0.22)] transition hover:bg-white/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {listIsPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="translate-x-0.5" />}
-            </button>
-            <button
-              type="button"
-              aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
-              title={shuffle ? "Disable shuffle" : "Enable shuffle"}
-              onClick={toggleShuffle}
-              className={cn(
-                "relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/[0.10] bg-white/[0.045] text-white/70 transition hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
-                "wf-control-button",
-                shuffle && "text-white",
-              )}
-            >
-              <Shuffle size={19} />
-              <span
-                className={cn(
-                  "absolute bottom-1 h-1 w-1 rounded-full bg-white transition-opacity",
-                  shuffle ? "opacity-100" : "opacity-0",
-                )}
-              />
-            </button>
-          </div>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+          <CollectionPlaybackControls songs={visibleSongs} />
           <div className="relative min-w-[12rem] flex-1 sm:max-w-sm">
             <Search aria-hidden size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/45" />
             <input
@@ -527,7 +650,7 @@ export function SongGrid({
               }}
               aria-label={playlistPresentation ? "Find in this playlist" : "Find in these songs"}
               placeholder={playlistPresentation ? "Find in this playlist" : "Find in these songs"}
-              className="h-10 w-full rounded-lg border border-white/10 bg-white/[0.035] pl-9 pr-9 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/30 focus-visible:ring-2 focus-visible:ring-white/20 [&::-webkit-search-cancel-button]:appearance-none"
+              className="wf-input px-9 [&::-webkit-search-cancel-button]:appearance-none"
             />
             {filterQuery ? (
               <button type="button" onClick={clearFilter} aria-label="Clear filter" className="absolute right-1 top-1 grid h-8 w-8 place-items-center rounded-md text-white/55 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60">
@@ -539,10 +662,7 @@ export function SongGrid({
             <select
               value={sortMode}
               onChange={(event) => setNextSortMode(event.target.value as SongSortMode)}
-              className={cn(
-                "h-10 min-w-0 flex-1 rounded-lg border border-black/10 bg-black/5 px-3 text-sm dark:border-white/10 dark:bg-white/5 sm:flex-none",
-                "sm:w-48",
-              )}
+              className="wf-input w-auto flex-1 sm:w-48 sm:flex-none"
               aria-label="Sort songs"
               title="Sort songs"
             >
@@ -550,15 +670,11 @@ export function SongGrid({
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
-            <div className="inline-flex h-10 shrink-0 items-center rounded-lg border border-black/10 bg-black/5 p-1 dark:border-white/10 dark:bg-white/5">
+            <div className="wf-tabs shrink-0">
               <button
                 type="button"
                 onClick={() => setNextViewMode("grid")}
-                className={cn(
-                  "inline-flex h-8 w-9 items-center justify-center gap-2 rounded-md text-sm transition sm:w-auto sm:px-3",
-                  "wf-control-button",
-                  viewMode === "grid" && "bg-black/10 font-medium dark:bg-white/10",
-                )}
+                className="wf-tab inline-flex items-center gap-2"
                 aria-pressed={viewMode === "grid"}
                 title="Grid view"
               >
@@ -568,11 +684,7 @@ export function SongGrid({
               <button
                 type="button"
                 onClick={() => setNextViewMode("list")}
-                className={cn(
-                  "inline-flex h-8 w-9 items-center justify-center gap-2 rounded-md text-sm transition sm:w-auto sm:px-3",
-                  "wf-control-button",
-                  viewMode === "list" && "bg-black/10 font-medium dark:bg-white/10",
-                )}
+                className="wf-tab inline-flex items-center gap-2"
                 aria-pressed={viewMode === "list"}
                 title="List view"
               >
@@ -590,114 +702,7 @@ export function SongGrid({
         </p>
       ) : null}
 
-      {visibleSongs.length === 0 ? (
-        <div className="rounded-xl border border-white/[0.07] px-5 py-10 text-center">
-          <p className="text-base font-semibold">No matching songs</p>
-          <p className="mt-2 text-sm text-white/55">Try a song, artist, or album name.</p>
-          <button type="button" onClick={clearFilter} className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black">Clear filter</button>
-        </div>
-      ) : viewMode === "grid" ? (
-        enableVirtualGrid ? (
-          <div
-            ref={gridContainerRef}
-            className="relative"
-            style={{ height: `${virtualGridHeight}px` }}
-          >
-            <div
-              ref={gridMeasureRef}
-              className={cn(
-                "absolute left-0 right-0 grid gap-x-4 gap-y-6",
-                playlistPresentation
-                  ? "[grid-template-columns:repeat(auto-fill,minmax(150px,190px))]"
-                  : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
-              )}
-              style={{ top: `${virtualGridTop}px` }}
-            >
-              {visibleSongs
-                .slice(virtualGridRange.start, virtualGridRange.end)
-                .map((song, offset) => renderSongCard(song, virtualGridRange.start + offset))}
-            </div>
-          </div>
-        ) : (
-          <div
-            ref={gridContainerRef}
-            className={cn(
-              "grid gap-x-4 gap-y-6",
-              playlistPresentation
-                ? "[grid-template-columns:repeat(auto-fill,minmax(150px,190px))]"
-                : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
-            )}
-          >
-            {visibleSongs.map(renderSongCard)}
-          </div>
-        )
-      ) : (
-        <>
-          {playlistPresentation ? (
-            <div
-              aria-hidden
-              className="mb-1 hidden grid-cols-[minmax(14rem,2fr)_minmax(7rem,1fr)_3.5rem_2.25rem] items-center gap-3 border-b border-white/[0.06] px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.8px] text-white/35 sm:grid"
-            >
-              <span className="pl-24">Title</span>
-              <span>Album</span>
-              <span className="text-right">Time</span>
-              <span />
-            </div>
-          ) : null}
-          <div ref={listContainerRef}>
-            {enableVirtualList ? (
-              <div
-                className="relative"
-                style={{ height: `${visibleSongs.length * VIRTUAL_ROW_HEIGHT}px` }}
-              >
-                {visibleSongs.slice(virtualRange.start, virtualRange.end).map((song, offset) => {
-                  const index = virtualRange.start + offset;
-                  return (
-                    <div
-                      key={song.id}
-                      className="absolute left-0 right-0 pb-2"
-                      style={{ top: `${index * VIRTUAL_ROW_HEIGHT}px` }}
-                    >
-                      <SongListItem
-                        song={song}
-                        songIndex={index}
-                        onPlayAt={onPlayAt}
-                        variant={variant}
-                        liked={!!likedMap[song.id]}
-                        likePending={!!pendingLookup[song.id]}
-                        canLike={canLike}
-                        showLike={showLikeControls}
-                        showQueue={showQueueButton}
-                        onToggleLike={handleToggleLike}
-                        priority={index < 6}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {visibleSongs.map((song, index) => (
-                  <SongListItem
-                    key={song.id}
-                    song={song}
-                    songIndex={index}
-                    onPlayAt={onPlayAt}
-                    variant={variant}
-                    liked={!!likedMap[song.id]}
-                    likePending={!!pendingLookup[song.id]}
-                    canLike={canLike}
-                    showLike={showLikeControls}
-                    showQueue={showQueueButton}
-                    onToggleLike={handleToggleLike}
-                    priority={index < 6}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </>
-      )}
+      {songContent}
     </div>
   );
 }

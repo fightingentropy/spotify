@@ -149,10 +149,10 @@ export default function MobileNav() {
             aria-labelledby="mobile-create-title"
             aria-describedby="mobile-create-description"
             tabIndex={-1}
-            className="absolute inset-x-0 bottom-0 rounded-t-[28px] border-t border-white/[0.1] bg-[#0c0c0d] px-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-2 text-white shadow-2xl"
+            className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-white/[0.1] bg-[#1a1a1a] px-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-2 text-white shadow-2xl"
           >
           <div aria-hidden className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/[0.28]" />
-          <h2 id="mobile-create-title" className="text-xl font-semibold tracking-[-0.3px]">
+          <h2 id="mobile-create-title" className="wf-section-title">
             Create
           </h2>
           <p id="mobile-create-description" className="mt-1 text-sm text-white/[0.6]">
@@ -171,7 +171,7 @@ export default function MobileNav() {
               maxLength={120}
               autoComplete="off"
               disabled={creating}
-              className="mt-2 h-12 w-full rounded-xl border border-white/[0.1] bg-white/[0.08] px-4 text-base text-white outline-none placeholder:text-white/[0.42] focus:border-white/[0.32] focus:ring-2 focus:ring-white/[0.12] disabled:opacity-60"
+              className="wf-input mt-2 disabled:opacity-60"
             />
             {createError ? (
               <p role="alert" className="mt-2 text-sm text-red-300">
@@ -183,14 +183,14 @@ export default function MobileNav() {
                 type="button"
                 onClick={closeCreateSheet}
                 disabled={creating}
-                className="wf-control-button min-h-11 rounded-full px-5 text-sm font-semibold text-white/[0.68] disabled:opacity-50"
+                className="wf-button"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={creating || !playlistName.trim()}
-                className="wf-control-button min-h-11 rounded-full bg-white px-6 text-sm font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
+                className="wf-button-primary"
               >
                 {creating ? "Creating..." : "Create playlist"}
               </button>

@@ -67,13 +67,15 @@ export function useLyrics(
     const safeLyricsUrl = lyricsUrl;
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadLyrics() {
+      loadedLyricsKeyRef.current = null;
       setLyricsState({ status: "loading", text: "", parsed: null });
       try {
         // Lyrics files are served from /api/files with an immutable cache
         // header, so the browser HTTP cache is the right layer to rely on.
-        const response = await fetch(safeLyricsUrl);
+        const response = await fetch(safeLyricsUrl, { signal: controller.signal });
         // WKWebView's scheme handler reports local offline files as status 0.
         if (!response.ok && response.status !== 0) {
           throw new Error("Lyrics unavailable");
@@ -93,6 +95,7 @@ export function useLyrics(
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [enabled, songId, lyricsUrl]);
 

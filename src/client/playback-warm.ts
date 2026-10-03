@@ -1,10 +1,10 @@
 "use client";
 
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
+import { artworkVariantUrl } from "@/lib/artwork-url";
 import type { PlayerSong } from "@/types/player";
 import { getUpcomingPlaybackIndices, type UpcomingPlaybackState } from "@/store/player";
 
-const PLAYBACK_CACHE = "spotify-playback-v1";
 const PLAYBACK_WARM_BYTES = 512 * 1024;
 const PLAYBACK_WARM_TIMEOUT_MS = 4_000;
 const PLAYBACK_WARM_DEDUPE_MS = 2 * 60 * 1_000;
@@ -71,11 +71,13 @@ function sweepStalePlaybackSeen(timestamp: number): void {
   }
 }
 
-async function warmPlaybackUrl(url: string): Promise<boolean> {
+async function warmPlaybackUrl(url: string, signal?: AbortSignal): Promise<boolean> {
   if (typeof window === "undefined") return false;
   if (!sameOriginCacheableUrl(url)) return false;
-  if (shouldSkipSpeculativeMediaFetch()) return false;
+  if (signal?.aborted || shouldSkipSpeculativeMediaFetch()) return false;
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener("abort", cancel, { once: true });
   const timeout = window.setTimeout(() => controller.abort(), PLAYBACK_WARM_TIMEOUT_MS);
   try {
     const response = await fetch(resolveUrl(url), {
@@ -90,24 +92,28 @@ async function warmPlaybackUrl(url: string): Promise<boolean> {
     notePlaybackNetworkSuccess();
     return response.ok;
   } catch {
-    notePlaybackNetworkFailure();
+    // Pausing or changing the queue cancels speculation; it is not evidence of
+    // a poor connection and must not suppress a subsequent explicit play.
+    if (!signal?.aborted) notePlaybackNetworkFailure();
     return false;
   } finally {
     window.clearTimeout(timeout);
+    signal?.removeEventListener("abort", cancel);
   }
 }
 
-async function cacheSidecarUrl(url: string): Promise<void> {
-  if (typeof caches === "undefined") return;
+async function cacheSidecarUrl(url: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted || shouldSkipSpeculativeMediaFetch()) return;
   if (!sameOriginCacheableUrl(url)) return;
-  const absolute = resolveUrl(url);
-  const cache = await caches.open(PLAYBACK_CACHE);
-  if (await cache.match(absolute)) return;
-  const response = await fetch(absolute, {
+  // The app no longer has a service worker that reads CacheStorage. Warming the
+  // normal HTTP cache lets <img> and lyrics fetches reuse these exact URLs.
+  const response = await fetch(resolveUrl(url), {
     credentials: "include",
-    cache: "reload",
+    cache: "force-cache",
+    signal,
   });
-  if (response.ok) await cache.put(absolute, response);
+  if (response.ok) await response.arrayBuffer();
+  else await response.body?.cancel();
 }
 
 async function pumpWarmPlaybackQueue(): Promise<void> {
@@ -167,8 +173,9 @@ export async function prefetchUpcomingPlayback(
   // (redo stack + shuffle pool) instead of the linear array neighbors. Defaults to
   // linear order for callers that don't track shuffle.
   state?: UpcomingPlaybackState,
+  signal?: AbortSignal,
 ): Promise<void> {
-  if (shouldSkipSpeculativeMediaFetch()) return;
+  if (signal?.aborted || shouldSkipSpeculativeMediaFetch()) return;
   if (!Number.isInteger(currentIndex) || currentIndex < 0) return;
   const upcoming = getUpcomingPlaybackIndices(
     queue.length,
@@ -183,10 +190,13 @@ export async function prefetchUpcomingPlayback(
     upcoming.map((song) => song.audioUrl),
   ).filter(sameOriginCacheableUrl);
   const sidecarUrls = uniqueStrings(
-    upcoming.flatMap((song) => [song.imageUrl, song.lyricsUrl]),
+    // Match the compact player/queue artwork, including high-density screens.
+    // The expanded player can request its larger responsive variant on demand.
+    upcoming.flatMap((song) => [artworkVariantUrl(song.imageUrl, 128) ?? song.imageUrl, song.lyricsUrl]),
   ).filter(sameOriginCacheableUrl);
 
   for (const url of audioUrls) {
+    if (signal?.aborted || shouldSkipSpeculativeMediaFetch()) return;
     // Route prefetch through the same dedupe set as warmPlaybackSong so a URL
     // already warmed (or warmed recently) isn't refetched on every queue-identity
     // change.
@@ -198,8 +208,8 @@ export async function prefetchUpcomingPlayback(
     // Mark seen up front to dedupe concurrent passes, but un-mark on failure so a
     // warm that cached nothing isn't suppressed for the full dedupe window.
     warmPlaybackSeen.set(resolved, timestamp);
-    const warmed = await warmPlaybackUrl(url);
+    const warmed = await warmPlaybackUrl(url, signal);
     if (!warmed) warmPlaybackSeen.delete(resolved);
   }
-  await Promise.all(sidecarUrls.map((url) => cacheSidecarUrl(url).catch(() => undefined)));
+  await Promise.all(sidecarUrls.map((url) => cacheSidecarUrl(url, signal).catch(() => undefined)));
 }

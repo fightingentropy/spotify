@@ -4,10 +4,8 @@ import { storage } from "@/lib/storage";
 import type { PlayerSong } from "@/types/player";
 import { discoverIdentity } from "@spotify/shared/playback-source";
 
-// Cross-device resume. Ported from src/lib/playback-state.ts +
-// src/client/playback-state.ts. localStorage → MMKV; fetch → apiFetch; the
-// online-pending-sync queue is simplified (we attempt server writes directly and
-// fall back to the local snapshot). Last-write-wins on updatedAt.
+// Cross-device resume backed by MMKV and the playback-state API. Server writes
+// fall back to the local snapshot; updatedAt determines which snapshot wins.
 
 export const PLAYBACK_STATE_VERSION = 1;
 const PLAYBACK_STATE_STORAGE_KEY = "spotify_player_state";

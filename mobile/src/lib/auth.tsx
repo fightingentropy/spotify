@@ -15,12 +15,9 @@ import { defaultLocalOwnerImage } from "@spotify/shared/local-owner";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 
-// Ported from src/client/auth.tsx. Logic preserved (auth generation guard, cached
-// user, session refresh with a 2.5s timeout, forced-logout on 401). Changes:
-// localStorage → MMKV storage; fetch → apiFetch; the LAN/localhost auto-trust,
-// serviceWorker/Cache-API profile-image warming, navigator.onLine, and Capacitor
-// multipart base64 workaround are all dropped (§9). The native cookie store keeps
-// the session across launches, so no token persistence is needed here.
+// Account-scoped auth with a generation guard, cached user, bounded session
+// refresh, and forced logout on 401. The native cookie store retains sessions;
+// MMKV stores the last user snapshot without persisting credentials here.
 
 // An image picked via expo-image-picker (uri + name + mime), for multipart upload.
 export type ProfileImageAsset = { uri: string; name: string; type: string };
@@ -330,7 +327,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateProfileImage = useCallback(async (asset: ProfileImageAsset) => {
     const generation = authGenerationRef.current;
     // RN multipart: FormData accepts a { uri, name, type } file part natively.
-    // (The web app's Capacitor base64-JSON workaround is dropped — §9.)
     const form = new FormData();
     form.append("image", {
       uri: asset.uri,

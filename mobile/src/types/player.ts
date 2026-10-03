@@ -7,7 +7,7 @@ export type PlayerSong = {
   // Set by offline resolution when imageUrl is swapped for a device-local file:
   // the original remote cover URL, used as a render fallback if the local copy
   // is corrupt or missing — and, crucially, handed to the lock-screen now-playing
-  // center, which cannot read file:// covers (see §11). Never persisted to
+  // center, which cannot read file:// covers. Never persisted to
   // play-event snapshots.
   networkImageUrl?: string;
   audioUrl: string;
