@@ -2,6 +2,8 @@ import { ApiError } from "./http";
 import { toNumberValue, toStringValue } from "./values";
 
 export type ActionPayload = {
+  lyricsPreferences?: unknown;
+  durationMs?: unknown;
   action?: unknown;
   spotifyUrl?: unknown;
   region?: unknown;
@@ -25,10 +27,14 @@ export type BatchDownloadPayload = {
 };
 
 export type SongPayload = {
+  downloadPreferences?: unknown;
   mode?: unknown;
   // Discovery playback goes directly to YouTube. Library saves first attempt
   // the lossless providers, then fall back to a permanent YouTube download.
   preview?: unknown;
+  allowYouTubeFallback?: unknown;
+  downloadRequest?: unknown;
+  libraryFallback?: unknown;
   title?: unknown;
   artist?: unknown;
   album?: unknown;

@@ -4,6 +4,7 @@ import {
   resolveQobuzStreamUrl as resolveQobuzProviderStreamUrl,
   type QobuzCredentials,
 } from "@/lib/qobuz-download";
+import { fetchLrclibLyrics, lyricsCompleteness, type LyricsLookupOptions } from "@/lib/download-lyrics";
 import {
   TidalDownloadError,
   resolveTidalStreamUrl as resolveTidalProviderStreamUrl,
@@ -25,7 +26,7 @@ import {
   resolveAmazonAsinFromSpotify,
   resolveAmazonStreamUrl,
 } from "@/lib/amazon-download";
-import { classifyAudioBytes, classifyAudioContentType, type AudioCodecInfo } from "@/lib/audio-codec-detect";
+import { classifyAudioBytes, classifyAudioContentType, hasDolbyAtmosJoc, type AudioCodecInfo } from "@/lib/audio-codec-detect";
 import {
   SpotifyPathfinderError,
   fetchSpotifyAlbumTracks as fetchPathfinderAlbumTracks,
@@ -46,6 +47,7 @@ import {
   fetchWithTimeout,
 } from "./fetch";
 import { SERVER_IMPORT_OUTPUT_FORMAT, type BatchResponseTrack, type SongPayload } from "./payloads";
+import { downloadPreferences, resolverOrder, type DownloadPreferences } from "./download-preferences";
 import {
   SPOTIFLAC_VERIFICATION_REQUIRED_MESSAGE,
   isSpotiflacVerificationRequiredMessage,
@@ -73,7 +75,7 @@ export type ResolvedAudioDownloadCandidate = {
   contentType?: string;
   licensedStream?: LicensedSourceStream;
   userAgent?: string;
-  minimumQuality?: "lossless";
+  minimumQuality?: "lossless" | "atmos";
 };
 
 export type ResolvedAudioDownload = ResolvedAudioDownloadCandidate & {
@@ -630,7 +632,20 @@ export async function resolveTrackPayload(
   trackId: string,
   region: string,
   spotifyCookie = "",
+  preferences?: DownloadPreferences,
 ): Promise<Record<string, unknown>> {
+  if (preferences && (preferences.resolver !== "auto" || !preferences.resolverFallback)) {
+    let resolved = await resolveViaSpotify(trackId, spotifyCookie).catch(() => null) ?? {};
+    for (const resolver of resolverOrder(preferences)) {
+      if (resolver === "songstats") {
+        await enrichSongstatsLinks(resolved).catch(() => undefined);
+      } else {
+        resolved = mergeSongLinkPayloads(resolved, await scrapeSongLinkPayload(trackId, region).catch(() => null));
+      }
+      if (getPlatformLink(resolved, "tidal") && getPlatformLink(resolved, "amazonMusic")) break;
+    }
+    return resolved;
+  }
   const [scraped, viaSpotify] = await Promise.all([
     scrapeSongLinkPayload(trackId, region).catch(() => null),
     resolveViaSpotify(trackId, spotifyCookie).catch(() => null),
@@ -1046,7 +1061,8 @@ async function fetchMusixmatchLyrics(title: string, artist: string): Promise<str
   return toStringValue(subtitle?.subtitle_body);
 }
 
-export async function fetchLyricsText(trackId: string, title: string, artist: string): Promise<string> {
+export async function fetchLyricsText(trackId: string, title: string, artist: string, options: LyricsLookupOptions = {}): Promise<string> {
+  const candidates: string[] = [];
   const spotifyLyricsUrl = `https://spotify-lyrics-api-pi.vercel.app/?trackid=${encodeURIComponent(trackId)}&format=lrc`;
   const spotifyLyricsRes = await fetchWithTimeout(spotifyLyricsUrl, SPOTIFY_REQUEST_TIMEOUT_MS).catch(() => null);
   if (spotifyLyricsRes?.ok) {
@@ -1054,18 +1070,20 @@ export async function fetchLyricsText(trackId: string, title: string, artist: st
     const obj = toObject(payload);
     if (!obj?.error) {
       const lrc = extractLrcFromSpotifyLyricsApi(payload);
-      if (lrc) return lrc;
+      if (lrc) {
+        if (lyricsCompleteness(lrc, options.durationMs).complete) return lrc;
+        candidates.push(lrc);
+      }
     }
   }
   const musixmatchLyrics = await fetchMusixmatchLyrics(title, artist).catch(() => "");
-  if (musixmatchLyrics) return musixmatchLyrics;
-  const lrclibUrl = `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
-  const lrclibRes = await fetchWithTimeout(lrclibUrl, SPOTIFY_REQUEST_TIMEOUT_MS).catch(() => null);
-  if (lrclibRes?.ok) {
-    const payload = toObject(await lrclibRes.json().catch(() => null));
-    return toStringValue(payload?.syncedLyrics) || toStringValue(payload?.plainLyrics);
+  if (musixmatchLyrics) {
+    if (lyricsCompleteness(musixmatchLyrics, options.durationMs).complete) return musixmatchLyrics;
+    candidates.push(musixmatchLyrics);
   }
-  return "";
+  const lrclibLyrics = await fetchLrclibLyrics(title, artist, options);
+  if (lrclibLyrics) candidates.push(lrclibLyrics);
+  return candidates.sort((a, b) => lyricsCompleteness(b, options.durationMs).score - lyricsCompleteness(a, options.durationMs).score)[0] || "";
 }
 
 async function resolveDeezerIsrc(songLinkPayload: Record<string, unknown>): Promise<string> {
@@ -1077,10 +1095,12 @@ async function resolveDeezerIsrc(songLinkPayload: Record<string, unknown>): Prom
   return toStringValue(deezerPayload?.isrc).toUpperCase();
 }
 
-function qualityLists(payload: SongPayload) {
+export function qualityLists(payload: SongPayload) {
   const qualityRaw = toStringValue(payload.quality);
   const profileRaw = toStringValue(payload.qualityProfile).toLowerCase();
-  const qualityProfile = ["cd", "hires48", "max"].includes(profileRaw) ? profileRaw : "max";
+  const preferences = downloadPreferences(payload);
+  const atmos = profileRaw === "atmos";
+  const qualityProfile = atmos ? preferences?.atmosFallbackQuality ?? "max" : ["cd", "hires48", "max"].includes(profileRaw) ? profileRaw : "max";
   const qobuz = qualityProfile === "cd"
     ? ["16", "6"]
     : qualityProfile === "hires48"
@@ -1094,7 +1114,7 @@ function qualityLists(payload: SongPayload) {
         : ["HI_RES_LOSSLESS", "LOSSLESS"];
   return {
     qobuz: qualityRaw ? [qualityRaw] : qobuz,
-    tidal: qualityRaw ? [qualityRaw] : tidal,
+    tidal: qualityRaw ? [qualityRaw] : atmos ? ["ATMOS", ...(preferences?.atmosFallback === false ? [] : tidal)] : tidal,
   };
 }
 
@@ -1435,9 +1455,16 @@ export async function validateMinimumQualityResponse(
   const total = Number.isFinite(length) && length > 0 ? length : 0;
   const replay = await peekAndReplayStream(response.body, {
     maxBytes: MAX_AUDIO_BYTES,
-    peekBytes: candidate.minimumQuality === "lossless" ? 64 * 1024 : 1,
+    peekBytes: candidate.minimumQuality ? 64 * 1024 : 1,
     onProgress: onProgress ? (received) => onProgress(received, total) : undefined,
   });
+  if (candidate.minimumQuality === "atmos") {
+    const byteInfo = classifyAudioBytes(replay.prefix);
+    if (byteInfo.codec !== "ec-3" || !hasDolbyAtmosJoc(replay.prefix)) {
+      await replay.body.cancel().catch(() => undefined);
+      return `${candidate.service} did not return verified E-AC-3 JOC audio for the Atmos request`;
+    }
+  }
   if (candidate.minimumQuality === "lossless") {
     const byteInfo = classifyAudioBytes(replay.prefix);
     if (byteInfo.quality !== "lossless") {
@@ -1670,17 +1697,22 @@ function qobuzSpotbyeQualities(payload: SongPayload): string[] {
   return profile === "cd" ? ["16"] : ["24", "16"];
 }
 
-function tidalSpotbyeQualities(payload: SongPayload): string[] {
+export function tidalSpotbyeQualities(payload: SongPayload): string[] {
   const explicit = toStringValue(payload.quality);
   if (explicit) return [explicit];
   const profile = toStringValue(payload.qualityProfile).toLowerCase();
+  if (profile === "atmos") {
+    const preferences = downloadPreferences(payload);
+    return ["atmos", ...(preferences?.atmosFallback === false ? [] : preferences?.atmosFallbackQuality === "cd" ? ["16"] : ["24","16"])];
+  }
   return profile === "cd" ? ["16"] : ["24", "16"];
 }
 
 function amazonSpotbyeQualities(service: DownloadProviderService, payload: SongPayload): string[] {
   const explicit = toStringValue(payload.quality);
   if (explicit) return [explicit];
-  if (service === "amazon_x") return ["16", "atmos"];
+  if (toStringValue(payload.qualityProfile).toLowerCase() === "atmos") return tidalSpotbyeQualities(payload);
+  if (service === "amazon_x") return ["16"];
   return ["16"];
 }
 
@@ -1816,7 +1848,7 @@ async function resolveLicensedSourceWithCommunityFallback(
 ): Promise<LicensedSourceStream> {
   const communityHost = isSpotiflacCommunityHost(options.endpointUrl);
   const canAskMini = communityHost && canUseMacMiniProxy(env);
-  // Cloudflare cannot read ~/.spotiflac; skip the unsigned 428 and sign on the Mac.
+  // Cloudflare cannot read the Mini's provider session; sign on the Mac directly.
   if (canAskMini && !options.communitySession) {
     return resolveLicensedSourceOnMacMini(env, options);
   }
@@ -1904,7 +1936,7 @@ async function resolveConfiguredLicensedProviderDownload(
           album: toStringValue(payload.album),
           durationMs: toStringValue(payload.durationMs),
           qualityProfile: toStringValue(payload.qualityProfile),
-          outputFormat: toStringValue(payload.outputFormat) || SERVER_IMPORT_OUTPUT_FORMAT,
+          outputFormat: String(providerBody?.quality).toLowerCase() === "atmos" ? "m4a" : toStringValue(payload.outputFormat) || SERVER_IMPORT_OUTPUT_FORMAT,
           body: providerBody,
           timeoutMs: configuredProviderResolveTimeoutMs(env, service),
           communitySession,
@@ -1916,7 +1948,7 @@ async function resolveConfiguredLicensedProviderDownload(
           contentType: stream.contentType,
           licensedStream: stream,
           userAgent,
-          minimumQuality: "lossless",
+          minimumQuality: String(providerBody?.quality).toLowerCase() === "atmos" ? "atmos" : "lossless",
         });
       } catch (error) {
         if (isSpotiflacVerificationRequiredError(error)) throw error;
@@ -1957,11 +1989,15 @@ export async function fetchResolvedAudioDownload(resolved: ResolvedAudioDownload
       const response = await fetchResolvedAudioDownloadCandidate(candidate);
       if (response.ok) {
         const validated = await validateMinimumQualityResponse(response, candidate);
-        if (validated instanceof Response) return validated;
+        if (validated instanceof Response) {
+          await lastResponse?.body?.cancel().catch(()=>undefined);
+          return validated;
+        }
         errors.push(validated);
         continue;
       }
       errors.push(`${candidate.service} returned ${response.status}`);
+      await lastResponse?.body?.cancel().catch(()=>undefined);
       lastResponse = response;
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "download failed");
@@ -1971,7 +2007,7 @@ export async function fetchResolvedAudioDownload(resolved: ResolvedAudioDownload
   throw new ApiError(`No licensed source fallback succeeded: ${errors.join(" | ")}`, 502);
 }
 
-async function resolveProviderDownload(
+export async function resolveProviderDownload(
   env: CloudflareEnv,
   provider: DownloadProviderService,
   trackId: string,
@@ -1982,6 +2018,53 @@ async function resolveProviderDownload(
   const candidates: ResolvedAudioDownloadCandidate[] = [];
   const errors: string[] = [];
 
+  const preferences = downloadPreferences(payload);
+  const atmos = toStringValue(payload.qualityProfile).toLowerCase() === "atmos";
+  if (atmos && preferences?.atmosFallback === false && !["tidal","tidal_x","tidal_custom","amazon","amazon_x"].includes(provider)) {
+    throw new ApiError(`${provider} does not support Atmos downloads`,400);
+  }
+  const customBase = provider === "tidal" ? preferences?.customTidalUrl : provider === "qobuz" ? preferences?.customQobuzUrl : "";
+  if (customBase) {
+    try {
+      let id = provider === "tidal" ? tidalTrackIdFromSongLinkPayload(songLinkPayload) : qobuzTrackIdFromSongLinkPayload(songLinkPayload);
+      if (!id && provider === "qobuz") {
+        id = String(await resolveQobuzTrackId({
+          isrc: await resolveDeezerIsrc(songLinkPayload), title:toStringValue(payload.title),
+          artist:toStringValue(payload.artist), album:toStringValue(payload.album), credentials:qobuzCredentialsFromEnv(env),
+        }));
+      }
+      if (!id) throw new ApiError(`No matching ${provider} track was found`,502);
+      const requested = provider === "tidal" ? qualities.tidal : [
+        (atmos ? preferences?.atmosFallbackQuality : toStringValue(payload.qualityProfile)) === "cd" ? "6" :
+        (atmos ? preferences?.atmosFallbackQuality : toStringValue(payload.qualityProfile)) === "hires48" ? "7" : "27",
+      ];
+      for (const quality of requested) {
+        try {
+          const spatial = quality.toLowerCase() === "atmos";
+          const endpoint = new URL(`${customBase}/${provider === "tidal" ? spatial ? "trackManifests/" : "track/" : "api/download-music"}`);
+          endpoint.searchParams.set(provider === "tidal" ? "id" : "track_id", id);
+          if (spatial) {
+            for (const [key,value] of Object.entries({formats:"EAC3_JOC",adaptive:"true",manifestType:"MPEG_DASH",uriScheme:"DATA",usage:"PLAYBACK"})) endpoint.searchParams.set(key,value);
+          } else endpoint.searchParams.set("quality",quality);
+          const stream = await resolveLicensedSourceProviderStreamUrl({
+            endpointUrl:endpoint.toString(), method:"GET", publicEndpoint:true, spotifyId:trackId,
+            spotifyUrl:toStringValue(payload.spotifyUrl), timeoutMs:20_000,
+            outputFormat:spatial ? "m4a" : "flac",
+          });
+          candidates.push({service:provider, streamUrl:stream.streamUrl, licensedStream:stream,
+            contentType:stream.contentType, minimumQuality:spatial ? "atmos" : "lossless"});
+        } catch { errors.push(`Custom ${provider} instance did not provide ${quality}`); }
+      }
+      if (!preferences?.providerFallback) {
+        if (candidates.length) return resolvedAudioDownloadFromCandidates(candidates);
+        throw new ApiError(`Custom ${provider} instance did not resolve this recording`,502);
+      }
+    } catch (error) {
+      if (!preferences?.providerFallback) throw error;
+      errors.push(`Custom ${provider} instance did not resolve this recording`);
+    }
+  }
+
   const addConfigured = async (service: DownloadProviderService) => {
     if (configuredProviderUrls(env, service).length === 0) return;
     try {
@@ -1989,8 +2072,8 @@ async function resolveProviderDownload(
         await resolveConfiguredLicensedProviderDownload(env, service, trackId, songLinkPayload, payload),
       ));
     } catch (error) {
-      if (isSpotiflacVerificationRequiredError(error)) throw error;
-      if (isSpotiflacCommunityCooldownError(error)) throw error;
+      if (!preferences?.providerFallback && !candidates.length && isSpotiflacVerificationRequiredError(error)) throw error;
+      if (!preferences?.providerFallback && !candidates.length && isSpotiflacCommunityCooldownError(error)) throw error;
       errors.push(error instanceof Error ? error.message : `${service} failed`);
     }
   };
@@ -2000,6 +2083,7 @@ async function resolveProviderDownload(
   } else if (provider === "tidal") {
     await addConfigured("tidal");
     for (const quality of qualities.tidal) {
+      if (quality.toUpperCase() === "ATMOS") continue; // Atmos uses the configured/custom manifest providers above.
       try {
         candidates.push({
           service: "tidal",
@@ -2030,7 +2114,7 @@ async function resolveProviderDownload(
   } else if (provider === "amazon") {
     await addConfigured("amazon");
     try {
-      candidates.push(...flattenResolvedAudioDownload(await resolveAmazonDownload(trackId, payload)));
+      if (!atmos || preferences?.atmosFallback !== false) candidates.push(...flattenResolvedAudioDownload(await resolveAmazonDownload(trackId, payload)));
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "amazon failed");
     }
@@ -2052,21 +2136,25 @@ async function resolveSpotiFlacDownloadStack(
   songLinkPayload: Record<string, unknown>,
   payload: SongPayload,
   qualities: ReturnType<typeof qualityLists>,
+  firstProvider?: DownloadProviderService,
 ): Promise<ResolvedAudioDownload> {
   const candidates: ResolvedAudioDownloadCandidate[] = [];
   const errors: string[] = [];
 
-  for (const provider of spotiflacProviderOrder(env)) {
+  const preferences = downloadPreferences(payload);
+  const configuredOrder = preferences?.providerOrder ?? spotiflacProviderOrder(env);
+  const order = firstProvider ? [firstProvider,...configuredOrder.filter((provider)=>provider!==firstProvider)] : configuredOrder;
+  for (const provider of preferences?.providerFallback === false ? order.slice(0,1) : order) {
     try {
       candidates.push(...flattenResolvedAudioDownload(
         await resolveProviderDownload(env, provider, trackId, songLinkPayload, payload, qualities),
       ));
-      // First provider that yields a candidate wins — stop probing the rest
-      // to cut request pressure / rate-limit load.
-      if (candidates.length > 0) break;
+      // Legacy playback keeps its first-success path. Explicit download
+      // preferences retain ordered alternatives for failures during transfer.
+      if (candidates.length > 0 && !preferences?.providerFallback) break;
     } catch (error) {
-      if (isSpotiflacVerificationRequiredError(error)) throw error;
-      if (isSpotiflacCommunityCooldownError(error)) throw error;
+      if (!preferences?.providerFallback && isSpotiflacVerificationRequiredError(error)) throw error;
+      if (!preferences?.providerFallback && isSpotiflacCommunityCooldownError(error)) throw error;
       errors.push(error instanceof Error ? `${provider}: ${error.message}` : `${provider} failed`);
     }
   }
@@ -2078,13 +2166,15 @@ async function resolveSpotiFlacDownloadStack(
 export async function resolveStreamUrl(env: CloudflareEnv, payload: SongPayload): Promise<ResolvedAudioDownload> {
   const trackId = parseSpotifyTrackId(toStringValue(payload.spotifyUrl));
   if (!trackId) throw new ApiError("Invalid Spotify track URL or ID", 400);
+  const preferences = downloadPreferences(payload);
   const songLinkPayload = await resolveTrackPayload(
     trackId,
     toStringValue(payload.region).toUpperCase(),
     envString(env, "SPOTIFY_SP_DC"),
+    preferences,
   ).catch(() => ({}));
-  await enrichTidalLink(songLinkPayload, toStringValue(payload.region).toUpperCase());
-  await enrichSoundchartsLinks(env, songLinkPayload);
+  if (preferences?.resolverFallback !== false) await enrichTidalLink(songLinkPayload, toStringValue(payload.region).toUpperCase());
+  if (preferences?.resolverFallback !== false) await enrichSoundchartsLinks(env, songLinkPayload);
   const service = toStringValue(payload.service).toLowerCase();
   const qualities = qualityLists(payload);
 
@@ -2093,6 +2183,7 @@ export async function resolveStreamUrl(env: CloudflareEnv, payload: SongPayload)
   }
   const providerService = normalizeProviderService(service);
   if (providerService) {
+    if (preferences?.providerFallback) return resolveSpotiFlacDownloadStack(env,trackId,songLinkPayload,payload,qualities,providerService);
     return await resolveProviderDownload(env, providerService, trackId, songLinkPayload, payload, qualities);
   }
   if (service) {

@@ -74,3 +74,25 @@ describe("library download fallback", () => {
     expect(sources).toEqual([{ preview: true }, { preview: true, libraryFallback: true }]);
   });
 });
+
+test("explicit lossless-only downloads do not silently fall back", async () => {
+  const seen: unknown[] = [];
+  await expect(stageDiscoverWithFallback({
+    preview: false,
+    allowYouTubeFallback: false,
+    resolve: async () => { throw new Error("Lossless source unavailable"); },
+    stage: async (source) => { seen.push(source); return new Response("ok"); },
+  })).rejects.toThrow("Lossless source unavailable");
+  expect(seen).toEqual([]);
+});
+
+test("explicit YouTube library selection is eligible for promotion", async () => {
+  const seen: unknown[] = [];
+  await stageDiscoverWithFallback({
+    preview: true,
+    libraryFallback: true,
+    resolve: async () => "unused",
+    stage: async (source) => { seen.push(source); return new Response("ok"); },
+  });
+  expect(seen).toEqual([{preview:true,libraryFallback:true}]);
+});

@@ -382,6 +382,13 @@ impl MusicPlayer {
             self.emit();
             return;
         };
+        // A restored station always joins the current broadcast; radio has no
+        // meaningful saved seek position.
+        let position = if uri.starts_with("spotify:track:radio:") {
+            0
+        } else {
+            position
+        };
         self.desired_play = playing;
         self.start_position = position;
         self.state.playback = Playback::Loading;
@@ -410,9 +417,16 @@ impl MusicPlayer {
                 // duration; a fresh play can decode sequentially in one GET.
                 // Keep byte seeking for seeks and containers such as M4A,
                 // whose index may live at the end of the file.
-                let sequential = sequential_start(&song.audio_url, position);
-                let bridge =
-                    start_bridge(api, uri, song.audio_url.clone(), lifetime.clone()).await?;
+                let live = song.source.as_deref() == Some("radio");
+                let sequential = live || sequential_start(&song.audio_url, position);
+                // Public live URLs have no account credentials. FFmpeg must resolve
+                // HLS variant playlists and segments relative to their real origin.
+                // Signed library and podcast URLs still use the private bridge.
+                let bridge = if live {
+                    song.audio_url.clone()
+                } else {
+                    start_bridge(api, uri, song.audio_url.clone(), lifetime.clone()).await?
+                };
                 let duration = song.duration_ms.saturating_sub(position);
                 let source = tokio::task::spawn_blocking(move || {
                     prepare_source(
@@ -479,6 +493,16 @@ impl MusicPlayer {
                 }
                 Playback::Playing | Playback::Paused => {
                     self.desired_play = self.state.playback != Playback::Playing;
+                    if self.desired_play
+                        && self
+                            .state
+                            .track
+                            .as_ref()
+                            .is_some_and(|t| t.uri.starts_with("spotify:track:radio:"))
+                    {
+                        self.prepare_current(0, true, false);
+                        return;
+                    }
                     self.state.position_ms = self.state.position_now();
                     self.state.playback = if self.desired_play {
                         Playback::Playing
@@ -509,6 +533,14 @@ impl MusicPlayer {
                 self.prepare_current(0, self.desired_play, new_track);
             }
             PlayerCommand::Seek(position) => {
+                if self
+                    .state
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.uri.starts_with("spotify:track:radio:"))
+                {
+                    return;
+                }
                 self.state.seek_sequence = self.state.seek_sequence.wrapping_add(1);
                 let position = self.state.track.as_ref().map_or(position, |t| {
                     if t.duration_ms == 0 {

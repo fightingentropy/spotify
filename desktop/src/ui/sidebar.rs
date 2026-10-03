@@ -963,6 +963,31 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
         app.actions
             .push(Action::Open(Page::Playlist("streamarena-all".to_owned())));
     }
+    for (icon, label, destination) in [
+        (
+            Icon::Radio,
+            "Radio",
+            Page::Playlist("streamarena-radio".into()),
+        ),
+        (Icon::Mic, "Podcasts", Page::Podcasts),
+    ] {
+        let selected =
+            page == destination || (destination == Page::Podcasts && matches!(page, Page::Show(_)));
+        if nav_row(ui, &palette, icon, label, selected).clicked() {
+            app.actions.push(Action::Open(destination));
+        }
+    }
+    if nav_row(
+        ui,
+        &palette,
+        Icon::ListEnd,
+        "Downloads",
+        page == Page::Downloads,
+    )
+    .clicked()
+    {
+        app.actions.push(Action::Open(Page::Downloads));
+    }
     ui.add_space(10.0);
     ui.painter().hline(
         ui.max_rect().x_range().shrink(4.0),

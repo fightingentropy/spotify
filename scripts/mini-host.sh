@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-DEFAULT_MINI_HOSTS=("m4mini-ts" "hermes@100.121.144.60" "m4mini.local" "hermes@192.168.1.240")
+DEFAULT_MINI_HOSTS=("m4mini-ts" "hermes@100.121.144.60" "m4mini.local" "hermes@192.168.1.189")
 
 resolve_mini_host() {
   local hosts=()

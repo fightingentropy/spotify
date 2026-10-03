@@ -293,6 +293,9 @@ pub struct App {
 
     pub auth: AuthStatus,
     pub user: Option<User>,
+    pub downloads: crate::ui::downloads::DownloadViewState,
+    pub download_queue: crate::music_downloads::QueueState,
+    download_session: downloads::DownloadSession,
     pub local_device_id: Option<String>,
     /// Ignore the previous local song until a Connect transfer reports its track.
     local_transfer_sequence: Option<u64>,
@@ -528,6 +531,7 @@ pub struct App {
     pub resume_context: Option<String>,
     pub resume_track: Option<String>,
     pub resume_position_ms: u32,
+    pub episode_progress: HashMap<String, crate::api::models::ResumePoint>,
     /// Manually queued songs restored with the remembered track.
     pub resume_queue: Vec<String>,
     /// Manually queued songs from this session, oldest first.
@@ -804,6 +808,9 @@ impl App {
             reveal_theme_changes: true,
             auth: AuthStatus::Starting,
             user: None,
+            downloads: crate::ui::downloads::DownloadViewState::default(),
+            download_queue: crate::music_downloads::QueueState::default(),
+            download_session: downloads::DownloadSession::default(),
             local_device_id: None,
             local_transfer_sequence: None,
             local_ready: false,
@@ -955,6 +962,7 @@ impl App {
             resume_context: session.last_context.clone(),
             resume_track: session.last_track.clone(),
             resume_position_ms: session.last_position_ms,
+            episode_progress: session.episode_progress,
             resume_queue: session.last_added_queue.clone(),
             manual_queue: Vec::new(),
             pending_queue_adds: Vec::new(),
@@ -1694,11 +1702,10 @@ impl App {
                     .and_then(|playlists| playlists.items.iter().find(|playlist| playlist.id == id))
             })
             .or_else(|| {
-                self.home.discover.values().find_map(|playlists| {
-                    playlists
-                        .get()
-                        .and_then(|playlists| playlists.iter().find(|playlist| playlist.id == id))
-                })
+                self.home
+                    .discover
+                    .get()
+                    .and_then(|playlists| playlists.iter().find(|playlist| playlist.id == id))
             })
     }
 
@@ -1859,6 +1866,7 @@ impl App {
                 continue;
             }
             match event {
+                Event::Downloads(response) => self.handle_download_response(*response),
                 Event::PlaylistCoverChecked {
                     id,
                     request,
@@ -2069,6 +2077,7 @@ impl App {
     fn handle_auth(&mut self, status: AuthStatus) {
         match &status {
             AuthStatus::Connected { .. } => {
+                self.clear_download_session();
                 self.sign_in_url = None;
                 self.reset_data();
                 self.load_playlists();
@@ -2077,6 +2086,7 @@ impl App {
             }
             AuthStatus::WaitingForBrowser { url } => self.sign_in_url = Some(url.clone()),
             AuthStatus::SignedOut => {
+                self.clear_download_session();
                 if matches!(self.dialog, Some(Dialog::PersonalAppIntro)) {
                     self.dialog = None;
                 }
@@ -2230,7 +2240,43 @@ impl App {
             .sum()
     }
 
+    pub fn podcast_progress(&self, uri: &str) -> Option<&crate::api::models::ResumePoint> {
+        self.episode_progress
+            .get(&format!("{}|{uri}", self.user_id()?))
+    }
+
+    fn capture_episode_progress(&mut self, force: bool) {
+        let Some(now) = self.now_playing() else {
+            return;
+        };
+        if !now.is_episode || now.loading || now.duration_ms == 0 || now.resuming {
+            return;
+        }
+        let Some(user) = self.user_id() else {
+            return;
+        };
+        let key = format!("{user}|{}", now.uri);
+        let previous = self
+            .episode_progress
+            .get(&key)
+            .map_or(0, |point| point.resume_position_ms);
+        if !force && previous.abs_diff(now.position_ms) < 5000 {
+            return;
+        }
+        self.episode_progress.insert(
+            key,
+            crate::api::models::ResumePoint {
+                fully_played: now.position_ms >= now.duration_ms.saturating_sub(10_000),
+                resume_position_ms: now.position_ms.min(now.duration_ms),
+            },
+        );
+        self.session_dirty = true;
+    }
+
     fn handle_local(&mut self, state: LocalState) {
+        self.capture_episode_progress(
+            state.track != self.local.track || state.playback != self.local.playback,
+        );
         if self
             .local_transfer_sequence
             .is_some_and(|sequence| sequence != state.track_sequence)
@@ -3641,7 +3687,7 @@ impl App {
         match page {
             Page::Home => self.load_home(false),
             Page::TopSongs => self.load_top_songs(false),
-            Page::Search => {}
+            Page::Search | Page::Downloads => {}
             Page::LikedSongs => self.ensure_liked_songs(),
             Page::Albums => {
                 if !self.library.albums.loaded_once {
@@ -3785,21 +3831,13 @@ impl App {
             full: false,
             generation,
         });
-        self.home.discover_pending.clear();
-        for term in DISCOVER_TERMS {
-            self.home
-                .discover_pending
-                .insert((*term).to_string(), Loadable::Loading);
-            if !self.home.discover.contains_key(*term) {
-                self.home
-                    .discover
-                    .insert((*term).to_string(), Loadable::Loading);
-            }
-            self.backend.api(ApiRequest::Discover {
-                term: (*term).to_string(),
-                generation,
-            });
+        if self.home.discover.get().is_none() {
+            self.home.discover = Loadable::Loading;
         }
+        self.backend.api(ApiRequest::Discover {
+            term: "Top 50".into(),
+            generation,
+        });
     }
 
     /// Asks for the newest episodes of the most recently saved podcasts,
@@ -4829,6 +4867,7 @@ impl App {
                             .unwrap_or_default();
                         self.editable_by_grant.clear();
                     }
+                    self.load_download_session(&user.id);
                     self.user = Some(user);
                     let page = self.page().clone();
                     self.ensure_loaded(page);
@@ -5115,7 +5154,7 @@ impl App {
                 self.home.recommendations.refresh(result);
             }
             ApiResponse::Discover {
-                term,
+                term: _,
                 generation,
                 result,
             } => {
@@ -5124,30 +5163,16 @@ impl App {
                 }
                 let filtered = result.map(|playlists| {
                     let mut seen = std::collections::HashSet::new();
-                    let mut matching: Vec<Playlist> = playlists
+                    playlists
                         .into_iter()
                         .filter(|playlist| {
-                            let owner = playlist.owner.id.as_deref().unwrap_or("");
-                            is_made_for_you(&playlist.name, &term)
-                                && (owner == "spotify" || playlist.owner_name() == "Spotify")
-                                && seen.insert(playlist.name.to_lowercase())
+                            !playlist.id.is_empty()
+                                && !playlist.name.trim().is_empty()
+                                && seen.insert(playlist.id.clone())
                         })
-                        .collect();
-                    matching.truncate(6);
-                    matching
+                        .collect::<Vec<_>>()
                 });
-                self.home
-                    .discover_pending
-                    .insert(term, Loadable::from_result(filtered));
-                let complete = DISCOVER_TERMS.iter().all(|term| {
-                    self.home
-                        .discover_pending
-                        .get(*term)
-                        .is_some_and(|result| !result.is_loading())
-                });
-                if complete {
-                    self.home.discover = std::mem::take(&mut self.home.discover_pending);
-                }
+                self.home.discover.refresh(filtered);
             }
             // A reload reads the playlists from the top again under a new
             // generation, so a page any earlier load asked for no longer
@@ -8209,6 +8234,7 @@ impl App {
             self.leave_lyrics_fullscreen(ctx);
         }
         match action {
+            Action::Downloads(action) => self.apply_download_action(action, ctx),
             Action::Open(page) => self.open(page),
             Action::OpenUri(uri) => {
                 if let Some(page) = Page::from_uri(&uri) {
@@ -8261,6 +8287,16 @@ impl App {
                 self.play_request(request, false);
             }
             Action::PlayEpisode { uri, resume_ms } => {
+                let resume_ms = self
+                    .podcast_progress(&uri)
+                    .map(|resume| {
+                        if resume.fully_played {
+                            0
+                        } else {
+                            resume.resume_position_ms
+                        }
+                    })
+                    .or(resume_ms);
                 // A started episode continues from the place the row or card
                 // showed as time left. The playing episode is left where it
                 // is playing, not sent back to a saved position older than it.
@@ -8880,6 +8916,7 @@ impl App {
                 });
             }
             Action::SignOut => {
+                self.clear_download_session();
                 self.backend.send(Command::SignOut);
                 self.history = vec![Page::Home];
                 self.history_index = 0;
@@ -9675,6 +9712,7 @@ impl App {
         #[cfg(feature = "milkdrop")]
         self.sync_milkdrop(ctx);
         self.apply_actions(ctx);
+        self.tick_downloads(ctx);
         self.sync_media_controls(ctx);
         self.sync_window_title(ctx);
         self.schedule_next_pass(ctx);
@@ -10012,6 +10050,7 @@ impl App {
 
     /// Write the restorable session: page, recents, resume point, sorts.
     fn save_session(&mut self) {
+        self.capture_episode_progress(true);
         self.session_dirty = false;
         self.last_session_save = Instant::now();
         if let Some(now) = self.now_playing() {
@@ -10026,6 +10065,7 @@ impl App {
                 last_context: self.resume_context.clone(),
                 last_track: self.resume_track.clone(),
                 last_position_ms: self.resume_position_ms,
+                episode_progress: self.episode_progress.clone(),
                 collapsed_folders: self.collapsed_folders.clone(),
                 rootlist: self.rootlist_cache.clone(),
                 last_added_queue: if self.resume_queue.is_empty() {
@@ -10067,6 +10107,12 @@ impl App {
     pub fn shutdown(&mut self) {
         self.save_state();
         self.backend.shutdown();
+        for event in self.backend.poll() {
+            if let Event::Downloads(response) = event {
+                self.handle_download_response(*response);
+            }
+        }
+        self.flush_downloads();
     }
 }
 
@@ -10380,23 +10426,6 @@ fn friendly_page_error(locale: Locale, error: &crate::api::ApiError) -> String {
     }
 }
 
-/// Whether a Spotify-owned playlist named `name` is the personal one the
-/// Made for you shelf looks for under `term`. The name has to be the term
-/// itself, or "Daily Mix" with a number: Spotify also makes "<Artist> Mix",
-/// "This Is <Artist>", and "<Artist> Radio" for every artist, and an artist
-/// called "Discover Weekly" put those on the shelf (#89).
-fn is_made_for_you(name: &str, term: &str) -> bool {
-    let name = name.trim().to_lowercase();
-    let term = term.to_lowercase();
-    if name == term {
-        return true;
-    }
-    term == "daily mix"
-        && name
-            .strip_prefix("daily mix ")
-            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
-}
-
 /// What the engine is told to play. A single song goes as a context of
 /// its own rather than a list of one: Spotify resolves a track's URI as a
 /// context, and a context with a URI is what librespot's autoplay carries
@@ -10498,6 +10527,7 @@ fn cover_error(locale: Locale, error: &crate::api::client::ApiError) -> String {
     }
 }
 
+mod downloads;
 mod radio;
 
 #[cfg(test)]
@@ -12396,6 +12426,51 @@ mod tests {
             request.position_ms, 19_566,
             "the song resumes where it stopped, not at zero"
         );
+    }
+
+    #[test]
+    fn podcast_resume_is_account_scoped_and_restarts_finished_episodes() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        app.user = Some(User {
+            id: "listener".into(),
+            ..Default::default()
+        });
+        let uri = "spotify:episode:podcast:test:episode";
+        let key = format!("listener|{uri}");
+        app.episode_progress.insert(
+            key.clone(),
+            crate::api::models::ResumePoint {
+                fully_played: false,
+                resume_position_ms: 42_000,
+            },
+        );
+        app.apply(
+            Action::PlayEpisode {
+                uri: uri.into(),
+                resume_ms: None,
+            },
+            &ctx,
+        );
+        assert_eq!(app.queued_play.as_ref().unwrap().position_ms, 42_000);
+        app.episode_progress.get_mut(&key).unwrap().fully_played = true;
+        app.apply(
+            Action::PlayEpisode {
+                uri: uri.into(),
+                resume_ms: Some(5_000),
+            },
+            &ctx,
+        );
+        assert_eq!(app.queued_play.as_ref().unwrap().position_ms, 0);
+        app.user.as_mut().unwrap().id = "another-listener".into();
+        assert!(app.podcast_progress(uri).is_none());
+        let session = SessionState {
+            episode_progress: app.episode_progress,
+            ..Default::default()
+        };
+        let restored: SessionState =
+            serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+        assert_eq!(restored.episode_progress[&key].resume_position_ms, 42_000);
     }
 
     /// Play on an in-progress episode continues from the place the row or
@@ -17577,7 +17652,7 @@ mod tests {
         );
     }
 
-    fn headless_app() -> App {
+    pub(super) fn headless_app() -> App {
         let root =
             std::env::temp_dir().join(format!("spotifast-volume-test-{}", std::process::id()));
         let dirs = AppDirs {
@@ -22196,23 +22271,59 @@ mod tests {
         }
     }
 
-    /// Only the personal playlists themselves belong on the shelf, not
-    /// what Spotify generates for an artist who took one of their names.
     #[test]
-    fn the_shelf_takes_the_playlist_and_not_an_artist_named_after_it() {
-        assert!(is_made_for_you("Discover Weekly", "Discover Weekly"));
-        assert!(is_made_for_you("release radar", "Release Radar"));
-        assert!(is_made_for_you("daylist", "daylist"));
-        assert!(is_made_for_you("Daily Mix 3", "Daily Mix"));
-        assert!(is_made_for_you("Daily Mix", "Daily Mix"));
-        assert!(!is_made_for_you("Discover Weekly Mix", "Discover Weekly"));
-        assert!(!is_made_for_you(
-            "This Is Discover Weekly",
-            "Discover Weekly"
-        ));
-        assert!(!is_made_for_you("Release Radar Radio", "Release Radar"));
-        assert!(!is_made_for_you("Daily Mix Radio", "Daily Mix"));
-        assert!(!is_made_for_you("Daily Mix 3", "Discover Weekly"));
+    fn home_accepts_api_charts_and_youtube_mixes_without_spotify_name_filters() {
+        let mut app = headless_app();
+        app.home.generation = 7;
+        let chart = Playlist {
+            id: "discover-top50".into(),
+            name: "Top 50 - Global".into(),
+            ..Default::default()
+        };
+        let mix = Playlist {
+            id: "yt-mix-personal".into(),
+            name: "Discover Mix".into(),
+            ..Default::default()
+        };
+        app.handle_api(ApiResponse::Discover {
+            term: "Top 50".into(),
+            generation: 7,
+            result: Ok(vec![
+                chart.clone(),
+                mix.clone(),
+                chart.clone(),
+                Playlist::default(),
+            ]),
+        });
+        let lists = app.home.discover.get().unwrap();
+        assert_eq!(
+            lists.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["discover-top50", "yt-mix-personal"]
+        );
+        assert_eq!(
+            app.known_playlist("yt-mix-personal").unwrap().name,
+            "Discover Mix"
+        );
+        app.handle_api(ApiResponse::Discover {
+            term: "Top 50".into(),
+            generation: 6,
+            result: Ok(vec![]),
+        });
+        assert_eq!(
+            app.home.discover.get().unwrap().len(),
+            2,
+            "stale responses cannot empty Home"
+        );
+        app.handle_api(ApiResponse::Discover {
+            term: "Top 50".into(),
+            generation: 7,
+            result: Err(crate::api::ApiError::Network("offline".into())),
+        });
+        assert_eq!(
+            app.home.discover.get().unwrap().len(),
+            2,
+            "refresh failures keep known collections"
+        );
     }
 
     /// One song plays as a context of its own, so librespot's autoplay

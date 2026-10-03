@@ -1,4 +1,7 @@
 import { Hono, type Context } from "hono";
+import { registerDownloadRoutes } from "./downloads";
+import { RADIO_STATIONS } from "@/lib/radio-stations";
+import { DISCOVER_CHARTS } from "@/lib/discover-playlists";
 import { extname } from "node:path";
 import { isYouTubeAlbumId, parseAlbumLink, type CatalogAlbum } from "@spotify/shared/catalog-albums";
 import { fetchYouTubeAlbum, searchYouTubeAlbums } from "@/lib/youtube-albums";
@@ -54,6 +57,7 @@ import {
   normalizeLibrarySearchQuery,
 } from "../../packages/shared/src/library-search";
 import { searchLibraryPage } from "./library-search";
+import { fetchMiniDownloadLyrics } from "./download-lyrics";
 import { createStreamingMultipartBody } from "./streaming-multipart";
 import {
   canUseMacMiniProxy,
@@ -150,7 +154,7 @@ import {
   type DiscoverTrendingTrack,
   applyDiscoverStaging,
   discoverStagedToPlayerSong,
-  fetchTop50DiscoverTracks,
+  fetchDiscoverPlaylist,
   macMiniDiscoverFetch,
   markDiscoverStaged,
   readDiscoverStagingStatus,
@@ -759,7 +763,11 @@ async function fetchResolvedAudioDownloadForRequest(
       if (macMiniResponse) {
         if (macMiniResponse.ok) {
           const validated = await validateMinimumQualityResponse(macMiniResponse, candidate, onProgress);
-          if (validated instanceof Response) return validated;
+          if (validated instanceof Response) {
+            const headers = new Headers(validated.headers);
+            headers.set("x-audio-source", candidate.service);
+            return new Response(validated.body, { status: validated.status, headers });
+          }
           errors.push(validated);
           continue;
         }
@@ -771,7 +779,11 @@ async function fetchResolvedAudioDownloadForRequest(
       const response = await fetchResolvedAudioDownloadCandidate(candidate);
       if (response.ok) {
         const validated = await validateMinimumQualityResponse(response, candidate, onProgress);
-        if (validated instanceof Response) return validated;
+        if (validated instanceof Response) {
+            const headers = new Headers(validated.headers);
+            headers.set("x-audio-source", candidate.service);
+            return new Response(validated.body, { status: validated.status, headers });
+          }
         errors.push(validated);
         continue;
       }
@@ -999,6 +1011,7 @@ app.use("/api/*", async (c, next) => {
 registerAuthRoutes(app);
 registerPlaylistRoutes(app);
 registerDiscoverRoutes(app);
+registerDownloadRoutes(app);
 
 app.get("/api/home", async (c) => {
   const db = c.get("db");
@@ -1508,6 +1521,12 @@ async function fetchPodcastFeedXml(show: PodcastShow): Promise<string> {
   }
 }
 
+// A shared catalogue keeps the native app and the website in sync.
+app.get("/api/listening", (c) => c.json({
+  stations: RADIO_STATIONS,
+  shows: PODCAST_SHOWS,
+}, { headers: { "cache-control": "public, max-age=300" } }));
+
 app.get("/api/podcast-feeds/:id", async (c) => {
   const podcastShow = PODCAST_SHOWS.find((show) => show.id === c.req.param("id"));
   if (!podcastShow) return jsonError("Podcast not found", 404);
@@ -1946,28 +1965,27 @@ app.get("/api/liked", async (c) => {
 app.get("/api/playlist/:id", async (c) => {
   const id = c.req.param("id");
 
-  // The Top 50 chart as an openable playlist (the Home "Top 50" card). Same data as
-  // /api/discover/trending, shaped as a playlist of player songs so the detail
-  // screen renders + plays it like any other playlist (lossless, via discover
-  // staging). Public read-through (the global chart), before the auth gate.
-  if (id === "discover-top50") {
+  // Home's public charts use the same staging and playback path as catalog songs.
+  const chart = DISCOVER_CHARTS.find((entry) => entry.id === id);
+  if (chart) {
     // Spotify and the mini staging manifest are independent reads. Start both
     // immediately so the 4s best-effort staging lookup never stacks on top of
     // the bounded Spotify page fetch.
     const [discover, stagedById] = await Promise.all([
-      fetchTop50DiscoverTracks(c.env),
+      fetchDiscoverPlaylist(c.env, chart.spotifyId, 50),
       readDiscoverStagingStatus(c.env, 4_000),
     ]);
-    const tracks = applyDiscoverStaging(discover, stagedById);
+    const tracks = applyDiscoverStaging(discover.tracks, stagedById);
+    if (!tracks.length) return jsonError("This chart is temporarily unavailable. Please try again.", 503);
     return jsonCached(
       c,
       {
         kind: "curated",
         playlist: {
           id,
-          name: "Top 50",
-          imageUrl: tracks[0]?.imageUrl || "",
-          description: "The most-played tracks globally, refreshed daily.",
+          name: chart.name,
+          imageUrl: discover.imageUrl || tracks[0]?.imageUrl || "",
+          description: chart.description,
         },
         songs: tracks.map(discoverStagedToPlayerSong),
         likedSongIds: null,
@@ -2079,6 +2097,7 @@ app.post("/api/songs/spotify/file", async (c) => {
   const artist = sanitizeFileName(toStringValue(payload.artist) || "Unknown Artist");
   const headers = new Headers();
   headers.set("content-type", response.headers.get("content-type") || resolved.contentType || "audio/flac");
+  headers.set("x-audio-source", response.headers.get("x-audio-source") || resolved.service);
   headers.set("content-disposition", `attachment; filename="${`${artist} - ${title}${ext}`.replaceAll('"', "'")}"`);
   const length = response.headers.get("content-length");
   if (length) headers.set("content-length", length);
@@ -2100,7 +2119,7 @@ app.post("/api/songs/spotify/batch", async (c) => {
   const region = toStringValue(payload.region).toUpperCase() || "US";
   const outputFormat = toStringValue(payload.outputFormat).toLowerCase() as OutputFormat;
   const format = ["flac", "mp3", "aac", "ogg", "opus", "wav"].includes(outputFormat) ? outputFormat : "flac";
-  const spotifyCookie = toStringValue(payload.spotifyCookie);
+  const spotifyCookie = toStringValue(payload.spotifyCookie) || envString(c.env, "SPOTIFY_SP_DC");
 
   let batchTracks: SpotifyBatchTrack[] = [];
   let batchTitle = "";
@@ -2234,7 +2253,14 @@ app.post("/api/songs/spotify", async (c) => {
       artist ||= metadata.artist;
     }
     if (!title || !artist) return jsonError("Missing title/artist for lyrics lookup", 400);
-    const lyrics = await fetchLyricsText(trackId, title, artist);
+    const lyricsPreferences = toObject(payload.lyricsPreferences);
+    const lookupOptions = {
+      titleFallback: lyricsPreferences?.titleFallback !== false,
+      durationMs: toNumberValue(payload.durationMs) || undefined,
+      album: toStringValue(payload.album),
+    };
+    const lyrics = await fetchMiniDownloadLyrics(c.env, c.get("user"), title, artist, lookupOptions)
+      || await fetchLyricsText(trackId, title, artist, lookupOptions);
     if (!lyrics) return jsonError("Lyrics not found for this track", 404);
     return c.json({ lyrics, fileName: `${title} - ${artist}.lrc`.replace(/[\\/:*?"<>|]/g, "_") });
   }

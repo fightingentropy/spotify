@@ -7,6 +7,8 @@
       "entry": [
         "scripts/*.ts",
         "tests/**/*.test.ts",
+        // Bundled and executed inside workerd by the lyrics runtime regression.
+        "tests/fixtures/download-lyrics-worker.ts",
         // Old browser installations still request this unregistering worker.
         "public/sw.js"
       ],

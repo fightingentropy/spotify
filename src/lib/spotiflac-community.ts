@@ -2,7 +2,8 @@
 // Matches public spotbye/SpotiFLAC backend/community_session.go.
 
 const HMAC_LABEL = "SPOTIFLAC-HMAC-V1";
-const DEFAULT_APP_VERSION = "7.2.2";
+// Protocol compatibility is owned by this application, not another installed app.
+export const SPOTIFLAC_PROTOCOL_VERSION = "7.2.2";
 const DEFAULT_PLATFORM = "desktop";
 const WINDOW_SECONDS = 300;
 
@@ -121,7 +122,7 @@ export function parseSpotiflacCommunitySession(
   return {
     sessionId,
     sessionSecret,
-    appVersion: readString(parsed.app_version) || readString(parsed.appVersion) || DEFAULT_APP_VERSION,
+    appVersion: readString(parsed.app_version) || readString(parsed.appVersion) || SPOTIFLAC_PROTOCOL_VERSION,
     platform: readString(parsed.platform) || DEFAULT_PLATFORM,
     ...(expiresAt ? { expiresAt } : {}),
   };
@@ -170,7 +171,7 @@ export function communitySessionFromEnv(env: object | undefined | null): Spotifl
 }
 
 export function communityUserAgent(session?: SpotiflacCommunitySession | null): string {
-  const version = session?.appVersion?.trim() || DEFAULT_APP_VERSION;
+  const version = session?.appVersion?.trim() || SPOTIFLAC_PROTOCOL_VERSION;
   return version === "Unknown" ? "SpotiFLAC" : `SpotiFLAC/${version}`;
 }
 

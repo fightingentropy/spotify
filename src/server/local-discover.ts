@@ -1,8 +1,10 @@
+import { stagedAudioMatchesQuality } from "./licensed-audio-output";
+import { classifyAudioBytes } from "../lib/audio-codec-detect";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
-import type { LicensedSourceStream } from "../lib/licensed-source-download";
+import { readLicensedSourceBody, type LicensedSourceStream } from "../lib/licensed-source-download";
 import { fetchPublicHttpUrl } from "../lib/safe-fetch";
 import {
   LOCAL_AUDIO_EXTENSIONS as AUDIO_EXTENSIONS,
@@ -98,6 +100,7 @@ type DiscoverResolvedCandidate = {
   streamUrl?: string;
   headers?: Record<string, string>;
   contentType?: string;
+  minimumQuality?: "lossless" | "atmos";
   licensedStream?: LicensedSourceStream;
   userAgent?: string;
 };
@@ -140,6 +143,7 @@ type DiscoverStagingEntry = {
   // false => YouTube audio (lossy); only libraryFallback copies can be kept
   // without another attempt through the lossless providers.
   lossless?: boolean;
+  providerDownload?: boolean;
   libraryFallback?: boolean;
 };
 
@@ -270,8 +274,8 @@ async function fetchDiscoverCandidateAudio(resolved: DiscoverResolved): Promise<
       if (candidate.licensedStream) {
         const response = await materializeLicensedStreamToResponse(candidate.licensedStream, candidate.userAgent);
         if (!response.ok) continue;
-        const bytes = Buffer.from(await response.arrayBuffer());
-        if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES) continue;
+        const bytes = Buffer.from(await readLicensedSourceBody(response,MAX_AUDIO_BYTES,120_000));
+        if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES || !stagedAudioMatchesQuality(bytes,candidate.minimumQuality)) continue;
         return { bytes, ext: audioExtensionFromContentType(response.headers.get("content-type") || "audio/flac") };
       }
       const parsed = candidate.streamUrl ? parseHttpUrl(candidate.streamUrl) : null;
@@ -282,8 +286,8 @@ async function fetchDiscoverCandidateAudio(resolved: DiscoverResolved): Promise<
         120_000,
       );
       if (!response.ok) continue;
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES) continue;
+      const bytes = Buffer.from(await readLicensedSourceBody(response,MAX_AUDIO_BYTES,120_000));
+      if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES || !stagedAudioMatchesQuality(bytes,candidate.minimumQuality)) continue;
       const contentType = response.headers.get("content-type") || candidate.contentType || "audio/flac";
       return {
         bytes,
@@ -349,8 +353,9 @@ async function writeDiscoverStagedFile(
     durationMs: item.durationMs,
     firstSeenAt: now,
     lastSeenAt: now,
-    lossless: !item.preview,
-    libraryFallback: item.preview && item.libraryFallback === true,
+    lossless: classifyAudioBytes(audio.bytes).quality === "lossless",
+    providerDownload: !item.preview,
+    libraryFallback: !item.preview || item.libraryFallback === true,
   };
 }
 
@@ -370,7 +375,7 @@ async function stageDiscoverTrack(source: LibrarySource, item: DiscoverStageItem
       // Refresh ordinary previews for a fallback save, so current Premium
       // credentials and the best audio selector get a chance to upgrade them.
       const fallbackReady = !item.libraryFallback || existing?.libraryFallback || existing?.lossless !== false;
-      return existingUsable && (item.preview || existing.lossless !== false) && fallbackReady ? existing : null;
+      return existingUsable && (item.preview || existing.lossless !== false || existing.providerDownload === true) && fallbackReady ? existing : null;
     },
     async () => {
       const audio = item.preview

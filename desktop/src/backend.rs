@@ -533,6 +533,7 @@ struct PlaylistCacheWrite {
 }
 
 pub enum Command {
+    Downloads(crate::download_tasks::Request),
     MusicSignIn {
         email: String,
         password: String,
@@ -719,6 +720,7 @@ pub struct LyricsRequest {
 }
 
 pub enum Event {
+    Downloads(Box<crate::download_tasks::Response>),
     ProxyRestored {
         config: ProxyConfig,
         password: Option<crate::credentials::ProxyPassword>,
@@ -1590,7 +1592,7 @@ mod upstream_regressions {
                     continue;
                 }
                 match command {
-                    Command::MusicSignIn { .. } => {}
+                    Command::Downloads(_) | Command::MusicSignIn { .. } => {}
                     Command::OpenThemesFolder => {
                         let directory = self.dirs.config.join("themes");
                         let events = self.events.clone();

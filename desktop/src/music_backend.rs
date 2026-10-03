@@ -70,6 +70,11 @@ pub async fn run(
     let sessions = SessionStore::new(origin.clone());
     let revoked = dirs.state.join("music-session-revoked");
     let mut tasks = JoinSet::new();
+    let mut downloads = crate::download_tasks::DownloadTasks::new(
+        dirs.state.clone(),
+        events.clone(),
+        waker.clone(),
+    );
     let mut player: Option<MusicPlayer> = None;
     let mut account = String::new();
     let mut history = crate::music_history::ListeningHistory::default();
@@ -95,6 +100,7 @@ pub async fn run(
     loop {
         // Playback preparation can discover expiration independently of API tasks.
         if api.session_expired() {
+            downloads.cancel_all();
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
             player = None;
@@ -136,6 +142,7 @@ pub async fn run(
                     tasks.spawn(async move { let _ = api.record_play(&uri, duration).await; Done::Events(vec![]) });
                 }
             } }
+            _ = downloads.complete_one(), if downloads.has_tasks() => {},
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
                 match result {
                     Ok(Done::Auth(Ok((signed_api, Some(user))))) => {
@@ -173,8 +180,10 @@ pub async fn run(
             command = commands.recv() => {
                 let Some(command) = command else { break; };
                 match command {
+                    Command::Downloads(request) => downloads.handle(request, &api, &account),
                     Command::Shutdown => break,
                     Command::MusicSignIn { email, password } => {
+                        downloads.cancel_all();
                         tasks.abort_all();
                         // Drain cancelled tasks before queuing a new account generation.
                         while tasks.join_next().await.is_some() {}
@@ -200,6 +209,7 @@ pub async fn run(
                         };
                     }
                     Command::CancelSignIn => {
+                        downloads.cancel_all();
                         tasks.abort_all();
                         while tasks.join_next().await.is_some() {}
                         player = None;
@@ -214,6 +224,7 @@ pub async fn run(
                         emit(&events, &waker, Event::Auth(AuthStatus::SignedOut));
                     }
                     Command::SignOut => {
+                        downloads.cancel_all();
                         tasks.abort_all();
                         while tasks.join_next().await.is_some() {}
                         player = None;
@@ -299,6 +310,7 @@ pub async fn run(
     if let Some((uri, duration)) = history.finish() {
         let _ = tokio::time::timeout(Duration::from_secs(3), api.record_play(&uri, duration)).await;
     }
+    downloads.cancel_all();
     tasks.abort_all();
     drop(player);
 }

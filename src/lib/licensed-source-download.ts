@@ -1,5 +1,5 @@
 import { toObject, toStringValue } from "./provider-http";
-import { fetchPublicHttpUrl } from "./safe-fetch";
+import { fetchPublicHttpUrl, isBlockedRemoteHostname } from "./safe-fetch";
 import {
   communityUserAgent,
   isSpotiflacCommunityHost,
@@ -16,6 +16,7 @@ import { isSpotByeEnvelopeHost, postSpotByeEnvelope } from "./spotbye-envelope";
 const DEFAULT_USER_AGENT = "spotify/1.0 (+https://music.streamarena.xyz)";
 const LICENSED_SOURCE_REQUEST_TIMEOUT_MS = 30_000;
 const LICENSED_SOURCE_MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+const LICENSED_SOURCE_MAX_METADATA_BYTES = 1024 * 1024;
 // A malicious DASH manifest can request billions of segments (e.g. a single
 // <S r="2000000000"/>) or an enormous zero-pad width; both blow up memory/CPU
 // before any byte is fetched. Cap the totals so manifest parsing is provably
@@ -135,7 +136,7 @@ function assertMediaResponseSize(response: Response, maxBytes: number): void {
 // arrive, so a response with an absent/NaN Content-Length (which would slip past
 // the header-only size check) still cannot exceed the budget. Aborts the stream
 // the moment the budget is crossed instead of buffering the whole body first.
-async function readBodyWithByteBudget(response: Response, maxBytes: number): Promise<Uint8Array> {
+export async function readLicensedSourceBody(response: Response, maxBytes: number, timeoutMs = LICENSED_SOURCE_REQUEST_TIMEOUT_MS): Promise<Uint8Array> {
   if (maxBytes < 0) {
     await response.body?.cancel().catch(() => undefined);
     throw new LicensedSourceDownloadError("Licensed source audio is too large", 413);
@@ -150,9 +151,16 @@ async function readBodyWithByteBudget(response: Response, maxBytes: number): Pro
   }
   const chunks: Uint8Array[] = [];
   let received = 0;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new LicensedSourceDownloadError("Licensed source response timed out",504));
+      void reader.cancel().catch(() => undefined);
+    }, timeoutMs);
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) break;
       if (!value) continue;
       received += value.byteLength;
@@ -163,6 +171,7 @@ async function readBodyWithByteBudget(response: Response, maxBytes: number): Pro
       chunks.push(value);
     }
   } finally {
+    clearTimeout(timeout);
     reader.releaseLock?.();
   }
   const out = new Uint8Array(received);
@@ -290,6 +299,9 @@ async function fetchMediaWithRetries(url: string, init: RequestInit): Promise<Re
 
 export async function resolveLicensedSourceStreamUrl(options: {
   endpointUrl: string;
+  method?: "GET" | "POST";
+  /** User-supplied instance: public-address checks and no credentials/envelope. */
+  publicEndpoint?: boolean;
   apiKey?: string;
   userAgent?: string;
   spotifyId: string;
@@ -310,6 +322,9 @@ export async function resolveLicensedSourceStreamUrl(options: {
     throw new LicensedSourceDownloadError("Licensed source provider is not configured", 501);
   }
 
+  if (options.publicEndpoint && (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || isBlockedRemoteHostname(endpoint.hostname))) {
+    throw new LicensedSourceDownloadError("Custom provider must use a public HTTPS URL",400);
+  }
   const requestBody = options.body ?? {
     spotifyId: options.spotifyId,
     spotifyUrl: options.spotifyUrl,
@@ -328,7 +343,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
 
   // Lettered SpotBye Next hosts require the encrypted envelope; fall back to
   // plain JSON for FOSS / legacy / custom endpoints.
-  if (isSpotByeEnvelopeHost(endpoint.toString())) {
+  if (!options.publicEndpoint && isSpotByeEnvelopeHost(endpoint.toString())) {
     try {
       const enveloped = await postSpotByeEnvelope(endpoint.toString(), requestBody, {
         userAgent: options.userAgent || DEFAULT_USER_AGENT,
@@ -350,36 +365,40 @@ export async function resolveLicensedSourceStreamUrl(options: {
         options.userAgent ||
         (options.communitySession ? communityUserAgent(options.communitySession) : DEFAULT_USER_AGENT),
     });
-    if (options.apiKey) headers.set("authorization", `Bearer ${options.apiKey}`);
+    if (options.apiKey && !options.publicEndpoint) headers.set("authorization", `Bearer ${options.apiKey}`);
     const bodyText = JSON.stringify(requestBody);
-    if (options.communitySession && isSpotiflacCommunityHost(endpoint.toString())) {
+    if (!options.publicEndpoint && options.communitySession && isSpotiflacCommunityHost(endpoint.toString())) {
       const signed = await signSpotiflacCommunityHeaders({
-        method: "POST",
+        method: options.method ?? "POST",
         pathname: endpoint.pathname,
         // SpotiFLAC 7.2.2 always signs an empty query, even if the URL has one.
         query: "",
-        body: new TextEncoder().encode(bodyText),
+        body: new TextEncoder().encode(options.method === "GET" ? "" : bodyText),
         session: options.communitySession,
       });
       for (const [key, value] of Object.entries(signed)) headers.set(key, value);
     }
 
-    const response = await fetchWithTimeout(endpoint.toString(), {
-      method: "POST",
-      headers,
-      body: bodyText,
-    }, options.timeoutMs);
+    const init = { method: options.method ?? "POST", headers,
+      ...(options.method === "GET" ? {} : { body: bodyText }) };
+    const response = options.publicEndpoint
+      ? await fetchPublicHttpUrl(endpoint, init, options.timeoutMs)
+      : await fetchWithTimeout(endpoint.toString(), init, options.timeoutMs);
     responseOk = response.ok;
     responseStatus = response.status;
-    text = await response.text();
+    text = new TextDecoder().decode(await readLicensedSourceBody(response,LICENSED_SOURCE_MAX_METADATA_BYTES,options.timeoutMs));
   }
 
+  if (new TextEncoder().encode(text).byteLength > LICENSED_SOURCE_MAX_METADATA_BYTES) throw new LicensedSourceDownloadError("Provider metadata is too large",413);
   let payload: JsonObject = {};
   if (text.trim().startsWith("http://") || text.trim().startsWith("https://")) {
     payload = { streamUrl: text.trim() };
   } else {
     try {
-      payload = toObject(JSON.parse(text || "{}")) ?? {};
+      const parsed: unknown = JSON.parse(text || "{}");
+      payload = Array.isArray(parsed)
+        ? toObject(parsed.find((item) => toStringValue(toObject(item)?.OriginalTrackUrl))) ?? {}
+        : toObject(parsed) ?? {};
     } catch {
       if (!responseOk) {
         throw new LicensedSourceDownloadError(
@@ -417,8 +436,25 @@ export async function resolveLicensedSourceStreamUrl(options: {
 
   // spotbye returns Tidal/Qobuz lossless streams as an inline DASH manifest
   // ("url":"MANIFEST:<base64 mpd>"), not an HTTP URL — decode it into a dash stream.
-  const inlineUrl = firstString(payload.url, data.url, audio.url, stream.url, payload.streamUrl, data.streamUrl);
-  if (inlineUrl.startsWith("MANIFEST:")) {
+  const attributes = toObject(toObject(data.data)?.attributes) ?? {};
+  if (options.outputFormat === "m4a" && Array.isArray(attributes.formats) && !attributes.formats.includes("EAC3_JOC")) {
+    throw new LicensedSourceDownloadError("Dolby Atmos is not available for this track",404);
+  }
+  const suppliedUrl = firstString(payload.url,data.url);
+  const dataUri = firstString(attributes.uri, data.manifest, payload.manifest, suppliedUrl.startsWith("MANIFEST:") ? suppliedUrl.slice(9) : "");
+  const manifestText = dataUri.startsWith("data:application/dash+xml;base64,")
+    ? decodeBase64Text(dataUri.split(",",2)[1])
+    : dataUri.includes("<MPD") ? dataUri : decodeBase64Text(dataUri);
+  let bts: JsonObject = {};
+  if (manifestText.trim().startsWith("{")) {
+    try { bts = toObject(JSON.parse(manifestText)) ?? {}; }
+    catch { throw new LicensedSourceDownloadError("Custom provider returned an invalid BTS manifest",502); }
+    const encryption = firstString(bts.encryptionType).toUpperCase();
+    if (encryption && encryption !== "NONE") throw new LicensedSourceDownloadError("Encrypted BTS manifests are not supported by this instance",502);
+  }
+  const inlineUrl = firstString(payload.url, data.url, audio.url, stream.url, payload.streamUrl, data.streamUrl,
+    manifestText.includes("<MPD") ? `MANIFEST:${Buffer.from(manifestText,"utf8").toString("base64")}` : "");
+  if (inlineUrl.startsWith("MANIFEST:") && !Array.isArray(bts.urls)) {
     let manifestXml: string;
     try {
       const binary = atob(inlineUrl.slice("MANIFEST:".length));
@@ -431,7 +467,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
     if (!manifestXml.includes("<MPD")) {
       throw new LicensedSourceDownloadError("Licensed source provider returned an invalid manifest", 502);
     }
-    const inlineCodec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format);
+    const inlineCodec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format, manifestXml.match(/codecs=["']([^"']+)/)?.[1]);
     return {
       kind: "dash",
       streamUrl: "",
@@ -446,6 +482,8 @@ export async function resolveLicensedSourceStreamUrl(options: {
 
   const streamUrl = firstString(
     payload.streamUrl,
+    payload.OriginalTrackUrl,
+    ...(Array.isArray(bts.urls) ? bts.urls : []),
     payload.audioUrl,
     payload.downloadUrl,
     payload.url,
@@ -464,7 +502,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
     throw new LicensedSourceDownloadError("Licensed source provider returned no stream URL", 502);
   }
   const manifestXml = maybeManifestXml(data.manifest) || maybeManifestXml(payload.manifest);
-  const contentType = firstString(payload.contentType, data.contentType, audio.contentType, stream.contentType);
+  const contentType = firstString(payload.contentType, data.contentType, audio.contentType, stream.contentType, bts.mimeType);
   const looksLikeDash =
     Boolean(manifestXml) ||
     contentType.includes("dash") ||
@@ -479,7 +517,7 @@ export async function resolveLicensedSourceStreamUrl(options: {
     firstString(payload.key, data.key, audio.key, stream.key, payload.decryptionKey, data.decryptionKey) ||
     keySpecs[0] ||
     "";
-  const codec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format);
+  const codec = firstString(payload.codec, data.codec, audio.codec, stream.codec, payload.format, data.format, bts.codecs);
   const outputFormat = options.outputFormat || "";
   const metadata = providerMetadata(payload, data, audio, stream);
   if (keySpecs.length) metadata.keySpecs = keySpecs;
@@ -675,7 +713,7 @@ async function readManifest(stream: LicensedSourceStream): Promise<{ xml: string
     LICENSED_SOURCE_REQUEST_TIMEOUT_MS,
   );
   if (!response.ok) throw new LicensedSourceDownloadError(`Licensed source manifest returned ${response.status}`, response.status);
-  const text = await response.text();
+  const text = new TextDecoder().decode(await readLicensedSourceBody(response,LICENSED_SOURCE_MAX_METADATA_BYTES));
   if (!text.includes("<MPD")) throw new LicensedSourceDownloadError("Licensed source manifest is not DASH MPD", 502);
   return { xml: text, url: parsed.toString() };
 }
@@ -708,7 +746,7 @@ export async function materializeLicensedSourceStream(
     // A missing/NaN Content-Length would bypass a header-only pre-check, so the
     // running byte budget is enforced while the body is read rather than after.
     assertMediaResponseSize(response, maxBytes - totalBytes);
-    const bytes = await readBodyWithByteBudget(response, maxBytes - totalBytes);
+    const bytes = await readLicensedSourceBody(response, maxBytes - totalBytes);
     totalBytes += bytes.byteLength;
     chunks.push(bytes);
   }

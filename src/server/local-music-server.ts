@@ -1,3 +1,6 @@
+import { licensedAudioOutput } from "./licensed-audio-output";
+import { handleDownloadLyrics } from "./download-lyrics";
+import { classifyAudioBytes } from "../lib/audio-codec-detect";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -1072,7 +1075,8 @@ async function materializeEncryptedLicensedSourceStream(
 
   const tempDir = await mkdtemp(resolve(tmpdir(), "spotify-licensed-"));
   const encryptedPath = resolve(tempDir, "source.mp4");
-  const outputPath = resolve(tempDir, "output.flac");
+  const format = licensedAudioOutput(stream);
+  const outputPath = resolve(tempDir, `output.${format.extension}`);
   try {
     await saveResponseBody(response, encryptedPath, MAX_AUDIO_BYTES, "Licensed source audio");
     await runFfmpeg([
@@ -1083,8 +1087,7 @@ async function materializeEncryptedLicensedSourceStream(
       "-vn",
       "-map_metadata",
       "-1",
-      "-compression_level",
-      "8",
+      ...(format.extension === "m4a" ? format.copyArgs : ["-compression_level", "8"]),
       outputPath,
     ]);
     const outputBytes = await readFile(outputPath);
@@ -1093,7 +1096,7 @@ async function materializeEncryptedLicensedSourceStream(
     }
     return new Response(outputBytes, {
       headers: {
-        "content-type": "audio/flac",
+        "content-type": format.contentType,
         "content-length": String(outputBytes.byteLength),
       },
     });
@@ -1102,11 +1105,9 @@ async function materializeEncryptedLicensedSourceStream(
   }
 }
 
-// Tidal (and any DASH source) materializes to lossless FLAC-in-fMP4 (audio/mp4).
-// Remux it to a native .flac container so downloads match the other lossless
-// sources (Qobuz/Amazon) instead of an .m4a — the mini has ffmpeg, the Worker
-// does not, which is why this lives here.
-async function materializeDashStreamToFlac(
+// Remux DASH to FLAC for lossless sources, or stream-copy E-AC-3 into M4A.
+// Spatial audio must retain its original codec and object metadata.
+async function materializeDashAudio(
   stream: LicensedSourceStream,
   userAgent?: string,
 ): Promise<Response> {
@@ -1121,13 +1122,19 @@ async function materializeDashStreamToFlac(
   }
   const tempDir = await mkdtemp(resolve(tmpdir(), "spotify-licensed-"));
   const inputPath = resolve(tempDir, "source.mp4");
-  const outputPath = resolve(tempDir, "output.flac");
+  const format = licensedAudioOutput(stream);
+  if (format.extension === "flac" && classifyAudioBytes(inputBytes).quality !== "lossless") {
+    await rm(tempDir,{recursive:true,force:true});
+    throw new LicensedSourceDownloadError("Provider did not return a verified lossless DASH stream",502);
+  }
+  const outputPath = resolve(tempDir, `output.${format.extension}`);
   try {
     await writeFile(inputPath, inputBytes);
     try {
       // Stream-copy the FLAC frames out of the fMP4 — bit-exact, no re-encode.
-      await runFfmpeg(["-i", inputPath, "-vn", "-map_metadata", "-1", "-c:a", "copy", "-f", "flac", outputPath]);
-    } catch {
+      await runFfmpeg(["-i", inputPath, "-vn", "-map_metadata", "-1", ...format.copyArgs, outputPath]);
+    } catch (error) {
+      if (format.extension === "m4a") throw error; // Never decode/remix spatial audio.
       // Fallback for a non-FLAC lossless DASH source: decode + losslessly re-encode.
       await runFfmpeg(["-i", inputPath, "-vn", "-map_metadata", "-1", "-c:a", "flac", "-compression_level", "8", outputPath]);
     }
@@ -1137,7 +1144,7 @@ async function materializeDashStreamToFlac(
     }
     return new Response(outputBytes, {
       headers: {
-        "content-type": "audio/flac",
+        "content-type": format.contentType,
         "content-length": String(outputBytes.byteLength),
       },
     });
@@ -1180,14 +1187,14 @@ function isDeezerLicensedStream(stream: LicensedSourceStream): boolean {
 }
 
 // Pick the right materialization strategy for a licensed stream (encrypted MP4,
-// DASH→FLAC remux, Deezer BF-CBC, or a plain licensed URL). Shared by the
+// DASH remux, Deezer BF-CBC, or a plain licensed URL). Shared by the
 // on-demand /api/licensed-source/materialize endpoint and Discover staging.
 async function materializeLicensedStreamToResponse(
   stream: LicensedSourceStream,
   userAgent?: string,
 ): Promise<Response> {
   if (stream.decryptionKey) return materializeEncryptedLicensedSourceStream(stream, userAgent);
-  if (stream.kind === "dash") return materializeDashStreamToFlac(stream, userAgent);
+  if (stream.kind === "dash") return materializeDashAudio(stream, userAgent);
   if (isDeezerLicensedStream(stream)) return materializeDeezerStream(stream, userAgent);
   return materializeLicensedSourceStream(stream, { maxBytes: MAX_AUDIO_BYTES, userAgent });
 }
@@ -1532,6 +1539,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
   const unauthorizedMutation = authorizeMutationRequest(request);
   if (unauthorizedMutation) return unauthorizedMutation;
+
+  if (pathname === "/api/downloads/lyrics") {
+    return handleDownloadLyrics(request, currentUserIdForRequest(request));
+  }
 
   if (pathname === "/api/auth/session" && request.method === "GET") {
     return json({ user: currentUserIdForRequest(request) ? localUser() : null });

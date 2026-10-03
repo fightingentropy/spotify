@@ -13,7 +13,8 @@ permitted to access and copy.
 - Browse, search, like, queue, and organize a personal music library.
 - Stream local media with byte-range support, artwork, lyrics, and sidecars.
 - Import licensed or user-authorized media through authenticated APIs.
-- Download tracks for offline playback in the native client.
+- Download tracks for offline playback on mobile; use the desktop Downloads
+  section for local files, shared-library saves, or both.
 - Run the UI and media service together, or split account APIs onto Cloudflare.
 - Preserve legacy R2 media support while using a private host for large files.
 
@@ -149,11 +150,15 @@ bun run mini:install-dns-watch
 bun run mini:sync-music
 ```
 
-The Mac mini checks its SpotiFLAC session only when a lossless download is
+The Mac mini checks its lossless-provider session only when a download is
 requested. A session with five minutes or less remaining is renewed through
 SpotiFLAC's official browser verification flow before the provider request is
 retried. There is no scheduled watcher; if the provider presents a CAPTCHA,
 the user must complete that browser challenge on the Mac mini.
+The server stores the session privately at
+`~/.streamarena-music/provider-session.json`. It migrates a legacy
+`~/.spotiflac/community_session.json` once, and uses the protocol version tracked
+in our source. An installed SpotiFLAC app is not needed for downloads or renewal.
 
 A private host environment file should be owner-readable only and may contain:
 

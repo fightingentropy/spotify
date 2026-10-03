@@ -132,6 +132,51 @@ fn user_agent() -> &'static str {
 mod tests {
     use super::*;
 
+    // TCP read boundaries are unrelated to HTTP headers. Keeping both fixture
+    // endpoints open until the full head arrives also prevents resets when the
+    // client's remaining header bytes race an early fixture response/close.
+    fn read_http_head(reader: &mut impl std::io::Read) -> std::io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let count = match reader.read(&mut buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
+            if count == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "fixture HTTP headers were incomplete",
+                ));
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                return Ok(bytes);
+            }
+            if bytes.len() > 64 * 1024 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "fixture HTTP headers exceeded 64 KiB",
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn proxy_fixture_reads_headers_split_across_tcp_packets() {
+        struct Fragmented(std::io::Cursor<Vec<u8>>);
+        impl std::io::Read for Fragmented {
+            fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+                std::io::Read::read(&mut self.0, &mut target[..1])
+            }
+        }
+        let expected =
+            b"GET http://example.invalid/catalogue HTTP/1.1\r\nHost: example.invalid\r\n\r\n";
+        let mut fragmented = Fragmented(std::io::Cursor::new(expected.to_vec()));
+        assert_eq!(read_http_head(&mut fragmented).unwrap(), expected);
+        assert!(read_http_head(&mut std::io::Cursor::new(b"GET / HTTP/1.1\r\n")).is_err());
+    }
+
     #[test]
     fn invalid_proxy_configuration_never_falls_back_to_a_direct_client() {
         let invalid = ProxyConfig::Invalid("Proxy port must be a number".into());
@@ -193,9 +238,10 @@ mod tests {
         let origin_addr = origin.local_addr().unwrap();
         let origin_thread = thread::spawn(move || {
             let (mut stream, _) = origin.accept().unwrap();
-            let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf).unwrap();
-            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let request = String::from_utf8(read_http_head(&mut stream).unwrap()).unwrap();
             stream
                 .write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nproxied",
@@ -209,13 +255,15 @@ mod tests {
         let proxy_thread = thread::spawn(move || {
             let (mut client, _) = proxy.accept().unwrap();
             client
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
-            let mut buf = [0u8; 8192];
-            let n = client.read(&mut buf).unwrap();
-            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let request = read_http_head(&mut client).unwrap();
+            let head = String::from_utf8(request.clone()).unwrap();
             let mut upstream = std::net::TcpStream::connect(origin_addr).unwrap();
-            upstream.write_all(&buf[..n]).unwrap();
+            upstream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            upstream.write_all(&request).unwrap();
             let mut response = Vec::new();
             upstream.read_to_end(&mut response).unwrap();
             client.write_all(&response).unwrap();
@@ -229,7 +277,7 @@ mod tests {
             ..crate::settings::Settings::default()
         };
         let proxy_config = settings.proxy_config().unwrap();
-        let client = build_blocking(&proxy_config, Duration::from_secs(3)).unwrap();
+        let client = build_blocking(&proxy_config, Duration::from_secs(10)).unwrap();
         let body = client
             .get(format!("http://{origin_addr}/catalogue"))
             .send()
@@ -249,7 +297,7 @@ mod tests {
     #[test]
     fn proxy_authentication_preserves_opaque_credentials() {
         use base64::Engine;
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::net::TcpListener;
         use std::thread;
 
@@ -258,11 +306,9 @@ mod tests {
         let proxy_thread = thread::spawn(move || {
             let (mut client, _) = proxy.accept().unwrap();
             client
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
-            let mut buf = [0u8; 8192];
-            let n = client.read(&mut buf).unwrap();
-            let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let head = String::from_utf8(read_http_head(&mut client).unwrap()).unwrap();
             client
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .unwrap();
@@ -280,7 +326,7 @@ mod tests {
             ..crate::settings::Settings::default()
         };
         let proxy_config = settings.proxy_config().unwrap();
-        let client = build_blocking(&proxy_config, Duration::from_secs(3)).unwrap();
+        let client = build_blocking(&proxy_config, Duration::from_secs(10)).unwrap();
         assert_eq!(
             client
                 .get("http://example.invalid/catalogue")
@@ -363,11 +409,8 @@ mod tests {
             stream
                 .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
                 .unwrap();
-            let mut request = [0; 4096];
-            let size = stream.read(&mut request).unwrap();
-            assert!(
-                String::from_utf8_lossy(&request[..size]).starts_with("GET /catalogue HTTP/1.1")
-            );
+            let request = read_http_head(&mut stream).unwrap();
+            assert!(String::from_utf8_lossy(&request).starts_with("GET /catalogue HTTP/1.1"));
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .unwrap();
@@ -397,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn librespot_http_client_sends_connect_through_an_http_proxy() {
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::net::TcpListener;
         use std::thread;
 
@@ -406,12 +449,11 @@ mod tests {
         let proxy_thread = thread::spawn(move || {
             let (mut client, _) = proxy.accept().unwrap();
             client
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
-            let mut buf = [0u8; 4096];
-            let n = client.read(&mut buf).unwrap_or(0);
+            let head = read_http_head(&mut client).unwrap();
             let _ = client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n");
-            String::from_utf8_lossy(&buf[..n]).into_owned()
+            String::from_utf8(head).unwrap()
         });
 
         let proxy_url = reqwest::Url::parse(&format!("http://{proxy_addr}")).unwrap();

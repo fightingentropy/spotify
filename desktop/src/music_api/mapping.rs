@@ -14,7 +14,12 @@ pub(super) fn images(url: Option<&str>) -> Vec<Image> {
 
 impl MusicSong {
     pub fn uri(&self) -> String {
-        format!("spotify:track:{}", self.id)
+        let kind = if self.source.as_deref() == Some("podcast") {
+            "episode"
+        } else {
+            "track"
+        };
+        format!("spotify:{kind}:{}", self.id)
     }
 
     pub fn local_track(&self, uri: &str) -> crate::player::LocalTrack {
@@ -73,11 +78,28 @@ pub(super) fn playlist(
             Some("youtube") => format!("yt-mix-{}", p.id),
             _ => p.id.clone(),
         });
+    let featured = match id.as_str() {
+        "discover-top50" => Some(("Global daily chart", "Spotify", "music-cover:global")),
+        "discover-top50-uk" => Some(("UK daily chart", "Spotify", "music-cover:uk")),
+        id if id.starts_with("yt-mix-") => Some((
+            "Made for you on YouTube Music",
+            "YouTube Music",
+            "music-cover:discover",
+        )),
+        _ => None,
+    };
     let image = p
         .image_url
         .take()
         .filter(|s| !s.is_empty())
         .or_else(|| p.cover_image_urls.first().cloned());
+    // Mix responses use the first video's thumbnail, which is often a black
+    // video frame. Keep their collection artwork consistent on Home and detail.
+    let image = if id.starts_with("yt-mix-") {
+        Some("music-cover:discover".to_string())
+    } else {
+        image.or_else(|| featured.map(|(_, _, cover)| cover.to_string()))
+    };
     // A read-only folder may have userId but must not get edit controls.
     let owner = if p.editable != Some(true) {
         None
@@ -88,11 +110,19 @@ pub(super) fn playlist(
         uri: format!("spotify:playlist:{id}"),
         id,
         name: p.name,
-        description: p.description,
+        description: p
+            .description
+            .or_else(|| featured.map(|(description, _, _)| description.into())),
         images: images(image.as_deref()),
         owner: Owner {
             id: owner,
-            display_name: p.owner_name.or_else(|| Some("Music Library".into())),
+            display_name: p.owner_name.or_else(|| {
+                Some(
+                    featured
+                        .map_or("Music Library", |(_, owner, _)| owner)
+                        .into(),
+                )
+            }),
             ..Default::default()
         },
         public: Some(false),

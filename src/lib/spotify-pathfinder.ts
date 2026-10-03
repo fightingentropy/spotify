@@ -1560,3 +1560,35 @@ export function scrapeSpotifyTrackIdsFromHtml(html: string): string[] {
   }
   return trackIds;
 }
+
+// Download metadata uses the same authenticated Spotify session as catalog
+// browsing. Callers pass a relative API path; provider pagination is validated
+// before it reaches this boundary, so the bearer token never leaves Spotify.
+export async function fetchSpotifyDownloadMetadata(path: string, spotifyCookie?: string): Promise<unknown> {
+  const url = new URL(path, "https://api.spotify.com");
+  if (!path.startsWith("/v1/") || url.origin !== "https://api.spotify.com") {
+    throw new SpotifyPathfinderError("Invalid Spotify metadata path", 400);
+  }
+  const token = await fetchSpotifyAccessToken(spotifyCookie);
+  const response = await fetchWithTimeout(url.toString(), { headers: { authorization: `Bearer ${token}` } }, 12_000);
+  if (!response?.ok) throw new SpotifyPathfinderError("Spotify metadata is temporarily unavailable", response?.status === 404 ? 404 : 502);
+  return response.json();
+}
+
+// Current provider-authored metadata operations used by the SpotiFLAC desktop
+// client. Hashes identify Spotify's persisted queries, not authentication data.
+export async function fetchSpotifyDownloadGraph(
+  operation: "artist" | "discography" | "album" | "track" | "credits" | "search",
+  variables: Record<string, unknown>,
+  spotifyCookie?: string,
+): Promise<Record<string, unknown>> {
+  const query = {
+    search: ["searchDesktop", PATHFINDER_QUERIES.searchDesktop],
+    track: ["getTrack", "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294"],
+    credits: ["queryTrackCreditsModal", "e2ca40d46cf1fde36562261ccec754f23fb31b561877252e9fe0d6834aabb84b"],
+    artist: ["queryArtistOverview", "446130b4a0aa6522a686aafccddb0ae849165b5e0436fd802f96e0243617b5d8"],
+    discography: ["queryArtistDiscographyAll", "5e07d323febb57b4a56a42abbf781490e58764aa45feb6e3dc0591564fc56599"],
+    album: ["getAlbum", "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10"],
+  }[operation];
+  return pathfinderQuery(query[0], variables, query[1], spotifyCookie, 12_000);
+}

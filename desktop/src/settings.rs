@@ -1596,6 +1596,8 @@ pub struct SessionState {
     pub last_context: Option<String>,
     pub last_track: Option<String>,
     pub last_position_ms: u32,
+    /// Local podcast positions, keyed by account ID and episode URI.
+    pub episode_progress: std::collections::HashMap<String, crate::api::models::ResumePoint>,
     /// Manually queued songs to restore with the remembered track.
     ///
     /// Context rows are excluded to prevent duplicates. This replaced the old

@@ -571,7 +571,11 @@ impl StatusPlayer {
         self.next.setEnabled(now.can_control);
         self.shuffle.setEnabled(now.can_control);
         self.repeat.setEnabled(now.can_control);
-        self.save.setEnabled(!now.uri.is_empty());
+        self.save.setEnabled(
+            !now.uri.is_empty()
+                && !now.uri.starts_with("spotify:track:radio:")
+                && !now.uri.starts_with("spotify:episode:"),
+        );
         if old.is_none_or(|old| old.saved != now.saved) {
             set_symbol(
                 &self.save,
@@ -623,16 +627,25 @@ impl StatusPlayer {
         self.seek.setDoubleValue(progress.clamp(0.0, 1.0));
         self.seek
             .setEnabled(now.can_control && now.duration_ms > 0 && !now.loading);
-        let elapsed = if now.loading {
+        let live = now.uri.starts_with("spotify:track:radio:");
+        let elapsed = if live && !now.loading {
+            "Live radio".into()
+        } else if now.loading {
             "Loading…".into()
         } else {
             crate::util::format_duration_ms(now.position_ms)
         };
         self.elapsed.setStringValue(&NSString::from_str(&elapsed));
-        self.remaining.setStringValue(&NSString::from_str(&format!(
-            "−{}",
-            crate::util::format_duration_ms(now.duration_ms.saturating_sub(now.position_ms))
-        )));
+        let remaining = if live {
+            String::new()
+        } else {
+            format!(
+                "−{}",
+                crate::util::format_duration_ms(now.duration_ms.saturating_sub(now.position_ms))
+            )
+        };
+        self.remaining
+            .setStringValue(&NSString::from_str(&remaining));
         self.seek
             .setAccessibilityValueDescription(Some(&NSString::from_str(&format!(
                 "{} of {}",

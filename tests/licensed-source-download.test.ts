@@ -306,3 +306,55 @@ describe("licensed source DASH materialize", () => {
     )).rejects.toMatchObject({ status: 413 });
   });
 });
+
+describe("custom provider instances",()=>{
+  afterEach(()=>{globalThis.fetch=originalFetch;});
+  const request={endpointUrl:"https://8.8.8.8/track/?id=123",method:"GET" as const,publicEndpoint:true,spotifyId:"track",spotifyUrl:"https://open.spotify.com/track/track"};
+  test("custom GET never forwards configured keys or community credentials",async()=>{
+    globalThis.fetch=(async(_input: RequestInfo | URL,init?: RequestInit)=>{
+      const headers=new Headers(init?.headers);
+      expect(init?.method).toBe("GET");
+      expect(init?.body).toBeUndefined();
+      expect(headers.has("authorization")).toBe(false);
+      expect(headers.has("cookie")).toBe(false);
+      expect([...headers.keys()].some((key)=>key.includes("session")||key.includes("signature"))).toBe(false);
+      return Response.json({data:{url:"https://media.example.test/audio.flac"}});
+    }) as unknown as typeof fetch;
+    const result=await resolveLicensedSourceStreamUrl({...request,apiKey:"must-not-leak",communitySession:{sessionId:"private",sessionSecret:"private",appVersion:"7.2.2",platform:"desktop"}});
+    expect(result.streamUrl).toBe("https://media.example.test/audio.flac");
+  });
+  test("rejects private custom hosts before any request",async()=>{
+    globalThis.fetch=(()=>{throw new Error("must not fetch");}) as unknown as typeof fetch;
+    for(const endpointUrl of ["https://127.0.0.1/track/","https://user:secret@8.8.8.8/track/","http://8.8.8.8/track/"]) {
+      await expect(resolveLicensedSourceStreamUrl({...request,endpointUrl})).rejects.toThrow("public HTTPS");
+    }
+  });
+  test("decodes Tidal BTS JSON into the original FLAC URL",async()=>{
+    const manifest=Buffer.from(JSON.stringify({mimeType:"audio/flac",codecs:"flac",encryptionType:"NONE",urls:["https://media.example.test/bts.flac"]})).toString("base64");
+    globalThis.fetch=(async()=>Response.json({data:{manifestMimeType:"application/vnd.tidal.bts",manifest}})) as unknown as typeof fetch;
+    const result=await resolveLicensedSourceStreamUrl(request);
+    expect(result).toMatchObject({kind:"url",streamUrl:"https://media.example.test/bts.flac",codec:"flac",contentType:"audio/flac"});
+  });
+  test("decodes Tidal DASH v2 and Atmos DATA manifests without a remote manifest URL",async()=>{
+    const xml='<MPD><Period><AdaptationSet><Representation codecs="ec-3"/></AdaptationSet></Period></MPD>';
+    const manifest=Buffer.from(xml).toString("base64");
+    for(const payload of [{data:{manifest}},{data:{data:{attributes:{uri:`data:application/dash+xml;base64,${manifest}`,formats:["EAC3_JOC"]}}}}]) {
+      globalThis.fetch=(async()=>Response.json(payload)) as unknown as typeof fetch;
+      expect(await resolveLicensedSourceStreamUrl({...request,outputFormat:"m4a"})).toMatchObject({kind:"dash",codec:"ec-3",outputFormat:"m4a",dash:{manifestXml:xml}});
+    }
+  });
+  test("rejects a non-Atmos DATA response and encrypted BTS",async()=>{
+    for(const payload of [{data:{data:{attributes:{uri:"ignored",formats:["AAC"]}}}},{data:{manifest:Buffer.from(JSON.stringify({encryptionType:"AES",urls:["https://media.example.test/file"]})).toString("base64")}}]) {
+      globalThis.fetch=(async()=>Response.json(payload)) as unknown as typeof fetch;
+      await expect(resolveLicensedSourceStreamUrl({...request,outputFormat:"m4a"})).rejects.toThrow();
+    }
+  });
+  test("limits streamed resolver responses without Content-Length",async()=>{
+    globalThis.fetch=(async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array(1024*1024+1));controller.close();}}))) as unknown as typeof fetch;
+    await expect(resolveLicensedSourceStreamUrl(request)).rejects.toThrow("too large");
+  });
+  test("bounds a stalled response body after headers arrived",async()=>{
+    globalThis.fetch=(async()=>new Response(new ReadableStream({start(){}}))) as unknown as typeof fetch;
+    await expect(resolveLicensedSourceStreamUrl({...request,timeoutMs:10})).rejects.toThrow("timed out");
+  });
+});

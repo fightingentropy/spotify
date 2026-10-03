@@ -111,6 +111,7 @@ pub enum Page {
     Home,
     TopSongs,
     Search,
+    Downloads,
     LikedSongs,
     Albums,
     Artists,
@@ -133,6 +134,7 @@ impl Page {
             Page::Home => "home".into(),
             Page::TopSongs => "top-songs".into(),
             Page::Search => "search".into(),
+            Page::Downloads => "downloads".into(),
             Page::LikedSongs => "liked".into(),
             Page::Albums => "albums".into(),
             Page::Artists => "artists".into(),
@@ -153,6 +155,7 @@ impl Page {
             "home" => Page::Home,
             "top-songs" => Page::TopSongs,
             "search" => Page::Search,
+            "downloads" => Page::Downloads,
             "liked" => Page::LikedSongs,
             "albums" => Page::Albums,
             "artists" => Page::Artists,
@@ -581,15 +584,15 @@ pub struct Library {
 pub struct HomeData {
     pub recently_played: Loadable<Vec<PlayHistory>>,
     pub top_artists: Loadable<Vec<Artist>>,
-    /// The 20-track preview shown on Home.
+    /// Most-played metadata used by Home's On repeat collection card.
     pub top_tracks: Loadable<Vec<Track>>,
     /// The separately loaded, complete ranking shown by the Top Songs page.
     pub top_songs: Loadable<Vec<Track>>,
     pub top_songs_loading: bool,
     pub top_songs_complete: bool,
     pub recommendations: Loadable<Vec<Track>>,
-    pub discover: HashMap<String, Loadable<Vec<Playlist>>>,
-    pub discover_pending: HashMap<String, Loadable<Vec<Playlist>>>,
+    /// Curated playlists returned by our music API, including charts and mixes.
+    pub discover: Loadable<Vec<Playlist>>,
     /// Saved podcasts with their newest episodes, in library order, for the
     /// podcast shelf. A refresh replaces them only once it answers.
     pub podcasts: Vec<(Show, Vec<Episode>)>,
@@ -600,8 +603,6 @@ pub struct HomeData {
     pub requested: bool,
     pub loaded_at: Option<Instant>,
 }
-
-pub const DISCOVER_TERMS: &[&str] = &["Discover Weekly", "Release Radar", "Daily Mix", "daylist"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchFilter {
@@ -915,6 +916,7 @@ pub struct Toast {
 /// Actions emitted while drawing and applied afterward to avoid borrow conflicts.
 #[derive(Clone, Debug)]
 pub enum Action {
+    Downloads(crate::ui::downloads::DownloadAction),
     Open(Page),
     OpenUri(String),
     /// A Spotify link from outside the app: its page opens and the window
@@ -1182,6 +1184,14 @@ pub enum Action {
 #[cfg(test)]
 mod page_uri_tests {
     use super::Page;
+
+    #[test]
+    fn downloads_survives_navigation_restore() {
+        assert_eq!(
+            Page::decode(&Page::Downloads.encode()),
+            Some(Page::Downloads)
+        );
+    }
 
     #[test]
     fn provider_ids_keep_their_complete_opaque_suffix() {

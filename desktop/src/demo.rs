@@ -522,16 +522,7 @@ pub fn populate(app: &mut App) {
     app.home.top_songs = Loadable::Loaded(tracks.iter().skip(10).cloned().collect());
     app.home.top_songs_complete = true;
     app.home.recommendations = Loadable::Loaded(tracks.iter().skip(20).take(10).cloned().collect());
-    for term in DISCOVER_TERMS {
-        let matching: Vec<Playlist> = playlists
-            .iter()
-            .filter(|playlist| playlist.name.to_lowercase().contains(&term.to_lowercase()))
-            .cloned()
-            .collect();
-        app.home
-            .discover
-            .insert((*term).to_string(), Loadable::Loaded(matching));
-    }
+    app.home.discover = Loadable::Loaded(playlists.iter().take(2).cloned().collect());
 
     // Search.
     app.search.query = "Bonobo".into();
@@ -1306,7 +1297,7 @@ mod tests {
                     .for_each(|shape| texts(&shape.shape, &mut drawn));
                 let label = drawn
                     .iter()
-                    .find(|(text, rect)| *text == heading && rect.top() < 300.0)
+                    .find(|(text, rect)| *text == heading && rect.left() < width)
                     .map(|(_, rect)| *rect);
                 let tree = output.platform_output.accesskit_update.unwrap();
                 let button = tree
@@ -4892,12 +4883,12 @@ mod tests {
             view_frame(&ctx, &mut app, vec![], view);
             let text = view_frame(&ctx, &mut app, vec![], view);
             for (label, expected) in [
-                ("Made for you", made_for_you),
+                ("Playlists & mixes", true),
                 ("Recommended for you", false),
-                ("Liked Songs", false),
+                ("Liked Songs", true),
                 ("Recently played", true),
                 ("Your top artists", false),
-                ("Your top songs", true),
+                ("Your top songs", false),
             ] {
                 assert_eq!(
                     text.iter().any(|(text, _)| text == label),
@@ -4913,29 +4904,31 @@ mod tests {
     fn home_cards_open_item_menus() {
         for (section, title, uri, labels) in [
             (
-                "Made for you",
+                "Your playlists",
                 playlist(1).name,
                 playlist(1).uri,
                 vec!["Edit details", "Delete"],
             ),
             (
-                "Made for you",
+                "Your playlists",
                 playlist(0).name,
                 playlist(0).uri,
                 vec!["Play"],
             ),
             (
-                "Recently played",
+                "Jump back in",
                 track(5).name,
                 track(5).uri,
                 vec!["Add to queue", "Add to playlist"],
             ),
         ] {
             let (ctx, mut app) = accessible_app(&format!("home-card-{section}-{title}"));
-            app.home.discover.insert(
-                DISCOVER_TERMS[0].into(),
-                Loadable::Loaded(vec![playlist(0), playlist(1)]),
-            );
+            app.home.discover = Loadable::Loaded(vec![]);
+            app.library.playlists = Loadable::Loaded(vec![playlist(0), playlist(1)]);
+            if section == "Jump back in" {
+                app.library.playlists = Loadable::Loaded(vec![]);
+            }
+            app.home.top_tracks = Loadable::Loaded(vec![]);
             check_card_menu(
                 &mut app,
                 &ctx,
@@ -4991,12 +4984,12 @@ mod tests {
     }
 
     #[test]
-    fn home_keeps_liked_songs_in_sidebar_without_duplicate_tile() {
+    fn home_liked_collection_opens_without_starting_playback() {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("home-liked-navigation");
         view_frame(&ctx, &mut app, vec![], crate::ui::home::show);
         let text = view_frame(&ctx, &mut app, vec![], crate::ui::home::show);
-        assert!(!text.iter().any(|(text, _)| text == "Liked Songs"));
+        assert!(text.iter().any(|(text, _)| text == "Liked Songs"));
         app.open(Page::Home);
         accessible_frame(&ctx, &mut app, vec![]);
         let tree = accessible_frame(&ctx, &mut app, vec![]);
@@ -5009,7 +5002,11 @@ mod tests {
                 .count(),
             1
         );
-        let liked = accessible_node(&tree, "Liked Songs", Role::Button);
+        let liked = accessible_node(
+            &tree,
+            "Liked Songs, All your favourites in one place",
+            Role::Button,
+        );
         app.backend.take_player_commands();
         accessible_frame(
             &ctx,
@@ -7348,8 +7345,8 @@ mod tests {
         // dragged row above Liked Songs. Where the list begins
         // depends on the loaded fonts, so the sweep does not hardcode it.
         let mut dropped = false;
-        for step in 0..40 {
-            let pos = egui::pos2(120.0, 100.0 + step as f32 * 10.0);
+        for y in (100..ctx.viewport_rect().bottom() as i32).step_by(10) {
+            let pos = egui::pos2(120.0, y as f32);
             egui::DragAndDrop::set_payload(
                 &ctx,
                 DragEntry {
@@ -7426,8 +7423,8 @@ mod tests {
         // right under Liked Songs, between what were the first two
         // unpinned playlists.
         let mut dropped = false;
-        for step in 0..40 {
-            let pos = egui::pos2(120.0, 100.0 + step as f32 * 10.0);
+        for y in (100..ctx.viewport_rect().bottom() as i32).step_by(10) {
+            let pos = egui::pos2(120.0, y as f32);
             egui::DragAndDrop::set_payload(
                 &ctx,
                 DragEntry {

@@ -1,9 +1,11 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   SPOTIFLAC_SESSION_REFRESH_AHEAD_MS,
+  SPOTIFLAC_PROTOCOL_VERSION,
   spotiflacCommunitySessionNeedsRefresh,
 } from "../lib/spotiflac-community";
 
@@ -33,49 +35,95 @@ function sameSecretText(left: string, right: string): boolean {
 }
 
 export function desktopSpotiflacSessionPath(): string {
-  return process.env.SPOTIFLAC_SESSION_FILE?.trim() || join(homedir(), ".spotiflac", "community_session.json");
+  return process.env.SPOTIFLAC_SESSION_FILE?.trim() || join(homedir(), ".streamarena-music", "provider-session.json");
+}
+
+async function readSessionRecord(path: string): Promise<DesktopSpotiflacSessionRecord> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let raw: string;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > MAX_RESPONSE_BYTES) throw new Error("Invalid provider session file");
+    const bytes = Buffer.alloc(MAX_RESPONSE_BYTES + 1);
+    const { bytesRead } = await handle.read(bytes,0,bytes.length,0);
+    if (bytesRead > MAX_RESPONSE_BYTES) throw new Error("Provider session file is too large");
+    raw = bytes.toString("utf8",0,bytesRead);
+  } finally { await handle.close(); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { throw new Error("Invalid provider session JSON"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid provider session record");
+  const record = parsed as Record<string,unknown>;
+  for (const field of ["install_id","session_id","session_secret","expires_at"]) {
+    if (record[field] != null && (typeof record[field] !== "string" || (record[field] as string).length > 4096)) {
+      throw new Error("Invalid provider session field");
+    }
+  }
+  return record as DesktopSpotiflacSessionRecord;
 }
 
 export async function readDesktopSpotiflacSession(
   path = desktopSpotiflacSessionPath(),
 ): Promise<DesktopSpotiflacSessionRecord> {
   try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as DesktopSpotiflacSessionRecord;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid JSON object");
-    return parsed;
+    return await readSessionRecord(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (path === desktopSpotiflacSessionPath() && !process.env.SPOTIFLAC_SESSION_FILE?.trim()) {
+        return migrateProviderSession(path);
+      }
+      return {};
+    }
     throw new Error(`Could not read the SpotiFLAC session: ${error instanceof Error ? error.message : "invalid file"}`, {
       cause: error,
     });
   }
 }
 
-async function writePrivateFile(path: string, contents: string): Promise<void> {
+async function writePrivateFile(path: string, contents: string, replace = true): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const directory = await lstat(dirname(path));
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Invalid provider session directory");
   await chmod(dirname(path), 0o700);
   const temporaryPath = `${path}.tmp-${process.pid}-${randomHex(4)}`;
   try {
-    await writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
+    await writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600, flag:"wx" });
     await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, path);
+    if (replace) await rename(temporaryPath, path);
+    else {
+      // link is an atomic create-if-absent; a racing renewal must never lose its newer session.
+      await link(temporaryPath,path);
+      await unlink(temporaryPath);
+    }
   } catch (error) {
     await unlink(temporaryPath).catch(() => undefined);
     throw error;
   }
 }
 
-function installedAppVersion(): string {
-  const result = Bun.spawnSync([
-    "/usr/bin/defaults",
-    "read",
-    "/Applications/SpotiFLAC.app/Contents/Info.plist",
-    "CFBundleShortVersionString",
-  ]);
-  const version = result.exitCode === 0 ? new TextDecoder().decode(result.stdout).trim() : "";
-  if (!version) throw new Error("SpotiFLAC is not installed in /Applications");
-  return version;
+export async function migrateProviderSession(
+  destination: string,
+  legacyPath = join(homedir(), ".spotiflac", "community_session.json"),
+): Promise<DesktopSpotiflacSessionRecord> {
+  // Migrate once, keeping the old record intact until the replacement is verified.
+  try {
+    return await readSessionRecord(destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  let record: DesktopSpotiflacSessionRecord;
+  try {
+    record = await readSessionRecord(legacyPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error("Could not migrate the provider session", { cause:error });
+  }
+  if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("Invalid provider session");
+  try {
+    await writePrivateFile(destination, `${JSON.stringify(record, null, 2)}\n`,false);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  return readSessionRecord(destination);
 }
 
 async function boundedJson(response: Response): Promise<Record<string, unknown>> {
@@ -214,7 +262,7 @@ export async function refreshDesktopSpotiflacSession(options: { force?: boolean 
     return { expiresAt: text(record.expires_at), refreshed: false };
   }
 
-  const appVersion = installedAppVersion();
+  const appVersion = SPOTIFLAC_PROTOCOL_VERSION;
   const grant = await requestVerificationGrant(record, appVersion);
   const refreshed = await exchangeGrant(record, appVersion, grant);
   await writePrivateFile(path, `${JSON.stringify(refreshed, null, 2)}\n`);

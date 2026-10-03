@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { fetchSpotifyPlaylistCatalogPage } from "@/lib/spotify-pathfinder";
+import { DISCOVER_CHARTS } from "@/lib/discover-playlists";
 import type { PlayerSong } from "@/types/player";
 import { LOCAL_MAC_MINI_AUTH_USER, type AppEnv } from "./env";
 import { jsonCached, jsonError, requireUser } from "./http";
@@ -10,7 +11,8 @@ import { envString, toNumberValue, toStringValue } from "./values";
 import { withProviderDeadline } from "./fetch";
 import type { SongPayload } from "./payloads";
 import { parseSpotifyTrackId, resolveStreamUrl } from "./provider-download";
-import { stageDiscoverWithFallback } from "./discover-stage";
+import { downloadStagingId, stageDiscoverWithFallback } from "./discover-stage";
+import { downloadPreferences } from "./download-preferences";
 
 // Spotify's editorial "Top 50 - Global" playlist — globally trending tracks right
 // now. Fetched via the pathfinder (works anonymously for public playlists). Each
@@ -97,21 +99,21 @@ async function fillDiscoverStaging(
 
 // Fetch + normalize a Spotify playlist's tracks into the Discover shape. Shared
 // by the trending chart, the cron fill, and curated-playlist detail views.
-async function fetchDiscoverTracksForPlaylist(
+export async function fetchDiscoverPlaylist(
   env: CloudflareEnv,
   playlistId: string,
   limit: number,
-): Promise<DiscoverTrendingTrack[]> {
+): Promise<{ imageUrl: string; tracks: DiscoverTrendingTrack[] }> {
   try {
     // Catalog-page metadata + contents are fetched in parallel and the outer
     // deadline bounds token acquisition too. The legacy playlist helper fetched
     // those two surfaces serially, which could exceed the mobile 15s budget on a
     // cold Top 50 open.
-    const { tracks } = await withProviderDeadline(
+    const { playlist, tracks } = await withProviderDeadline(
       fetchSpotifyPlaylistCatalogPage(playlistId, envString(env, "SPOTIFY_SP_DC") || undefined, 0, limit),
       12_000,
     );
-    return tracks
+    const normalized = tracks
       .filter((track) => track.id && track.name && track.artists.length > 0)
       .map((track) => ({
         id: track.id,
@@ -122,15 +124,16 @@ async function fetchDiscoverTracksForPlaylist(
         durationMs: typeof track.durationMs === "number" && track.durationMs > 0 ? track.durationMs : null,
         spotifyUrl: `https://open.spotify.com/track/${track.id}`,
       }));
+    return { imageUrl: playlist.imageUrl || "", tracks: normalized };
   } catch {
-    return [];
+    return { imageUrl: "", tracks: [] };
   }
 }
 
 // The current "Top 50 - Global" chart (shared by the trending endpoint and the
 // cron fill).
-export function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingTrack[]> {
-  return fetchDiscoverTracksForPlaylist(env, TOP_50_GLOBAL_PLAYLIST_ID, 50);
+export async function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingTrack[]> {
+  return (await fetchDiscoverPlaylist(env, TOP_50_GLOBAL_PLAYLIST_ID, 50)).tracks;
 }
 
 export type DiscoverStagedTrack = DiscoverTrendingTrack & { staged: boolean; audioId?: string; audioUrl?: string };
@@ -294,19 +297,19 @@ app.get("/api/discover/trending", async (c) => {
   return jsonCached(c, { tracks }, { cacheControl: "private, max-age=30, stale-while-revalidate=300" });
 });
 
-// The Home "Discover" first row as clickable, auto-updating PLAYLISTS (instead of a
-// horizontal scroll of individual tracks): Top 50 (lossless chart) + the YouTube
-// Music Discover Mix (Opus preview, owner's Premium). Each card opens
-// /api/playlist/:id ("discover-top50" / "yt-mix-<listId>").
+// Cards resolve artwork in the background; a cold provider never holds up Home.
 app.get("/api/discover/playlists", async (c) => {
   const user = c.get("user");
-  const sources: Array<{ fallback: DiscoverPlaylistCard; authenticatedOnly?: boolean; load: () => Promise<DiscoverPlaylistCard | null> }> = [{
-    fallback: { id: "discover-top50", name: "Top 50", imageUrl: "", songsCount: 0 },
+  const sources: Array<{ fallback: DiscoverPlaylistCard; authenticatedOnly?: boolean; load: () => Promise<DiscoverPlaylistCard | null> }> = DISCOVER_CHARTS.map((chart) => ({
+    fallback: { id: chart.id, name: chart.name, imageUrl: "", songsCount: 0 },
     load: async () => {
-      const top = await fetchTop50DiscoverTracks(c.env);
-      return top.length ? { id: "discover-top50", name: "Top 50", imageUrl: top[0]?.imageUrl || "", songsCount: top.length } : null;
+      const { playlist } = await withProviderDeadline(
+        fetchSpotifyPlaylistCatalogPage(chart.spotifyId, envString(c.env, "SPOTIFY_SP_DC") || undefined, 0, 1),
+        12_000,
+      );
+      return { id: chart.id, name: chart.name, imageUrl: playlist.imageUrl || "", songsCount: playlist.trackCount ?? 0 };
     },
-  }];
+  }));
   // The mini's mix is personalized to its owner. It stays behind the same
   // authentication gate as before and never enters the anonymous card cache.
   if (isMacMiniMusicConfigured(c.env) && user) {
@@ -352,13 +355,19 @@ app.post("/api/discover/stage", async (c) => {
   if (!title || (!artist && !youtubeVideoId)) return jsonError("Title and artist are required", 400);
   // Playback previews go straight to YouTube. Library saves try the configured
   // providers first, then download YouTube's best available audio on failure.
+  const preferences = downloadPreferences(payload);
+  const strictAtmos = toStringValue(payload.qualityProfile).toLowerCase() === "atmos" && preferences?.atmosFallback === false;
   const preview = payload.preview === true || Boolean(youtubeVideoId);
   const res = await stageDiscoverWithFallback({
     preview,
     youtubeVideoId,
+    allowYouTubeFallback: payload.allowYouTubeFallback !== false && !strictAtmos,
+    libraryFallback: payload.libraryFallback === true,
     resolve: () => resolveStreamUrl(c.env, payload),
     stage: (source) => macMiniDiscoverFetch(c.env, "/api/discover/stage", "POST", {
-      trackId,
+      trackId: payload.downloadRequest === true
+        ? downloadStagingId(trackId, toStringValue(payload.service), toStringValue(payload.qualityProfile), preferences)
+        : trackId,
       title,
       artist,
       album: toStringValue(payload.album),

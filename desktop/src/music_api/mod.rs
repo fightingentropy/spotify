@@ -1,6 +1,8 @@
 //! The native client's adapter to our music service, not Spotify OAuth/Connect.
 //! Only API requests receive the origin-scoped session cookie. Media URLs keep
 //! their signatures and can be passed to a separate streaming client unchanged.
+pub mod downloads;
+mod listening;
 mod mapping;
 mod models;
 #[cfg(test)]
@@ -178,6 +180,9 @@ impl MusicApi {
             .get(uri)
             .cloned()
             .ok_or_else(|| "This song is no longer in the current account.".to_string())?;
+        if matches!(song.source.as_deref(), Some("radio" | "podcast")) {
+            return Ok(());
+        }
         let mut song =
             serde_json::to_value(song).map_err(|_| "Invalid song metadata".to_string())?;
         if let Some(object) = song.as_object_mut() {
@@ -522,6 +527,12 @@ impl MusicApi {
     }
 
     async fn collection(&self, id: &str, offset: u32) -> Result<Collection> {
+        if id == "streamarena-radio" {
+            return self.radio_collection().await;
+        }
+        if matches!(id, "streamarena-top" | "streamarena-recent") {
+            return self.listening_history_collection(id).await;
+        }
         if id == "streamarena-all" {
             let value = self.get("/api/songs").await?;
             let songs = self.songs(&value)?;
@@ -583,7 +594,7 @@ impl MusicApi {
     }
 
     async fn track(&self, id: &str, refresh: bool) -> Result<MusicSong> {
-        let uri = if id.starts_with("spotify:track:") {
+        let uri = if id.starts_with("spotify:track:") || id.starts_with("spotify:episode:") {
             id.to_string()
         } else {
             format!("spotify:track:{id}")
@@ -600,7 +611,13 @@ impl MusicApi {
                 return Ok(song);
             }
         }
-        let id = uri.strip_prefix("spotify:track:").ok_or_else(unsupported)?;
+        let id = uri
+            .strip_prefix("spotify:track:")
+            .or_else(|| uri.strip_prefix("spotify:episode:"))
+            .ok_or_else(unsupported)?;
+        if id.starts_with("radio:") || id.starts_with("podcast:") {
+            return self.listening_track(id).await;
+        }
         let value = self
             .request(Method::GET, &format!("/api/songs/{}", segment(id)), None)
             .await;
@@ -761,6 +778,9 @@ impl MusicApi {
     async fn context(&self, uri: &str) -> Result<Vec<MusicSong>> {
         if uri == "spotify:collection:tracks" || uri.ends_with(":collection") {
             return self.songs(&self.get("/api/liked").await?);
+        }
+        if uri.starts_with("spotify:episode:") {
+            return Ok(vec![self.track(uri, false).await?]);
         }
         if let Some(id) = uri.strip_prefix("spotify:track:") {
             return Ok(vec![self.track(id, false).await?]);
@@ -1568,8 +1588,8 @@ impl MusicApi {
                 result: Err(unsupported()),
             },
             Q::SavedShows { offset } => R::SavedShows {
+                result: self.podcast_shows(offset).await,
                 offset,
-                result: Err(unsupported()),
             },
             Q::SavedEpisodes { offset } => R::SavedEpisodes {
                 offset,
@@ -1586,21 +1606,21 @@ impl MusicApi {
                 result: Err(unsupported()),
             },
             Q::Show { id } => R::Show {
+                result: self.podcast_show(&id).await,
                 id,
-                result: Err(unsupported()),
             },
             Q::ShowEpisodes { id, offset } => R::ShowEpisodes {
+                result: self.podcast_episodes(&id, offset).await,
                 id,
                 offset,
-                result: Err(unsupported()),
             },
             Q::HomeEpisodes { generation, .. } => R::HomeEpisodes {
                 generation,
                 result: Err(unsupported()),
             },
             Q::Episode { id } => R::Episode {
+                result: self.podcast_episode(&id).await,
                 id,
-                result: Err(unsupported()),
             },
             Q::Remote { action, .. } => R::Remote {
                 action,

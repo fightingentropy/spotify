@@ -17,6 +17,13 @@ use super::widgets;
 pub const EPISODE_ROW_HEIGHT: f32 = 128.0;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
+    ui.vertical(|ui| {
+        ui.set_max_width(1180.0);
+        show_content(app, ui, id);
+    });
+}
+
+fn show_content(app: &mut App, ui: &mut egui::Ui, id: &str) {
     if !app.show_pages.contains_key(id) {
         app.ensure_loaded(Page::Show(id.to_string()));
     }
@@ -31,7 +38,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             show_hero(app, ui, show, preview.as_deref());
             show_actions(app, ui, show, page.episodes.items.first());
             if !show.description.is_empty() {
-                theme::section_title(ui, &palette, &gettext(locale, "About"));
+                if !id.starts_with("streamarena:") {
+                    theme::section_title(ui, &palette, &gettext(locale, "About"));
+                }
                 ui.add_space(4.0);
                 let description = util::strip_html(&show.description);
                 let galley = crate::bidi::layout(
@@ -46,7 +55,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 ui.add(egui::Label::new(galley));
                 ui.add_space(16.0);
             }
-            theme::section_title(ui, &palette, &gettext(locale, "All episodes"));
+            theme::section_title(
+                ui,
+                &palette,
+                &gettext(
+                    locale,
+                    if id.starts_with("streamarena:") {
+                        "Latest episodes"
+                    } else {
+                        "All episodes"
+                    },
+                ),
+            );
             ui.add_space(6.0);
             let episodes = page.episodes.items.clone();
             let show_image = pick_image(&show.images, 64).map(str::to_string);
@@ -95,6 +115,33 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
 }
 
 fn show_hero(app: &mut App, ui: &mut egui::Ui, show: &Show, preview: Option<&Show>) {
+    if show.id.starts_with("streamarena:") {
+        let palette = app.palette;
+        ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            widgets::cover(
+                ui,
+                &palette,
+                pick_image(&show.images, 320),
+                144.0,
+                8.0,
+                Icon::Mic,
+            );
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.add_space(12.0);
+                theme::subtle(ui, &palette, "Podcast");
+                theme::text(ui, &show.name, theme::semibold(32.0), palette.text);
+                theme::subtle(ui, &palette, &show.publisher);
+                if let Some(total) = show.total_episodes {
+                    ui.add_space(8.0);
+                    theme::subtle(ui, &palette, &format!("{total} recent episodes"));
+                }
+            });
+        });
+        ui.add_space(20.0);
+        return;
+    }
     let locale = app.locale;
     let mut byline = vec![(show.publisher.clone(), None)];
     if let Some(total) = show.total_episodes {
@@ -161,6 +208,18 @@ fn show_actions(app: &mut App, ui: &mut egui::Ui, show: &Show, latest: Option<&E
                     resume_ms: latest.resume_ms(),
                 });
             }
+        }
+        if show.id.starts_with("streamarena:") {
+            if theme::soft_button(ui, &palette, Some(Icon::Refresh), "Refresh episodes", false)
+                .clicked()
+            {
+                app.actions
+                    .push(Action::Reload(Page::Show(show.id.clone())));
+            }
+            if let Some(url) = &show.external_urls.spotify {
+                ui.hyperlink_to("Visit website", url);
+            }
+            return;
         }
         let (icon, color, tooltip) = if saved {
             (
@@ -308,7 +367,11 @@ pub fn episode_row(
             palette.text
         },
         palette.window,
-        &gettext(locale, "Play"),
+        &format!(
+            "{} {}",
+            gettext(locale, if playing_here { "Pause" } else { "Play" }),
+            episode.name
+        ),
     )
     .clicked()
     {
@@ -325,7 +388,9 @@ pub fn episode_row(
     if let Some(date) = &episode.release_date {
         meta.push(util::format_date(app.locale, date));
     }
-    let resume = episode.resume_point.as_ref();
+    let resume = app
+        .podcast_progress(&episode.uri)
+        .or(episode.resume_point.as_ref());
     let remaining = resume
         .filter(|resume| !resume.fully_played && resume.resume_position_ms > 0)
         .map(|resume| {
@@ -373,6 +438,15 @@ pub fn episode_row(
         }
     }
     let _ = x;
+    if episode.uri.starts_with("spotify:episode:podcast:") {
+        if response.double_clicked() {
+            app.actions.push(Action::PlayEpisode {
+                uri: episode.uri.clone(),
+                resume_ms: episode.resume_ms(),
+            });
+        }
+        return;
+    }
     // More menu.
     let more_rect = Rect::from_center_size(pos2(inner.right() - 16.0, footer_y), Vec2::splat(32.0));
     let mut more_ui = ui.new_child(

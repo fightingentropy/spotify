@@ -11,6 +11,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/desktop/target/release/streamarena-music" "$APP/Contents/MacOS/streamarena-music"
 cp "$ROOT/desktop/packaging/macos/streamarena.icns" "$APP/Contents/Resources/Music.icns"
 cp "$ROOT/desktop/LICENSE" "$APP/Contents/Resources/Spotifast-LICENSE.txt"
+cp "$ROOT/desktop/Lofty-LICENSE.txt" "$APP/Contents/Resources/Lofty-LICENSE.txt"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

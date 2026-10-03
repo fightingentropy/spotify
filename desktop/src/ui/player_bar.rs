@@ -399,7 +399,11 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
     if cover_response.clicked() {
         app.open_now_playing();
     }
-    let heart_width = if now.is_episode { 0.0 } else { 42.0 };
+    let heart_width = if now.is_episode || now.uri.starts_with("spotify:track:radio:") {
+        0.0
+    } else {
+        42.0
+    };
     let text_left = cover_rect.right() + 12.0;
     let text_width = (region.right() - text_left - heart_width).max(40.0);
     let text_rect = Rect::from_min_size(pos2(text_left, cy - 18.0), vec2(text_width, 36.0));
@@ -465,7 +469,7 @@ fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, now: Option
         }
     }
 
-    if !now.is_episode {
+    if !now.is_episode && !now.uri.starts_with("spotify:track:radio:") {
         let saved = app.is_saved(&now.uri).unwrap_or(false);
         let (icon, color, tooltip) = if saved {
             (
@@ -698,6 +702,16 @@ fn transport(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, region:
         app.actions.push(Action::CycleRepeat);
     }
 
+    if now.is_some_and(|now| now.uri.starts_with("spotify:track:radio:")) {
+        ui.painter().text(
+            pos2(region.center().x, cy + 31.0),
+            egui::Align2::CENTER_CENTER,
+            "•  LIVE RADIO",
+            theme::medium(11.0),
+            palette.accent,
+        );
+        return;
+    }
     // Progress row, just below the buttons (disc bottom + 6px gap + half of
     // the time text's line height).
     let row_cy = cy + 31.0;

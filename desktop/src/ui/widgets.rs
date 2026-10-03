@@ -74,6 +74,12 @@ pub(super) fn paint_cover_with_thumbnail(
     if !ui.is_rect_visible(rect) {
         return;
     }
+    if sources
+        .requested
+        .is_some_and(|uri| super::playlist_art::paint(ui, uri, rect, radius))
+    {
+        return;
+    }
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     let loaded = sources
         .requested
@@ -1710,7 +1716,11 @@ fn track_row_contents(
     painter.text(
         pos2(duration_rect.right() - 6.0, duration_rect.center().y),
         egui::Align2::RIGHT_CENTER,
-        util::format_duration_ms(row.item.duration_ms()),
+        if row.item.duration_ms() == 0 {
+            "—".into()
+        } else {
+            util::format_duration_ms(row.item.duration_ms())
+        },
         theme::regular(13.0),
         palette.secondary,
     );

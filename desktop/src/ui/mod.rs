@@ -6,13 +6,17 @@ pub mod artist;
 pub mod collection;
 pub(crate) mod devices;
 mod dialogs;
+pub mod download_tools;
+pub mod downloads;
 pub mod home;
 mod keys;
 pub mod library;
+mod listening;
 pub mod login;
 mod lyrics;
 pub(crate) mod now_playing;
 pub mod player_bar;
+mod playlist_art;
 pub mod queue;
 pub mod radio;
 pub mod search;
@@ -235,6 +239,7 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                                 Page::Home => home::show(app, ui),
                                 Page::TopSongs => collection::top_songs(app, ui),
                                 Page::Search => search::show(app, ui),
+                                Page::Downloads => downloads::draw(ui, app),
                                 Page::LikedSongs => collection::liked(app, ui),
                                 Page::Albums | Page::Artists | Page::Podcasts | Page::Episodes => {
                                     library::show(app, ui, page)

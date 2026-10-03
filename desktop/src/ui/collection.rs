@@ -1356,6 +1356,10 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
 }
 
 pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
+    if id == "streamarena-radio" {
+        super::listening::radio(app, ui);
+        return;
+    }
     if !app.playlist_pages.contains_key(id) {
         app.ensure_loaded(Page::Playlist(id.to_string()));
     }
@@ -1970,6 +1974,9 @@ fn song_count(locale: Locale, count: u32) -> String {
 
 /// `1,234 songs, 2 hr 13 min` once the whole list is known.
 pub(super) fn songs_and_duration(locale: Locale, count: u32, duration_ms: u64) -> String {
+    if duration_ms == 0 {
+        return song_count(locale, count);
+    }
     ngettext(
         locale,
         // Translators: {count} is a number of songs and {duration} their total

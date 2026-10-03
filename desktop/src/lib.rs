@@ -11,6 +11,7 @@ pub mod bidi;
 pub mod credentials;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
+pub mod download_tasks;
 pub mod emoji;
 pub mod eq;
 pub mod history;
@@ -62,6 +63,7 @@ pub mod zeroconf;
 // StreamArena provider: native UI backed by our existing music service.
 pub mod music_api;
 pub mod music_backend;
+pub mod music_downloads;
 mod music_history;
 pub mod music_player;
 mod music_session;

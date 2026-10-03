@@ -40,7 +40,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
         theme::semibold(theme::PAGE_TITLE_SIZE),
         palette.text,
     );
-    ui.add_space(14.0);
+    if page == Page::Podcasts {
+        theme::subtle(
+            ui,
+            &palette,
+            "Science, ideas, comedy, and conversations. The same shows as your web library.",
+        );
+    }
+    ui.add_space(24.0);
     match page {
         Page::Albums => {
             let card_height = widgets::card_row_height(ui);
@@ -177,10 +184,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
                 if card.clicked {
                     app.actions.push(Action::Open(Page::Show(id)));
                 }
-                egui::Popup::context_menu(&card.response)
-                    .id(ui.make_persistent_id(("library-show-menu", &show.uri)))
-                    .frame(widgets::menu_frame(&palette))
-                    .show(|ui| widgets::context_menu_items(ui, app, &show.uri, &show.name, None));
             });
             let list = &app.library.shows;
             let (loading, error, can_load, empty) = (

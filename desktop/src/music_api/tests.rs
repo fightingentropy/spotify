@@ -44,6 +44,7 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let captured = seen.clone();
         let stopping = stop.clone();
+        let fixture_url = url.clone();
         let thread = std::thread::spawn(move || {
             while !stopping.load(Ordering::SeqCst) {
                 let (mut stream, _) = match listener.accept() {
@@ -56,12 +57,19 @@ impl Server {
                 };
                 stream.set_nonblocking(false).unwrap();
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .set_read_timeout(Some(Duration::from_secs(10)))
                     .unwrap();
                 let mut bytes = Vec::new();
                 let mut buffer = [0; 4096];
                 let request = loop {
-                    let count = stream.read(&mut buffer).unwrap_or(0);
+                    let count = match stream.read(&mut buffer) {
+                        Ok(count) => count,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => panic!(
+                            "Music API fixture could not read its request after {} bytes: {error}",
+                            bytes.len()
+                        ),
+                    };
                     if count == 0 {
                         break None;
                     }
@@ -99,8 +107,19 @@ impl Server {
                 let Some(request) = request else {
                     continue;
                 };
-                let response = handler(&request);
-                captured.lock().unwrap().push(request);
+                // Preserve the exact request before invoking assertions so a
+                // fixture panic remains diagnosable under the parallel suite.
+                captured.lock().unwrap().push(request.clone());
+                let response =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(&request)))
+                        .unwrap_or_else(|failure| {
+                            eprintln!(
+                                "Music API fixture {fixture_url} handler failed for {} {:?}",
+                                request.method,
+                                request.path.split('?').next().unwrap_or_default()
+                            );
+                            std::panic::resume_unwind(failure)
+                        });
                 let body = response.body.to_string();
                 let headers = response
                     .headers
@@ -130,7 +149,13 @@ impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
+            if let Err(failure) = thread.join() {
+                // Keep fixture assertions fatal on normal teardown, but never
+                // start a second panic while the failed request is unwinding.
+                if !std::thread::panicking() {
+                    std::panic::resume_unwind(failure);
+                }
+            }
         }
     }
 }
@@ -674,4 +699,122 @@ async fn unlike_keeps_raw_identity_when_server_uses_per_file_likes() {
     api.set_saved(&["spotify:track:raw-copy".into()], false)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn home_collections_keep_chart_and_mix_identity_and_play_through_our_api() {
+    let server = Server::new(|request| match request.path.as_str() {
+        "/api/discover/playlists" => reply(json!({"playlists":[
+            {"id":"discover-top50","name":"Top 50 - Global","imageUrl":"/global.jpg","songsCount":50},
+            {"id":"discover-top50-uk","name":"Top 50 - United Kingdom","imageUrl":"","songsCount":50},
+            {"id":"yt-mix-test","name":"Discover Mix","imageUrl":"","songsCount":25}
+        ]})),
+        "/api/playlist/discover-top50" => reply(json!({"kind":"curated",
+            "playlist":{"id":"discover-top50","name":"Top 50 - Global"},"songs":[song("chart-track")]})),
+        "/api/playlist/yt-mix-test" => {
+            let mut track = song("discover:yt-test");
+            track["discoverTrackId"] = json!("yt-test");
+            track["youtubeVideoId"] = json!("video-exact");
+            track["audioUrl"] = json!("");
+            track["preview"] = json!(true);
+            reply(
+                json!({"kind":"curated","playlist":{"id":"yt-mix-test","name":"Discover Mix","imageUrl":"/first-video-frame.jpg"},"songs":[track]}),
+            )
+        }
+        _ => error(404),
+    });
+    let api = server.api();
+    let responses = api
+        .handle(ApiRequest::Discover {
+            term: "Top 50".into(),
+            generation: 19,
+        })
+        .await;
+    let ApiResponse::Discover {
+        generation,
+        result: Ok(playlists),
+        ..
+    } = &responses[0]
+    else {
+        panic!("missing shelves")
+    };
+    assert_eq!(*generation, 19);
+    assert_eq!(playlists.len(), 3);
+    assert_eq!(playlists[0].uri, "spotify:playlist:discover-top50");
+    assert!(playlists[0].images[0].url.ends_with("/global.jpg"));
+    assert_eq!(playlists[1].images[0].url, "music-cover:uk");
+    assert_eq!(playlists[2].owner_name(), "YouTube Music");
+    let details = api
+        .handle(ApiRequest::Playlist {
+            id: playlists[2].id.clone(),
+            generation: 20,
+        })
+        .await;
+    let ApiResponse::Playlist {
+        result: Ok(detail), ..
+    } = &details[0]
+    else {
+        panic!("missing mix detail")
+    };
+    assert_eq!(detail.images[0].url, playlists[2].images[0].url);
+    assert_eq!(detail.owner_name(), "YouTube Music");
+    assert_eq!(
+        api.resolve_context(&playlists[0].uri).await.unwrap(),
+        vec!["spotify:track:chart-track"]
+    );
+    let mix = api.context(&playlists[2].uri).await.unwrap();
+    assert_eq!(mix[0].youtube_video_id.as_deref(), Some("video-exact"));
+    assert!(mix[0].preview && mix[0].audio_url.is_empty());
+    assert!(
+        server
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET")
+    );
+}
+
+#[tokio::test]
+async fn personal_home_collections_are_read_only_ordered_and_share_the_home_read() {
+    let server = Server::new(|request| {
+        assert_eq!(request.path, "/api/stats/home");
+        assert_eq!(request.method, "GET");
+        reply(
+            json!({"recentlyPlayed":[song("recent"),song("favourite"),song("recent")],
+            "mostPlayed":[{"song":song("favourite")},{"song":song("recent")}]}),
+        )
+    });
+    let api = server.api();
+    let (top, recent) = tokio::join!(
+        api.collection("streamarena-top", 0),
+        api.collection("streamarena-recent", 0)
+    );
+    let top = top.unwrap();
+    let recent = recent.unwrap();
+    assert_eq!(top.playlist.unwrap().name, "On repeat");
+    assert_eq!(
+        top.songs
+            .iter()
+            .map(|song| song.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["favourite", "recent"]
+    );
+    assert_eq!(
+        recent
+            .songs
+            .iter()
+            .map(|song| song.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["recent", "favourite"]
+    );
+    assert_eq!(recent.playlist.unwrap().editable, Some(false));
+    assert!(api.editable_playlist("streamarena-top").await.is_err());
+    assert_eq!(
+        api.resolve_context("spotify:playlist:streamarena-recent")
+            .await
+            .unwrap(),
+        vec!["spotify:track:recent", "spotify:track:favourite"]
+    );
+    assert_eq!(server.seen.lock().unwrap().len(), 1);
 }

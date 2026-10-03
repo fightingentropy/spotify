@@ -418,6 +418,7 @@ fastframe_icons::icons! {
         Ellipsis => lucide "ellipsis",
         Expand => "expand",
         ExternalLink => lucide "external-link",
+        Folder => "folder",
         Gamepad => "gamepad-2",
         Globe => "globe",
         GripVertical => "grip-vertical",

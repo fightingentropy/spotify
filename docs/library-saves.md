@@ -26,6 +26,41 @@ and direct YouTube tracks can be promoted in their original format.
 Playlist entries must reference a promoted library file. The playlist API
 rejects `.discover` URLs because that cache is temporary and can be pruned.
 
+## Native desktop downloads
+
+The desktop Downloads section uses `POST /api/downloads/resolve` for searches
+and Spotify song, album, playlist, or artist links. This authenticated route must
+be available on its configured music API origin. Artwork downloads use a separate
+client with no session cookies, restricted to HTTPS image CDN hosts, with redirects
+disabled and a 16 MB limit. Local file downloads use
+`POST /api/songs/spotify/file`; library saves use staging and promotion above.
+An explicit source and quality request is passed through to the server. Turning
+off YouTube fallback makes a missing selected source fail instead of silently
+substituting lossy audio.
+
+Default source endpoint URLs stay in server configuration, including the existing
+`SPOTIFLAC_<SERVICE>_PROVIDER_URL` / `SPOTIFLAC_<SERVICE>_PROVIDER_URLS` settings.
+Service credentials and browser verification remain server responsibilities;
+the desktop does not store or edit provider cookies. Downloads settings can
+override public HTTPS Tidal/Qobuz instances, choose Songlink or Songstats with
+optional resolver fallback, and reorder providers. The API validates custom
+hosts and never forwards our provider credentials to them. **Check reachability**
+only confirms an HTTP response; a successful track download is the source check.
+
+For Mac exports, install both `ffmpeg` and `ffprobe` (`brew install ffmpeg`).
+The exporter measures source and output audio, writes selected tags/sidecars,
+and publishes a completed file without overwriting an existing one. Original
+format with original sample rate avoids audio re-encoding; other format or
+sample-rate choices are explicit conversions, not quality upgrades. A
+library-only download does not need the local tools.
+
+History is account-scoped and contains metadata and file receipts, not expiring
+media links or session cookies. After a restart, interrupted work requires an
+explicit retry. When saving to both destinations, a retry retains the already
+successful destination. If history is unreadable, the UI blocks new queue
+writes and preference changes until loading succeeds or the user starts new
+history with a backup. Clearing completed history never removes music files.
+
 ## YouTube quality and credentials
 
 The server's selector is `774/141/bestaudio`: prefer Premium Opus, then Premium

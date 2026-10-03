@@ -1240,13 +1240,20 @@ mod tests {
                             .await
                             .unwrap()
                             .unwrap();
-                    if index == 2 && rate_limit {
-                        assert!(cooldown_started.unwrap().elapsed() >= Duration::from_secs(1));
-                    }
                     let mut request = Vec::new();
                     while !request.ends_with(b"\r\n\r\n") {
                         request.push(socket.read_u8().await.unwrap());
                         assert!(request.len() < 8192);
+                    }
+                    if index == 2 && rate_limit {
+                        // The cooldown gates the HTTP retry, not the TCP
+                        // connection. A transport may establish a connection
+                        // before it is ready to send the next request.
+                        let elapsed = cooldown_started.unwrap().elapsed();
+                        assert!(
+                            elapsed >= Duration::from_secs(1),
+                            "the retry arrived before Retry-After elapsed: {elapsed:?}"
+                        );
                     }
                     paths.push(
                         String::from_utf8(request)
