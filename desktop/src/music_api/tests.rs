@@ -675,6 +675,85 @@ async fn cached_catalog_lyrics_metadata_does_not_stage_audio() {
 }
 
 #[tokio::test]
+async fn liked_songs_without_a_like_time_are_dated_by_their_arrival() {
+    let server = Server::new(|r| match r.path.as_str() {
+        "/api/liked" => {
+            let mut recent = song("recent");
+            recent["likedAt"] = json!("2026-09-27T10:00:00.000Z");
+            recent["createdAt"] = json!("2025-01-01T00:00:00.000Z");
+            let mut legacy = song("legacy");
+            legacy["createdAt"] = json!("2024-03-05T08:00:00.000Z");
+            let undated = song("undated");
+            reply(json!({"songs":[recent, legacy, undated]}))
+        }
+        _ => error(500),
+    });
+    let api = server.api();
+    let responses = api
+        .handle(ApiRequest::SavedTracks {
+            offset: 0,
+            generation: 1,
+        })
+        .await;
+    let Some(ApiResponse::SavedTracks {
+        result: Ok(page), ..
+    }) = responses.first()
+    else {
+        panic!("a page of liked songs");
+    };
+    let dates: Vec<_> = page
+        .items
+        .iter()
+        .map(|saved| saved.added_at.as_deref())
+        .collect();
+    assert_eq!(
+        dates,
+        [
+            Some("2026-09-27T10:00:00.000Z"),
+            Some("2024-03-05T08:00:00.000Z"),
+            None
+        ]
+    );
+}
+
+#[tokio::test]
+async fn all_songs_are_dated_by_their_arrival_and_playlists_keep_their_own_dates() {
+    let server = Server::new(|r| match r.path.as_str() {
+        "/api/songs" => {
+            let mut arrived = song("arrived");
+            arrived["createdAt"] = json!("2026-05-02T09:00:00.000Z");
+            reply(json!({"songs":[arrived]}))
+        }
+        "/api/playlist/mix" => {
+            let mut listed = song("listed");
+            listed["createdAt"] = json!("2026-05-02T09:00:00.000Z");
+            reply(json!({"playlist":{"id":"mix","name":"Mix"},"songs":[listed]}))
+        }
+        _ => error(500),
+    });
+    let api = server.api();
+    let mut dates = Vec::new();
+    for id in ["streamarena-all", "mix"] {
+        let responses = api
+            .handle(ApiRequest::PlaylistItems {
+                id: id.into(),
+                offset: 0,
+                generation: 1,
+            })
+            .await;
+        let Some(ApiResponse::PlaylistItems {
+            result: Ok(page), ..
+        }) = responses.first()
+        else {
+            panic!("a page of {id}");
+        };
+        dates.push(page.items[0].added_at.clone());
+    }
+    // A playlist was not made when its songs reached the library.
+    assert_eq!(dates, [Some("2026-05-02T09:00:00.000Z".into()), None]);
+}
+
+#[tokio::test]
 async fn cold_catalog_metadata_recovers_saved_history_without_staging() {
     let server = Server::new(|r| match r.path.as_str() {
         "/api/songs/catalog:lyrics-only" => error(404),

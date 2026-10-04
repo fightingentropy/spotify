@@ -911,7 +911,13 @@ impl MusicApi {
         offset: u32,
     ) -> Result<view::Page<view::PlaylistItem>> {
         let collection = self.collection(id, offset).await?;
-        let items = mapping::playlist_items(&collection.songs);
+        let mut items = mapping::playlist_items(&collection.songs);
+        // All Songs is the library itself: each song was added when it arrived.
+        if id == "streamarena-all" {
+            for (item, song) in items.iter_mut().zip(&collection.songs) {
+                item.added_at = song.created_at.clone();
+            }
+        }
         if let Some(server_page) = collection.page {
             Ok(view::Page {
                 items,
@@ -1294,7 +1300,10 @@ impl MusicApi {
                         .iter()
                         .map(|s| view::SavedTrack {
                             track: s.track(),
-                            added_at: s.liked_at.clone(),
+                            // Likes from before the server kept like times
+                            // were every song in the library, liked as it
+                            // arrived; when it arrived stands in for them.
+                            added_at: s.liked_at.clone().or_else(|| s.created_at.clone()),
                         })
                         .collect();
                     Ok(mapping::page(&tracks, offset, PAGE_SIZE))
