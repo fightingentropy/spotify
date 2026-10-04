@@ -776,6 +776,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 show_album: table.show_album,
                 // Rows reserve the column only where the header does.
                 added_at: added_at.as_deref().filter(|_| table.show_added),
+                show_added: table.show_added,
                 added_by: added_by.as_deref(),
                 show_added_by: table.show_added_by,
                 compact: false,

@@ -1061,6 +1061,9 @@ pub struct TrackRow<'a> {
     pub show_cover: bool,
     pub show_album: bool,
     pub added_at: Option<&'a str>,
+    /// Whether the list has a date column. A row without a date of its own
+    /// leaves the cell empty, so its other cells stay under their headings.
+    pub show_added: bool,
     /// Who put the song here, on playlists made together.
     pub added_by: Option<&'a str>,
     pub show_added_by: bool,
@@ -1114,6 +1117,8 @@ pub(crate) fn artist_links(
 }
 
 /// Column widths of the track table, computed from the available width.
+/// The header and every row take the same, so cells line up under their
+/// headings whatever a row has to show.
 struct Columns {
     number: f32,
     cover: f32,
@@ -1125,35 +1130,60 @@ struct Columns {
     more: f32,
 }
 
-fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
+/// Which columns a track list has, whatever each row holds.
+#[derive(Clone, Copy)]
+struct Shown {
+    compact: bool,
+    cover: bool,
+    album: bool,
+    added: bool,
+    added_by: bool,
+}
+
+impl Shown {
+    fn row(row: &TrackRow<'_>) -> Self {
+        Self {
+            compact: row.compact,
+            cover: row.show_cover,
+            album: row.show_album,
+            added: row.show_added,
+            added_by: row.show_added_by,
+        }
+    }
+}
+
+fn columns(width: f32, shown: Shown) -> Columns {
     let extra_wide = width > 920.0;
     let wide = width > 760.0;
     let medium = width > 560.0;
     Columns {
-        number: if row.compact { 0.0 } else { 44.0 },
-        cover: if row.show_cover {
-            if row.compact { 44.0 } else { 52.0 }
+        number: if shown.compact { 0.0 } else { 44.0 },
+        cover: if shown.cover {
+            if shown.compact { 44.0 } else { 52.0 }
         } else {
             0.0
         },
-        album: if row.show_album && medium {
+        album: if shown.album && medium {
             (width * 0.28).clamp(140.0, 360.0)
         } else {
             0.0
         },
-        added_by: if row.show_added_by && extra_wide {
+        added_by: if shown.added_by && extra_wide {
             130.0
         } else {
             0.0
         },
-        added: if row.added_at.is_some() && wide {
-            120.0
-        } else {
-            0.0
-        },
-        heart: if row.compact { 0.0 } else { 36.0 },
-        duration: if row.compact { 44.0 } else { 56.0 },
-        more: if row.compact { 0.0 } else { 36.0 },
+        added: if shown.added && wide { 120.0 } else { 0.0 },
+        heart: if shown.compact { 0.0 } else { 36.0 },
+        duration: if shown.compact { 44.0 } else { 56.0 },
+        more: if shown.compact { 0.0 } else { 36.0 },
+    }
+}
+
+impl Columns {
+    /// Where the durations end, right-aligned in their column.
+    fn duration_right(&self, row_right: f32) -> f32 {
+        row_right - self.more - 8.0 - 6.0
     }
 }
 
@@ -1288,7 +1318,7 @@ fn track_row_contents(
     }
     // The row highlight also shows keyboard focus. Do not add an outline
     // when a mouse click gives the row focus for arrow-key navigation.
-    let cols = columns(width, &row);
+    let cols = columns(width, Shown::row(&row));
     let painter = ui.painter().clone();
     let mut x = rect.left() + 8.0;
 
@@ -1715,7 +1745,7 @@ fn track_row_contents(
     // Duration.
     let duration_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.duration, row_height));
     painter.text(
-        pos2(duration_rect.right() - 6.0, duration_rect.center().y),
+        pos2(cols.duration_right(rect.right()), duration_rect.center().y),
         egui::Align2::RIGHT_CENTER,
         if row.item.duration_ms() == 0 {
             "—".into()
@@ -2095,51 +2125,44 @@ pub fn table_header(
             number_clicked = true;
         }
     }
-    x += 44.0;
-    if show_cover {
-        x += 52.0;
-    }
+    let cols = columns(
+        width,
+        Shown {
+            compact: false,
+            cover: show_cover,
+            album: show_album,
+            added: show_added,
+            added_by: show_added_by,
+        },
+    );
+    x += cols.number + cols.cover;
     heading(
         ui,
         x,
         &pgettext(locale, "column heading", "TITLE"),
         SortColumn::Title,
     );
-    let medium = width > 560.0;
-    let wide = width > 760.0;
-    let album_width = if show_album && medium {
-        (width * 0.28).clamp(140.0, 360.0)
-    } else {
-        0.0
-    };
-    let added_width = if show_added && wide { 120.0 } else { 0.0 };
-    let extra_wide = width > 920.0;
-    let added_by_width = if show_added_by && extra_wide {
-        130.0
-    } else {
-        0.0
-    };
-    let right_fixed = 36.0 + 56.0 + 36.0 + 8.0;
-    let mut cx = rect.right() - right_fixed - added_width - added_by_width - album_width;
-    if album_width > 0.0 {
+    let right_fixed = cols.heart + cols.duration + cols.more + 8.0;
+    let mut cx = rect.right() - right_fixed - cols.added - cols.added_by - cols.album;
+    if cols.album > 0.0 {
         heading(
             ui,
             cx,
             &pgettext(locale, "column heading", "ALBUM"),
             SortColumn::Album,
         );
-        cx += album_width;
+        cx += cols.album;
     }
-    if added_by_width > 0.0 {
+    if cols.added_by > 0.0 {
         heading(
             ui,
             cx,
             &pgettext(locale, "column heading", "ADDED BY"),
             SortColumn::AddedBy,
         );
-        cx += added_by_width;
+        cx += cols.added_by;
     }
-    if added_width > 0.0 {
+    if cols.added > 0.0 {
         heading(
             ui,
             cx,
@@ -2150,8 +2173,9 @@ pub fn table_header(
     if number_clicked {
         clicked = Some(SortColumn::Index);
     }
+    // Over the durations' right edge, as they are aligned.
     let clock = Rect::from_center_size(
-        pos2(rect.right() - 36.0 - 56.0 / 2.0 - 6.0, rect.center().y),
+        pos2(cols.duration_right(rect.right()) - 7.5, rect.center().y),
         Vec2::splat(15.0),
     );
     let duration_active = sort.is_some_and(|sort| sort.column == SortColumn::Duration);
@@ -3975,6 +3999,94 @@ mod tests {
         })
     }
 
+    /// In a list with a date column, a row without a date of its own keeps
+    /// its album under the ALBUM heading, as a row with one does.
+    #[test]
+    fn rows_without_a_date_keep_their_cells_under_the_headings() {
+        let mut app = test_app();
+        app.backend.shutdown();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        theme::install(&ctx);
+        let track = |uri: &str, album: &str| {
+            PlayableItem::Track(Track {
+                uri: uri.to_string(),
+                name: format!("Song on {album}"),
+                album: Some(crate::api::models::Album {
+                    id: format!("{album} id"),
+                    name: album.to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        };
+        let dated = track("spotify:track:dated", "Dated album");
+        let undated = track("spotify:track:undated", "Undated album");
+        let context = RowContext::Queue;
+        let palette = app.palette;
+        let locale = app.locale;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 600.0))),
+                ..Default::default()
+            },
+            |ui| {
+                table_header(ui, &palette, locale, true, true, false, true, None);
+                for (index, (item, added_at)) in
+                    [(&dated, Some("2026-09-27T10:00:00Z")), (&undated, None)]
+                        .into_iter()
+                        .enumerate()
+                {
+                    track_row(
+                        ui,
+                        &mut app,
+                        TrackRow {
+                            index,
+                            number: Some(index + 1),
+                            item,
+                            context: &context,
+                            show_cover: true,
+                            show_album: true,
+                            added_at,
+                            show_added: true,
+                            added_by: None,
+                            show_added_by: false,
+                            compact: false,
+                            thin: false,
+                            shift: 0.0,
+                            picked: false,
+                            picked_songs: &[],
+                        },
+                    );
+                }
+            },
+        );
+        output.textures_delta.clear();
+        let tree = output.platform_output.accesskit_update.unwrap();
+        let left = |label: &str| {
+            tree.nodes
+                .iter()
+                .find(|(_, node)| {
+                    [node.label(), node.value()]
+                        .into_iter()
+                        .flatten()
+                        .any(|text| text == label)
+                })
+                .and_then(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("{label} is drawn"))
+                .x0
+        };
+        // A heading's target reaches four points to either side of its text.
+        let heading = left("Sort by ALBUM") + 4.0;
+        for album in ["Dated album", "Undated album"] {
+            assert!(
+                (left(album) - heading).abs() < 0.5,
+                "{album} starts at {} under a heading at {heading}",
+                left(album)
+            );
+        }
+    }
+
     #[test]
     fn track_row_selection_preserves_transparency_and_focus_without_an_outline() {
         for mut palette in [Palette::dark(), Palette::light()] {
@@ -4013,6 +4125,7 @@ mod tests {
                                     show_cover: false,
                                     show_album: false,
                                     added_at: None,
+                                    show_added: false,
                                     added_by: None,
                                     show_added_by: false,
                                     compact: false,
