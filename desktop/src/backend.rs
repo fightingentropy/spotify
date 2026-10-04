@@ -889,14 +889,20 @@ impl Backend {
             .build()
             .expect("unable to start the async runtime");
         let http = {
-            Http::from_proxy(&engine_config.proxy).unwrap_or_else(|error| {
+            let event_tx = event_tx.clone();
+            let waker = waker.clone();
+            Http::build_in_background(engine_config.proxy.clone(), move |error| {
                 let _ = event_tx.send(Event::Error(format!(
                     "Network configuration failed: {error}"
                 )));
-                Http::unavailable(error)
+                waker.wake();
             })
         };
         let art = ArtLoader::new(http.clone(), runtime.handle().clone(), dirs.art_cache_dir());
+        let legacy_art = dirs.legacy_art_cache_dir();
+        runtime.spawn_blocking(move || {
+            let _ = std::fs::remove_dir_all(legacy_art);
+        });
         let activity = Arc::new(NetActivity::default());
 
         let thread = std::thread::Builder::new()

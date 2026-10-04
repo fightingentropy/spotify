@@ -119,6 +119,10 @@ cpal = "0.16"
 # proxy on macOS and Windows when the mode is System; Linux uses environment
 # variables either way.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "http2", "blocking", "socks", "system-proxy", "cookies"] }
+# The system's trusted roots, read once for every client rather than by each
+# client reqwest builds; rustls checks them as reqwest does.
+rustls = { version = "0.23", default-features = false }
+rustls-native-certs = "0.8"
 # Same System-proxy matcher reqwest uses, so local playback follows the same
 # HTTP proxy (environment, and the OS proxy on macOS and Windows).
 hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }

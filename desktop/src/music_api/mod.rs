@@ -105,7 +105,7 @@ impl MusicApi {
         http.client()?;
         let jar = Arc::new(Jar::default());
         let api_origin = origin.origin();
-        let media_client = reqwest::Client::builder()
+        let media_client = crate::http::trusting_native_roots(reqwest::Client::builder())
             .cookie_provider(jar.clone())
             .user_agent(concat!("StreamArenaDesktop/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {

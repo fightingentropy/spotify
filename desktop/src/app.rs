@@ -14,6 +14,7 @@ use crate::backend::{
     ApiRequest, ApiResponse, AuthStatus, Backend, Command, Event, LocalPlayback, LyricsRequest,
     PLAYLIST_PAGE_SIZE, PlaylistCacheRows, RecentsFor, RemoteAction, Waker,
 };
+use crate::home_snapshot::HomeSnapshot;
 use crate::i18n::{Locale, gettext, ngettext};
 use crate::media::{MediaCommand, MediaState, MediaTrack};
 use crate::media_controls::MediaService;
@@ -326,6 +327,10 @@ pub struct App {
     /// should be written shortly, not only at exit.
     pub session_dirty: bool,
     last_session_save: Instant,
+    /// Home and the library list as last saved, for the next launch to
+    /// open onto.
+    home_snapshot: Option<HomeSnapshot>,
+    last_home_snapshot_check: Instant,
     /// The saved zoom has been applied to the context once.
     zoom_applied: bool,
     /// Frames left to re-send the Winamp window's always-on-top level after the
@@ -778,11 +783,12 @@ impl App {
             .unwrap_or(Page::Home);
         let restoring_session =
             options.restore_sign_in && crate::music_backend::session_restorable(&dirs);
-        let launch_user = launch_account(
-            &session,
-            restoring_session,
-            &crate::music_backend::api_origin(),
-        );
+        let api_origin = crate::music_backend::api_origin();
+        let launch_user = launch_account(&session, restoring_session, &api_origin);
+        let home_snapshot = launch_user.as_ref().and_then(|user| {
+            HomeSnapshot::load(&dirs.home_snapshot_file())
+                .filter(|snapshot| snapshot.belongs_to(&api_origin, &user.id))
+        });
         let rootlist = launch_user
             .as_ref()
             .and_then(|user| {
@@ -854,6 +860,8 @@ impl App {
             remote_poll_seq: 0,
             session_dirty: false,
             last_session_save: Instant::now(),
+            home_snapshot: home_snapshot.clone(),
+            last_home_snapshot_check: Instant::now(),
             zoom_applied: false,
             winamp_level_reassert: 0,
             devices: Vec::new(),
@@ -1022,6 +1030,9 @@ impl App {
             winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq),
         };
         app.local.volume = app.settings.volume;
+        if let Some(snapshot) = &home_snapshot {
+            app.show_home(snapshot);
+        }
         // What was played here is on disk and needs nothing from the
         // network, so the tab has rows before Spotify has answered.
         app.rebuild_recents();
@@ -2123,9 +2134,16 @@ impl App {
             AuthStatus::Connected { .. } => {
                 self.clear_download_session();
                 self.sign_in_url = None;
+                // What launch showed for the account it restores stays on
+                // screen until fresh copies answer.
+                let shown =
+                    (self.restoring_session && self.user.is_some()).then(|| self.home_as_shown(""));
                 self.reset_data();
                 self.load_playlists();
                 self.ensure_loaded(self.page().clone());
+                if let Some(shown) = &shown {
+                    self.show_home(shown);
+                }
                 self.poll_remote(true);
             }
             AuthStatus::WaitingForBrowser { url } => self.sign_in_url = Some(url.clone()),
@@ -2146,6 +2164,8 @@ impl App {
                 self.rootlist.clear();
                 self.rootlist_cache = None;
                 self.account_cache = None;
+                self.home_snapshot = None;
+                let _ = std::fs::remove_file(self.dirs.home_snapshot_file());
                 self.editable_by_grant.clear();
                 self.session_dirty = true;
                 self.reset_data();
@@ -2954,6 +2974,7 @@ impl App {
         if self.session_dirty && self.last_session_save.elapsed() > Duration::from_secs(2) {
             self.save_session();
         }
+        self.save_home_snapshot(false);
     }
 
     /// Loads and applies the skin selected in settings.
@@ -4910,6 +4931,11 @@ impl App {
             ApiResponse::Me(result) => match result {
                 Ok(user) => {
                     if self.user_id() != Some(user.id.as_str()) {
+                        if self.restoring_session && self.user.is_some() {
+                            // Launch showed another account's Home.
+                            self.reset_data();
+                            self.load_playlists();
+                        }
                         self.rootlist = self
                             .rootlist_cache
                             .as_ref()
@@ -10106,6 +10132,70 @@ impl App {
     pub fn save_state(&mut self) {
         self.save_settings();
         self.save_session();
+        self.save_home_snapshot(true);
+    }
+
+    /// What Home and the library list hold now, for `account_id`.
+    fn home_as_shown(&self, account_id: &str) -> HomeSnapshot {
+        let mut shown = HomeSnapshot::new(&crate::music_backend::api_origin(), account_id);
+        shown.playlists = self.library.playlists.get().cloned();
+        shown.discover = self.home.discover.get().cloned();
+        shown.top_tracks = self.home.top_tracks.get().cloned();
+        shown.recently_played = self.home.recently_played.get().cloned();
+        shown.liked_total = self.library.liked.total;
+        shown
+    }
+
+    /// Puts what `snapshot` holds on Home and in the library list.
+    fn show_home(&mut self, snapshot: &HomeSnapshot) {
+        if let Some(playlists) = &snapshot.playlists {
+            self.library.playlists = Loadable::Loaded(playlists.clone());
+        }
+        if let Some(discover) = &snapshot.discover {
+            self.home.discover = Loadable::Loaded(discover.clone());
+        }
+        if let Some(tracks) = &snapshot.top_tracks {
+            self.home.top_tracks = Loadable::Loaded(tracks.clone());
+        }
+        if let Some(played) = &snapshot.recently_played {
+            self.home.recently_played = Loadable::Loaded(played.clone());
+        }
+        if snapshot.liked_total.is_some() {
+            self.library.liked.total = snapshot.liked_total;
+        }
+    }
+
+    /// Saves Home for the next launch when it has changed, checking at most
+    /// every few seconds unless `now`. A part still reloading keeps what
+    /// was saved for it.
+    fn save_home_snapshot(&mut self, now: bool) {
+        if self.offline
+            || (!now && self.last_home_snapshot_check.elapsed() < Duration::from_secs(5))
+        {
+            return;
+        }
+        self.last_home_snapshot_check = Instant::now();
+        let Some(user) = self.user.as_ref().filter(|_| self.is_connected()) else {
+            return;
+        };
+        let mut snapshot = self.home_as_shown(&user.id);
+        if let Some(last) = self
+            .home_snapshot
+            .as_ref()
+            .filter(|last| last.belongs_to(&snapshot.origin, &snapshot.account_id))
+        {
+            snapshot.playlists = snapshot.playlists.or_else(|| last.playlists.clone());
+            snapshot.discover = snapshot.discover.or_else(|| last.discover.clone());
+            snapshot.top_tracks = snapshot.top_tracks.or_else(|| last.top_tracks.clone());
+            snapshot.recently_played = snapshot
+                .recently_played
+                .or_else(|| last.recently_played.clone());
+            snapshot.liked_total = snapshot.liked_total.or(last.liked_total);
+        }
+        if self.home_snapshot.as_ref() != Some(&snapshot) {
+            snapshot.save(&self.dirs.home_snapshot_file());
+            self.home_snapshot = Some(snapshot);
+        }
     }
 
     /// Write the restorable session: page, recents, resume point, sorts.
@@ -12854,6 +12944,116 @@ mod tests {
             launch_account(&saved, true, &crate::music_backend::api_origin()),
             Some(listener())
         );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
+    }
+
+    fn named_playlist(id: &str) -> Playlist {
+        Playlist {
+            id: id.into(),
+            name: id.into(),
+            ..Playlist::default()
+        }
+    }
+
+    /// Launch shows the account's Home as last seen. It stays through the
+    /// restore, and a refresh replaces it only once it answers.
+    #[test]
+    fn launch_keeps_the_last_home_on_screen_until_fresh_copies_answer() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.restoring_session = true;
+        app.user = Some(listener());
+        let mut last = HomeSnapshot::new(&crate::music_backend::api_origin(), "listener");
+        last.playlists = Some(vec![named_playlist("morning")]);
+        last.discover = Some(vec![named_playlist("top-50")]);
+        last.liked_total = Some(14);
+        app.show_home(&last);
+
+        app.handle_auth(AuthStatus::Connected {
+            username: "Listener".into(),
+        });
+        assert_eq!(
+            app.library.playlists.get(),
+            Some(&vec![named_playlist("morning")])
+        );
+        assert_eq!(
+            app.home.discover.get(),
+            Some(&vec![named_playlist("top-50")])
+        );
+        assert_eq!(app.library.liked.total, Some(14));
+
+        app.handle_api(ApiResponse::Me(Ok(listener())));
+        app.handle_api(ApiResponse::MyPlaylists {
+            offset: 0,
+            generation: app.library.playlists_generation,
+            result: Ok(crate::api::models::Page {
+                items: vec![named_playlist("evening")],
+                ..Default::default()
+            }),
+        });
+        assert_eq!(
+            app.library.playlists.get(),
+            Some(&vec![named_playlist("evening")])
+        );
+        app.backend.shutdown();
+    }
+
+    /// A session that turns out to be another account's does not keep the
+    /// Home launch showed.
+    #[test]
+    fn another_account_than_launch_showed_gets_its_own_home() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.restoring_session = true;
+        app.user = Some(listener());
+        let mut last = HomeSnapshot::new(&crate::music_backend::api_origin(), "listener");
+        last.playlists = Some(vec![named_playlist("morning")]);
+        app.show_home(&last);
+
+        app.handle_auth(AuthStatus::Connected {
+            username: "Someone".into(),
+        });
+        app.handle_api(ApiResponse::Me(Ok(User {
+            id: "someone-else".into(),
+            ..User::default()
+        })));
+        assert_eq!(app.library.playlists.get(), None);
+        assert_eq!(app.user_id(), Some("someone-else"));
+        app.backend.shutdown();
+    }
+
+    /// Home is saved for the next launch when it changes. A part still
+    /// reloading keeps what was saved, and signing out forgets it all.
+    #[test]
+    fn home_is_saved_for_the_next_launch_and_forgotten_on_sign_out() {
+        let mut app = test_app("home-snapshot");
+        app.backend.set_offline(true);
+        app.auth = AuthStatus::Connected {
+            username: "Listener".into(),
+        };
+        app.user = Some(listener());
+        app.library.playlists = Loadable::Loaded(vec![named_playlist("morning")]);
+        app.home.discover = Loadable::Loaded(vec![named_playlist("top-50")]);
+        app.save_home_snapshot(true);
+        let path = app.dirs.home_snapshot_file();
+        let saved = HomeSnapshot::load(&path).expect("a saved Home");
+        assert!(saved.belongs_to(&crate::music_backend::api_origin(), "listener"));
+        assert_eq!(saved.playlists, Some(vec![named_playlist("morning")]));
+
+        app.library.playlists = Loadable::Loading;
+        app.home.discover = Loadable::Loaded(vec![named_playlist("new-mix")]);
+        app.save_home_snapshot(true);
+        let saved = HomeSnapshot::load(&path).unwrap();
+        assert_eq!(saved.playlists, Some(vec![named_playlist("morning")]));
+        assert_eq!(saved.discover, Some(vec![named_playlist("new-mix")]));
+
+        std::fs::remove_file(&path).unwrap();
+        app.save_home_snapshot(true);
+        assert!(!path.exists(), "nothing changed, so nothing is written");
+
+        app.handle_auth(AuthStatus::SignedOut);
+        assert!(app.home_snapshot.is_none());
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
     }

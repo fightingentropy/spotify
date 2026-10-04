@@ -431,6 +431,13 @@ pub(crate) fn run() -> eframe::Result<()> {
     if let Err(error) = dirs_ready {
         log::warn!("unable to create the application directories: {error}");
     }
+    // The first window waits for the faces that draw scripts Inter lacks,
+    // found once per process; look for them while the rest starts up.
+    let _ = std::thread::Builder::new()
+        .name("font-fallbacks".into())
+        .spawn(|| {
+            fastframe_fonts::system::fallbacks();
+        });
     #[allow(unused_mut)]
     let mut settings = settings::Settings::load(&dirs.settings_file());
     // macOS has a native menu-bar player now. An explicit app launch opens

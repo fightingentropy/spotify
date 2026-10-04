@@ -1,5 +1,6 @@
 //! Album art: fetched once, kept on disk, decoded by egui on demand.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,37 @@ fn is_http(uri: &str) -> bool {
     uri.starts_with("https://") || uri.starts_with("http://")
 }
 
+/// The picture a URL names: the URL without the expiry and signature the
+/// music server issues afresh with every response. Each picture is then
+/// fetched, held, and stored once, whichever signature it arrives with.
+fn artwork_key(url: &str) -> Cow<'_, str> {
+    let Some((base, query)) = url.split_once('?') else {
+        return Cow::Borrowed(url);
+    };
+    let (query, fragment) = match query.split_once('#') {
+        Some((query, fragment)) => (query, Some(fragment)),
+        None => (query, None),
+    };
+    let signed = |pair: &&str| {
+        let name = pair.split_once('=').map_or(*pair, |(name, _)| name);
+        matches!(name, "spotify_exp" | "spotify_sig")
+    };
+    if !query.split('&').any(|pair| signed(&pair)) {
+        return Cow::Borrowed(url);
+    }
+    let kept: Vec<&str> = query.split('&').filter(|pair| !signed(pair)).collect();
+    let mut key = base.to_owned();
+    if !kept.is_empty() {
+        key.push('?');
+        key.push_str(&kept.join("&"));
+    }
+    if let Some(fragment) = fragment {
+        key.push('#');
+        key.push_str(fragment);
+    }
+    Cow::Owned(key)
+}
+
 enum Entry {
     Pending,
     Ready {
@@ -39,11 +71,22 @@ enum Entry {
         /// JPEG bytes still held, plus decoded image and texture once painted.
         retained: usize,
     },
-    Failed(String),
+    /// The URL that failed: one signed afresh is tried again.
+    Failed {
+        url: String,
+        error: String,
+    },
 }
 
 struct Inner {
+    /// By [`artwork_key`].
     entries: Mutex<HashMap<String, Entry>>,
+    /// The URLs egui has drawn each picture under, by [`artwork_key`], so
+    /// letting a picture go frees every texture made of it.
+    drawn_as: Mutex<HashMap<String, Vec<String>>>,
+    /// The latest signed URL of each picture drawn by its key, which the
+    /// picture is fetched with.
+    signed: Mutex<HashMap<String, String>>,
     http: Http,
     runtime: tokio::runtime::Handle,
     cache_dir: PathBuf,
@@ -60,11 +103,28 @@ impl ArtLoader {
         Self {
             inner: Arc::new(Inner {
                 entries: Mutex::new(HashMap::new()),
+                drawn_as: Mutex::new(HashMap::new()),
+                signed: Mutex::new(HashMap::new()),
                 http: http.into(),
                 runtime,
                 cache_dir,
             }),
         }
+    }
+
+    /// The URI to draw `url`'s picture under: the same whichever signature
+    /// `url` carries, so egui decodes and holds the picture once, and a
+    /// fresh signature changes nothing on screen. `url` is kept to fetch
+    /// the picture with.
+    pub fn drawable<'a>(&self, url: &'a str) -> Cow<'a, str> {
+        let key = artwork_key(url);
+        if let Cow::Owned(key) = &key {
+            let mut signed = self.inner.signed.lock().unwrap_or_else(|p| p.into_inner());
+            if signed.get(key).is_none_or(|known| known != url) {
+                signed.insert(key.clone(), url.to_owned());
+            }
+        }
+        key
     }
 
     /// Bytes for `url`, from memory, disk, or the network.
@@ -79,7 +139,7 @@ impl ArtLoader {
                 .entries
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .get(url),
+                .get(artwork_key(url).as_ref()),
             Some(Entry::Ready { .. })
         )
     }
@@ -91,7 +151,7 @@ impl ArtLoader {
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get_mut(url)
+            .get_mut(artwork_key(url).as_ref())
         {
             *last_used = Instant::now();
         }
@@ -106,7 +166,7 @@ impl ArtLoader {
             for (url, entry) in entries.iter() {
                 match entry {
                     // Forget failures so a later request can retry.
-                    Entry::Failed(_) => failed.push(url.clone()),
+                    Entry::Failed { .. } => failed.push(url.clone()),
                     Entry::Ready {
                         last_used,
                         retained,
@@ -120,9 +180,18 @@ impl ArtLoader {
             failed.extend(over_budget(held, HELD_BYTES));
             failed
         };
-        for url in letting_go {
-            ctx.forget_image(&url);
-            self.forget(&url);
+        for key in letting_go {
+            let drawn = self
+                .inner
+                .drawn_as
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&key)
+                .unwrap_or_default();
+            for url in drawn {
+                ctx.forget_image(&url);
+            }
+            self.forget(&key);
         }
     }
 
@@ -151,10 +220,11 @@ impl ArtLoader {
             return false;
         }
         let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
-        if entries.contains_key(url) {
+        let key = artwork_key(url);
+        if entries.contains_key(key.as_ref()) {
             return false;
         }
-        entries.insert(url.to_string(), Entry::Pending);
+        entries.insert(key.into_owned(), Entry::Pending);
         drop(entries);
         self.inner.start(ctx, url.to_string());
         true
@@ -175,7 +245,7 @@ impl ArtLoader {
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get_mut(url)
+            .get_mut(artwork_key(url).as_ref())
         {
             let jpeg = bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0);
             *retained = jpeg + decoded_and_texture_bytes(width, height);
@@ -223,7 +293,7 @@ fn over_budget(mut held: Vec<(String, Instant, usize)>, budget: usize) -> Vec<St
 
 impl Inner {
     fn cache_path(&self, url: &str) -> PathBuf {
-        let digest = Sha1::digest(url.as_bytes());
+        let digest = Sha1::digest(artwork_key(url).as_bytes());
         let mut name = String::with_capacity(40);
         for byte in digest {
             use std::fmt::Write;
@@ -239,7 +309,7 @@ impl Inner {
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get(url)
+            .get(artwork_key(url).as_ref())
         {
             return Ok(Arc::clone(bytes));
         }
@@ -302,19 +372,20 @@ impl Inner {
         let ctx = ctx.clone();
         self.runtime.spawn(async move {
             let result = loader.fetch(&url).await;
+            let key = artwork_key(&url).into_owned();
             let entry = match result {
                 Ok(bytes) => Entry::Ready {
                     retained: bytes.len(),
                     bytes: Some(bytes),
                     last_used: Instant::now(),
                 },
-                Err(error) => Entry::Failed(error),
+                Err(error) => Entry::Failed { url, error },
             };
             loader
                 .entries
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .insert(url, entry);
+                .insert(key, entry);
             ctx.request_repaint();
         });
     }
@@ -326,7 +397,7 @@ impl Inner {
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get_mut(url)
+            .get_mut(artwork_key(url).as_ref())
             && let Some(held) = bytes.take()
         {
             *retained = retained.saturating_sub(held.len());
@@ -343,8 +414,29 @@ impl BytesLoader for ArtLoader {
         if !is_http(uri) {
             return Err(LoadError::NotSupported);
         }
+        let key = artwork_key(uri).into_owned();
+        // Drawn by its key, a picture is fetched with its latest signature.
+        let url = self
+            .inner
+            .signed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| uri.to_owned());
+        {
+            let mut drawn_as = self
+                .inner
+                .drawn_as
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let urls = drawn_as.entry(key.clone()).or_default();
+            if !urls.iter().any(|url| url == uri) {
+                urls.push(uri.to_owned());
+            }
+        }
         let mut entries = self.inner.entries.lock().unwrap_or_else(|p| p.into_inner());
-        match entries.get_mut(uri) {
+        match entries.get_mut(&key) {
             Some(Entry::Ready {
                 bytes: Some(bytes),
                 last_used,
@@ -363,33 +455,50 @@ impl BytesLoader for ArtLoader {
                 ..
             }) => {
                 *last_used = Instant::now();
-                entries.insert(uri.to_string(), Entry::Pending);
+                entries.insert(key, Entry::Pending);
                 drop(entries);
-                self.inner.start(ctx, uri.to_string());
+                self.inner.start(ctx, url);
                 Ok(BytesPoll::Pending { size: None })
             }
             Some(Entry::Pending) => Ok(BytesPoll::Pending { size: None }),
-            Some(Entry::Failed(error)) => Err(LoadError::Loading(error.clone())),
-            None => {
-                entries.insert(uri.to_string(), Entry::Pending);
+            Some(Entry::Failed { url: failed, error }) if *failed == url => {
+                Err(LoadError::Loading(error.clone()))
+            }
+            Some(Entry::Failed { .. }) | None => {
+                entries.insert(key, Entry::Pending);
                 drop(entries);
-                self.inner.start(ctx, uri.to_string());
+                self.inner.start(ctx, url);
                 Ok(BytesPoll::Pending { size: None })
             }
         }
     }
 
     fn forget(&self, uri: &str) {
+        let key = artwork_key(uri);
         self.inner
             .entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(uri);
+            .remove(key.as_ref());
+        if let Some(urls) = self
+            .inner
+            .drawn_as
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(key.as_ref())
+        {
+            urls.retain(|url| url != uri);
+        }
     }
 
     fn forget_all(&self) {
         self.inner
             .entries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.inner
+            .drawn_as
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
@@ -496,6 +605,8 @@ impl SoftenedCovers {
         uri: &str,
     ) -> Option<egui::TextureHandle> {
         self.receive_ready(ctx);
+        let uri = loader.drawable(uri);
+        let uri = uri.as_ref();
         if let Some(cover) = self.textures.get_mut(uri) {
             cover.last_used = Instant::now();
             return Some(cover.texture.clone());
@@ -708,6 +819,165 @@ mod tests {
         runtime.shutdown_timeout(Duration::from_secs(10));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Answers one request per response, in turn, and reports what each
+    /// asked for.
+    async fn serve_artwork_requests(
+        responses: Vec<(&'static str, Vec<u8>)>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/cover", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut targets = Vec::new();
+            for (status, bytes) in responses {
+                let (mut socket, _) =
+                    tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                        .await
+                        .expect("the artwork is asked for")
+                        .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
+                let line = String::from_utf8_lossy(&request)
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .to_owned();
+                targets.push(line.split(' ').nth(1).unwrap().to_owned());
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(&bytes).await.unwrap();
+            }
+            targets
+        });
+        (url, server)
+    }
+
+    async fn until(mut done: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !done() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the artwork settles");
+    }
+
+    #[test]
+    fn a_pictures_key_leaves_out_only_the_expiring_signature() {
+        let signed = "https://music.example/api/files/local/a.jpg?spotify_exp=99&spotify_scope=media&spotify_sig=abc&spotify_user=u1";
+        assert_eq!(
+            artwork_key(signed),
+            "https://music.example/api/files/local/a.jpg?spotify_scope=media&spotify_user=u1"
+        );
+        assert_eq!(
+            artwork_key("https://music.example/a.jpg?spotify_sig=abc&spotify_exp=99"),
+            "https://music.example/a.jpg"
+        );
+        let plain = "https://i.scdn.co/image/abc?size=640#top";
+        assert!(matches!(artwork_key(plain), Cow::Borrowed(key) if key == plain));
+    }
+
+    #[test]
+    fn a_picture_is_downloaded_once_whichever_signature_it_carries() {
+        let dir = std::env::temp_dir().join(format!("spotifast-art-signed-{}", std::process::id()));
+        let runtime = artwork_test_runtime();
+        let loader = artwork_test_loader(&runtime, dir.clone());
+        runtime.block_on(async {
+            let (base, server) = serve_artwork_requests(vec![("200 OK", b"cover".to_vec())]).await;
+            let first = format!("{base}?spotify_exp=1&spotify_sig=a");
+            let second = format!("{base}?spotify_exp=2&spotify_sig=b");
+            assert_eq!(loader.drawable(&first), loader.drawable(&second));
+            assert_eq!(&*loader.fetch(&first).await.unwrap(), b"cover");
+            assert_eq!(
+                server.await.unwrap(),
+                ["/cover?spotify_exp=1&spotify_sig=a"]
+            );
+            wait_for_artwork_file(&loader.inner.cache_path(&first), b"cover").await;
+            // Nothing answers now: the second signature comes from the cache.
+            assert_eq!(&*loader.fetch(&second).await.unwrap(), b"cover");
+            assert_eq!(loader.cached_file(&second), loader.cached_file(&first));
+        });
+        drop(loader);
+        runtime.shutdown_timeout(Duration::from_secs(10));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_picture_drawn_by_its_key_is_fetched_with_its_latest_signature() {
+        let dir = std::env::temp_dir().join(format!("spotifast-art-latest-{}", std::process::id()));
+        let runtime = artwork_test_runtime();
+        let loader = artwork_test_loader(&runtime, dir.clone());
+        let ctx = egui::Context::default();
+        runtime.block_on(async {
+            let (base, server) = serve_artwork_requests(vec![("200 OK", b"cover".to_vec())]).await;
+            let stale = format!("{base}?spotify_exp=1&spotify_sig=old");
+            let fresh = format!("{base}?spotify_exp=2&spotify_sig=new");
+            let uri = loader.drawable(&stale).into_owned();
+            assert_eq!(loader.drawable(&fresh), uri.as_str());
+            assert!(matches!(
+                loader.load(&ctx, &uri),
+                Ok(BytesPoll::Pending { .. })
+            ));
+            assert_eq!(
+                server.await.unwrap(),
+                ["/cover?spotify_exp=2&spotify_sig=new"]
+            );
+            until(|| loader.is_ready(&uri)).await;
+            assert!(matches!(
+                loader.load(&ctx, &uri),
+                Ok(BytesPoll::Ready { .. })
+            ));
+        });
+        drop(loader);
+        runtime.shutdown_timeout(Duration::from_secs(10));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_picture_refused_under_an_expired_signature_is_tried_with_a_fresh_one() {
+        let dir =
+            std::env::temp_dir().join(format!("spotifast-art-expired-{}", std::process::id()));
+        let runtime = artwork_test_runtime();
+        let loader = artwork_test_loader(&runtime, dir.clone());
+        let ctx = egui::Context::default();
+        runtime.block_on(async {
+            let (base, server) = serve_artwork_requests(vec![
+                ("403 Forbidden", Vec::new()),
+                ("200 OK", b"cover".to_vec()),
+            ])
+            .await;
+            let expired = format!("{base}?spotify_exp=1&spotify_sig=old");
+            let uri = loader.drawable(&expired).into_owned();
+            assert!(matches!(
+                loader.load(&ctx, &uri),
+                Ok(BytesPoll::Pending { .. })
+            ));
+            until(|| loader.load(&ctx, &uri).is_err()).await;
+
+            loader.drawable(&format!("{base}?spotify_exp=2&spotify_sig=new"));
+            assert!(matches!(
+                loader.load(&ctx, &uri),
+                Ok(BytesPoll::Pending { .. })
+            ));
+            until(|| loader.is_ready(&uri)).await;
+            assert_eq!(
+                server.await.unwrap(),
+                [
+                    "/cover?spotify_exp=1&spotify_sig=old",
+                    "/cover?spotify_exp=2&spotify_sig=new"
+                ]
+            );
+        });
+        drop(loader);
+        runtime.shutdown_timeout(Duration::from_secs(10));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

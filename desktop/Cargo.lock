@@ -6015,6 +6015,8 @@ dependencies = [
  "rfd",
  "rodio",
  "roxmltree",
+ "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha1",

@@ -1,6 +1,6 @@
 //! Shared HTTP client, so a proxy change can take effect without a restart.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use crate::settings::ProxyConfig;
@@ -12,41 +12,98 @@ use crate::settings::ProxyConfig;
 /// on the next request.
 #[derive(Clone)]
 pub struct Http {
-    inner: Arc<RwLock<Result<reqwest::Client, String>>>,
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    /// The client the handle starts with. One built in the background is
+    /// waited for by the first readers.
+    first: OnceLock<Result<reqwest::Client, String>>,
+    /// A later client, or a block, in place of the first.
+    later: RwLock<Option<Result<reqwest::Client, String>>>,
 }
 
 impl Http {
-    pub fn new(client: reqwest::Client) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(Ok(client))),
+    fn starting(first: Option<Result<reqwest::Client, String>>) -> Self {
+        let inner = Inner {
+            first: OnceLock::new(),
+            later: RwLock::new(None),
+        };
+        if let Some(first) = first {
+            let _ = inner.first.set(first);
         }
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    pub fn new(client: reqwest::Client) -> Self {
+        Self::starting(Some(Ok(client)))
     }
 
     pub fn from_proxy(proxy: &ProxyConfig) -> Result<Self, String> {
         build_client(proxy).map(Self::new)
     }
 
+    /// Builds the client on a thread of its own: loading the system's
+    /// trusted certificates takes long enough to hold up the first window.
+    /// `failed` hears why a configuration did not build; the handle then
+    /// stays [`unavailable`](Self::unavailable) until a replacement.
+    pub fn build_in_background(
+        proxy: ProxyConfig,
+        failed: impl FnOnce(&str) + Send + 'static,
+    ) -> Self {
+        let http = Self::starting(None);
+        let first = Arc::clone(&http.inner);
+        std::thread::Builder::new()
+            .name("http-client".into())
+            .spawn(move || {
+                let built =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build_client(&proxy)))
+                        .unwrap_or_else(|_| Err("The network client could not be built.".into()));
+                let error = built.as_ref().err().cloned();
+                let _ = first.first.set(built);
+                if let Some(error) = error {
+                    failed(&error);
+                }
+            })
+            .expect("unable to start the network client thread");
+        http
+    }
+
     /// Keep the interface available to repair settings without permitting
     /// requests to bypass the configuration that failed to build.
     pub fn unavailable(error: String) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(Err(error))),
-        }
+        Self::starting(Some(Err(error)))
     }
 
     pub fn replace(&self, client: reqwest::Client) {
-        *self.inner.write().unwrap_or_else(|lock| lock.into_inner()) = Ok(client);
+        *self
+            .inner
+            .later
+            .write()
+            .unwrap_or_else(|lock| lock.into_inner()) = Some(Ok(client));
     }
 
     pub fn block(&self, error: String) {
-        *self.inner.write().unwrap_or_else(|lock| lock.into_inner()) = Err(error);
+        *self
+            .inner
+            .later
+            .write()
+            .unwrap_or_else(|lock| lock.into_inner()) = Some(Err(error));
     }
 
     pub fn client(&self) -> Result<reqwest::Client, String> {
-        self.inner
+        if let Some(later) = self
+            .inner
+            .later
             .read()
             .unwrap_or_else(|lock| lock.into_inner())
             .clone()
+        {
+            return later;
+        }
+        self.inner.first.wait().clone()
     }
 }
 
@@ -80,7 +137,43 @@ pub fn build_blocking(
 }
 
 fn client_builder(proxy: &ProxyConfig) -> Result<reqwest::ClientBuilder, String> {
-    apply_proxy(reqwest::Client::builder().user_agent(user_agent()), proxy)
+    apply_proxy(
+        trusting_native_roots(reqwest::Client::builder()).user_agent(user_agent()),
+        proxy,
+    )
+}
+
+/// The system's trusted root certificates, read once per process. Reading
+/// them is most of the time a client takes to build, and on macOS two
+/// clients reading at once take about as long as one after the other.
+fn native_roots() -> &'static [reqwest::Certificate] {
+    static ROOTS: OnceLock<Vec<reqwest::Certificate>> = OnceLock::new();
+    ROOTS.get_or_init(|| {
+        // Only those rustls accepts, as reqwest keeps them: native stores
+        // carry certificates too old or malformed to parse.
+        let mut accepted = rustls::RootCertStore::empty();
+        rustls_native_certs::load_native_certs()
+            .certs
+            .into_iter()
+            .filter(|cert| accepted.add(cert.clone()).is_ok())
+            .filter_map(|cert| reqwest::Certificate::from_der(&cert).ok())
+            .collect()
+    })
+}
+
+/// A builder that trusts the system's roots without reading them again.
+/// Without any, reqwest reads and reports on them itself.
+pub(crate) fn trusting_native_roots(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let roots = native_roots();
+    if roots.is_empty() {
+        return builder;
+    }
+    roots
+        .iter()
+        .cloned()
+        .fold(builder.tls_built_in_root_certs(false), |builder, root| {
+            builder.add_root_certificate(root)
+        })
 }
 
 pub(crate) fn blocking_builder(
@@ -194,6 +287,47 @@ mod tests {
         http.replace(build_client(&ProxyConfig::Off).unwrap());
         assert!(artwork.client().is_ok());
         assert!(api.client().is_ok());
+    }
+
+    #[test]
+    fn every_client_trusts_the_system_roots_read_once() {
+        let roots = native_roots();
+        assert!(!roots.is_empty(), "the system trusts some roots");
+        assert!(std::ptr::eq(roots, native_roots()));
+        trusting_native_roots(reqwest::Client::builder())
+            .build()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_client_built_in_the_background_is_waited_for_and_still_replaceable() {
+        let (sender, failures) = std::sync::mpsc::channel::<String>();
+        let http = Http::build_in_background(ProxyConfig::Off, move |error| {
+            let _ = sender.send(error.to_owned());
+        });
+        assert!(
+            http.clone().client().is_ok(),
+            "the first reader waits for it"
+        );
+        assert!(failures.try_recv().is_err());
+        http.block("Proxy settings changed".into());
+        assert!(http.client().is_err());
+        http.replace(build_client(&ProxyConfig::Off).unwrap());
+        assert!(http.client().is_ok());
+    }
+
+    #[test]
+    fn a_background_build_that_fails_says_why_and_stays_unavailable() {
+        let (sender, failures) = std::sync::mpsc::channel::<String>();
+        let invalid = ProxyConfig::Invalid("Proxy port must be a number".into());
+        let http = Http::build_in_background(invalid, move |error| {
+            let _ = sender.send(error.to_owned());
+        });
+        assert_eq!(http.client().unwrap_err(), "Proxy port must be a number");
+        assert_eq!(
+            failures.recv_timeout(Duration::from_secs(10)).unwrap(),
+            "Proxy port must be a number"
+        );
     }
 
     #[test]

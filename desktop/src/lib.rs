@@ -15,6 +15,7 @@ pub mod download_tasks;
 pub mod emoji;
 pub mod eq;
 pub mod history;
+pub mod home_snapshot;
 pub mod http;
 pub mod i18n;
 pub mod images;

@@ -137,6 +137,11 @@ impl AppDirs {
         self.state.join("session.json")
     }
 
+    /// What Home and the library list last showed, for the next launch.
+    pub fn home_snapshot_file(&self) -> PathBuf {
+        self.state.join("music-home.json")
+    }
+
     /// What was played here, which Spotify never hears about and so
     /// cannot tell us later. See [`crate::history`].
     pub fn history_file(&self) -> PathBuf {
@@ -182,7 +187,14 @@ impl AppDirs {
         self.cache.join("audio")
     }
 
+    /// Artwork files, named by their URL without the expiring signature.
     pub fn art_cache_dir(&self) -> PathBuf {
+        self.cache.join("artwork")
+    }
+
+    /// The artwork cache from before, which named files by the whole signed
+    /// URL and so kept a copy of each picture per signature.
+    pub fn legacy_art_cache_dir(&self) -> PathBuf {
         self.cache.join("art")
     }
 

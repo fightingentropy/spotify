@@ -138,7 +138,8 @@ fn paint_cover_url(
     if let Some(art) = art {
         art.touch(url);
     }
-    let image = egui::Image::new(url).show_loading_spinner(false);
+    let uri = art.map_or(std::borrow::Cow::Borrowed(url), |art| art.drawable(url));
+    let image = egui::Image::new(uri.as_ref()).show_loading_spinner(false);
     let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size())
     else {
         return false;
