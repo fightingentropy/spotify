@@ -42,11 +42,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     for path in winamp::dropped_skins(ctx) {
         app.actions.push(Action::InstallSkin(path));
     }
-    let signed_in = app.is_connected() && app.user.is_some();
+    // While launch restores the saved session, its account shows as last seen.
+    let restoring = app.is_restoring_session();
+    let signed_in = app.user.is_some() && (app.is_connected() || restoring);
     let connecting = matches!(app.auth, AuthStatus::Connecting | AuthStatus::Starting)
         || (app.is_connected() && app.user.is_none());
     if !signed_in {
-        login::show(app, ui, connecting);
+        if restoring {
+            login::restoring(app, ui);
+        } else {
+            login::show(app, ui, connecting);
+        }
         update::show(app, ctx);
         toasts(app, ctx, 20.0);
         window_controls(ui, &app.palette, app.locale);

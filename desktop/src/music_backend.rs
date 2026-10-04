@@ -9,10 +9,49 @@ use crate::{
     paths::AppDirs,
     player::{EngineConfig, Playback},
 };
-use std::{sync::mpsc::Sender, time::Duration};
+use std::{collections::VecDeque, sync::mpsc::Sender, time::Duration};
 use tokio::{sync::mpsc, task::JoinSet};
 
 const DEFAULT_API: &str = "https://music.streamarena.xyz";
+/// Present while the saved session must not be restored at launch.
+const REVOKED: &str = "music-session-revoked";
+/// The music server this run talks to.
+pub(crate) fn api_origin() -> String {
+    std::env::var("STREAMARENA_API_URL").unwrap_or_else(|_| DEFAULT_API.into())
+}
+/// Whether launch restores the session saved by an earlier run, when asked to.
+pub(crate) fn session_restorable(dirs: &AppDirs) -> bool {
+    !dirs.state.join(REVOKED).exists()
+}
+/// Work that needs the account's session. Sent before a saved one is back,
+/// it would reach the server without it, and a refusal there reads as an
+/// expired session.
+fn waits_for_session(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Api(_)
+            | Command::Lyrics(_)
+            | Command::Downloads(_)
+            | Command::Player(_)
+            | Command::Rootlist
+            | Command::LoadLikedSongsCache { .. }
+            | Command::StoreLikedSongsCache(_)
+            | Command::LoadPlaylistCache { .. }
+            | Command::StorePlaylistCache { .. }
+    )
+}
+/// The next command to run. Those held while the saved session was being
+/// restored go first, in order, once it is back.
+async fn next_command(
+    commands: &mut mpsc::UnboundedReceiver<Command>,
+    held: &mut VecDeque<Command>,
+    restoring: bool,
+) -> Option<Command> {
+    if !restoring && let Some(command) = held.pop_front() {
+        return Some(command);
+    }
+    commands.recv().await
+}
 enum Done {
     Auth(Result<(MusicApi, Option<User>), String>),
     Events(Vec<Event>),
@@ -59,7 +98,7 @@ pub async fn run(
     restore: bool,
     mut commands: mpsc::UnboundedReceiver<Command>,
 ) {
-    let origin = std::env::var("STREAMARENA_API_URL").unwrap_or_else(|_| DEFAULT_API.into());
+    let origin = api_origin();
     let mut api = match MusicApi::new(&origin, http.clone()) {
         Ok(api) => api,
         Err(error) => {
@@ -68,7 +107,7 @@ pub async fn run(
         }
     };
     let sessions = SessionStore::new(origin.clone());
-    let revoked = dirs.state.join("music-session-revoked");
+    let revoked = dirs.state.join(REVOKED);
     let mut tasks = JoinSet::new();
     let mut downloads = crate::download_tasks::DownloadTasks::new(
         dirs.state.clone(),
@@ -78,7 +117,11 @@ pub async fn run(
     let mut player: Option<MusicPlayer> = None;
     let mut account = String::new();
     let mut history = crate::music_history::ListeningHistory::default();
-    if restore && !revoked.exists() {
+    // The window shows the account while its saved session is restored, so
+    // work asked for meanwhile waits for that session.
+    let mut restoring = restore && !revoked.exists();
+    let mut held = VecDeque::new();
+    if restoring {
         let api = api.clone();
         let sessions = sessions.clone();
         tasks.spawn(async move {
@@ -102,6 +145,8 @@ pub async fn run(
         if api.session_expired() {
             downloads.cancel_all();
             tasks.abort_all();
+            restoring = false;
+            held.clear();
             while tasks.join_next().await.is_some() {}
             player = None;
             history.finish();
@@ -163,9 +208,18 @@ pub async fn run(
                             let sessions = sessions.clone();
                             tasks.spawn(async move { Done::SessionSaved(sessions.write(cookie).await) });
                         }
+                        restoring = false;
                     }
-                    Ok(Done::Auth(Ok((_, None)))) => emit(&events, &waker, Event::Auth(AuthStatus::SignedOut)),
-                    Ok(Done::Auth(Err(error))) => emit(&events, &waker, Event::Auth(AuthStatus::Failed(error))),
+                    Ok(Done::Auth(Ok((_, None)))) => {
+                        restoring = false;
+                        held.clear();
+                        emit(&events, &waker, Event::Auth(AuthStatus::SignedOut));
+                    }
+                    Ok(Done::Auth(Err(error))) => {
+                        restoring = false;
+                        held.clear();
+                        emit(&events, &waker, Event::Auth(AuthStatus::Failed(error)));
+                    }
                     Ok(Done::Events(values)) => {
                         if !api.session_expired() {
                             for event in values { emit(&events, &waker, event); }
@@ -173,18 +227,30 @@ pub async fn run(
                     }
                     Ok(Done::SessionSaved(Ok(()))) => { let _ = tokio::fs::remove_file(&revoked).await; }
                     Ok(Done::SessionSaved(Err(error))) => emit(&events, &waker, Event::Error(error)),
+                    // While restoring, the restore is the only task.
+                    Err(error) if !error.is_cancelled() && restoring => {
+                        restoring = false;
+                        held.clear();
+                        emit(&events, &waker, Event::Auth(AuthStatus::Failed("Couldn't restore your music session. Please sign in again.".into())));
+                    }
                     Err(error) if !error.is_cancelled() => emit(&events, &waker, Event::Error("A background request failed. Please try again.".into())),
                     _ => {},
                 }
             }
-            command = commands.recv() => {
+            command = next_command(&mut commands, &mut held, restoring) => {
                 let Some(command) = command else { break; };
+                if restoring && waits_for_session(&command) {
+                    held.push_back(command);
+                    continue;
+                }
                 match command {
                     Command::Downloads(request) => downloads.handle(request, &api, &account),
                     Command::Shutdown => break,
                     Command::MusicSignIn { email, password } => {
                         downloads.cancel_all();
                         tasks.abort_all();
+                        restoring = false;
+                        held.clear();
                         // Drain cancelled tasks before queuing a new account generation.
                         while tasks.join_next().await.is_some() {}
                         player = None;
@@ -211,6 +277,8 @@ pub async fn run(
                     Command::CancelSignIn => {
                         downloads.cancel_all();
                         tasks.abort_all();
+                        restoring = false;
+                        held.clear();
                         while tasks.join_next().await.is_some() {}
                         player = None;
                         history.finish();
@@ -226,6 +294,8 @@ pub async fn run(
                     Command::SignOut => {
                         downloads.cancel_all();
                         tasks.abort_all();
+                        restoring = false;
+                        held.clear();
                         while tasks.join_next().await.is_some() {}
                         player = None;
                         let _ = tokio::fs::create_dir_all(&dirs.state).await;
@@ -348,7 +418,38 @@ fn parse_music_lyrics(text: &str) -> Option<crate::lyrics::Lyrics> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_music_lyrics;
+    use super::{Command, VecDeque, mpsc, next_command, parse_music_lyrics, waits_for_session};
+    use crate::backend::ApiRequest;
+    #[test]
+    fn account_work_waits_for_a_restoring_session() {
+        assert!(waits_for_session(&Command::Api(ApiRequest::Devices)));
+        assert!(waits_for_session(&Command::Rootlist));
+        assert!(!waits_for_session(&Command::SignOut));
+        assert!(!waits_for_session(&Command::CancelSignIn));
+        assert!(!waits_for_session(&Command::Shutdown));
+    }
+    #[test]
+    fn held_commands_run_first_and_in_order_once_the_session_is_back() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (sender, mut commands) = mpsc::unbounded_channel();
+            let mut held = VecDeque::from([Command::Rootlist, Command::UserNames(Vec::new())]);
+            sender.send(Command::OpenThemesFolder).unwrap();
+            let next = next_command(&mut commands, &mut held, true).await;
+            assert!(matches!(next, Some(Command::OpenThemesFolder)));
+            assert_eq!(held.len(), 2, "still held while restoring");
+
+            sender.send(Command::SignOut).unwrap();
+            let next = next_command(&mut commands, &mut held, false).await;
+            assert!(matches!(next, Some(Command::Rootlist)));
+            let next = next_command(&mut commands, &mut held, false).await;
+            assert!(matches!(next, Some(Command::UserNames(_))));
+            let next = next_command(&mut commands, &mut held, false).await;
+            assert!(matches!(next, Some(Command::SignOut)));
+        });
+    }
     #[test]
     fn service_lyrics_preserve_plain_text_and_stanza_breaks() {
         let lyrics = parse_music_lyrics("[ar:Test artist]\nFirst line\n\nSecond line").unwrap();

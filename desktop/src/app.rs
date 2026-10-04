@@ -21,7 +21,7 @@ use crate::model::QueueTab;
 use crate::model::*;
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
-use crate::settings::{CachedRootlist, SessionState, Settings, ThemeChoice};
+use crate::settings::{CachedAccount, CachedRootlist, SessionState, Settings, ThemeChoice};
 use crate::single_instance::ControlCommand;
 use crate::theme::{self, Palette};
 use crate::util;
@@ -206,6 +206,16 @@ impl Default for AppOptions {
     }
 }
 
+/// The account a launch opens onto while the backend restores its saved
+/// session: the one last signed in to this music server.
+fn launch_account(session: &SessionState, restoring: bool, origin: &str) -> Option<User> {
+    session
+        .account
+        .as_ref()
+        .filter(|account| restoring && account.origin == origin)
+        .map(|account| account.user.clone())
+}
+
 /// Listening time for the current track.
 ///
 /// `listened` stores completed intervals. `playing_since` starts the current
@@ -292,6 +302,10 @@ pub struct App {
     pub custom_themes: theme::Catalog,
 
     pub auth: AuthStatus,
+    /// Whether the session saved by an earlier launch may still be coming
+    /// back. Cleared for good once its account answers, or the backend
+    /// reports anything but a connected account.
+    pub restoring_session: bool,
     pub user: Option<User>,
     pub downloads: crate::ui::downloads::DownloadViewState,
     pub download_queue: crate::music_downloads::QueueState,
@@ -547,6 +561,8 @@ pub struct App {
     pub rootlist: Vec<crate::player::RootlistEntry>,
     /// Last good tree and the account it belongs to, kept across restarts.
     rootlist_cache: Option<CachedRootlist>,
+    /// The signed-in account's profile, kept across restarts.
+    account_cache: Option<CachedAccount>,
     /// Playlists the account may add songs to by Spotify's own word, by
     /// URI: the ones shared with it by invitation, which the Web API's
     /// collaborative flag does not show. Empty until the session answers.
@@ -762,6 +778,23 @@ impl App {
             .and_then(Page::decode)
             .filter(|page| !matches!(page, Page::Settings | Page::Queue))
             .unwrap_or(Page::Home);
+        let restoring_session =
+            options.restore_sign_in && crate::music_backend::session_restorable(&dirs);
+        let launch_user = launch_account(
+            &session,
+            restoring_session,
+            &crate::music_backend::api_origin(),
+        );
+        let rootlist = launch_user
+            .as_ref()
+            .and_then(|user| {
+                session
+                    .rootlist
+                    .as_ref()
+                    .filter(|cached| cached.account_id == user.id)
+            })
+            .map(|cached| cached.entries.clone())
+            .unwrap_or_default();
 
         let palette = settings.cached_palette().unwrap_or_else(Palette::dark);
         let mut app = Self {
@@ -807,7 +840,8 @@ impl App {
             theme_transition: fastframe_theme::Transition::default(),
             reveal_theme_changes: true,
             auth: AuthStatus::Starting,
-            user: None,
+            restoring_session,
+            user: launch_user,
             downloads: crate::ui::downloads::DownloadViewState::default(),
             download_queue: crate::music_downloads::QueueState::default(),
             download_session: downloads::DownloadSession::default(),
@@ -970,8 +1004,9 @@ impl App {
             pending_queue_batches: HashMap::new(),
             album_queue_serial: 0,
             last_album_queue: None,
-            rootlist: Vec::new(),
+            rootlist,
             rootlist_cache: session.rootlist.clone(),
+            account_cache: session.account.clone(),
             editable_by_grant: std::collections::BTreeSet::new(),
             pending_link: None,
             copied_songs: Vec::new(),
@@ -1140,6 +1175,18 @@ impl App {
 
     pub fn is_connected(&self) -> bool {
         matches!(self.auth, AuthStatus::Connected { .. })
+    }
+
+    /// Whether launch is still restoring the saved session: no sign-in has
+    /// been asked for and the account hasn't answered yet. The window shows
+    /// that account as last seen meanwhile, or stays quiet without one,
+    /// rather than flashing a sign-in card that Home replaces a moment later.
+    pub fn is_restoring_session(&self) -> bool {
+        self.restoring_session
+            && matches!(
+                self.auth,
+                AuthStatus::Starting | AuthStatus::Connected { .. }
+            )
     }
 
     pub fn user_id(&self) -> Option<&str> {
@@ -2101,6 +2148,7 @@ impl App {
                 self.remote = None;
                 self.rootlist.clear();
                 self.rootlist_cache = None;
+                self.account_cache = None;
                 self.editable_by_grant.clear();
                 self.session_dirty = true;
                 self.reset_data();
@@ -2110,6 +2158,12 @@ impl App {
                 self.toast_error(message.clone());
             }
             _ => {}
+        }
+        if !matches!(status, AuthStatus::Connected { .. })
+            && std::mem::take(&mut self.restoring_session)
+        {
+            // The account shown while launch restored its session.
+            self.user = None;
         }
         self.auth = status;
     }
@@ -4868,6 +4922,15 @@ impl App {
                         self.editable_by_grant.clear();
                     }
                     self.load_download_session(&user.id);
+                    let account = CachedAccount {
+                        origin: crate::music_backend::api_origin(),
+                        user: user.clone(),
+                    };
+                    if self.account_cache.as_ref() != Some(&account) {
+                        self.account_cache = Some(account);
+                        self.session_dirty = true;
+                    }
+                    self.restoring_session = false;
                     self.user = Some(user);
                     let page = self.page().clone();
                     self.ensure_loaded(page);
@@ -10068,6 +10131,7 @@ impl App {
                 episode_progress: self.episode_progress.clone(),
                 collapsed_folders: self.collapsed_folders.clone(),
                 rootlist: self.rootlist_cache.clone(),
+                account: self.account_cache.clone(),
                 last_added_queue: if self.resume_queue.is_empty() {
                     self.manual_queue.clone()
                 } else {
@@ -12563,6 +12627,238 @@ mod tests {
 
         assert!(app.queued_play.is_some());
         assert!(!app.show_devices, "startup is not a missing-device error");
+    }
+
+    /// Whether one frame of the window, as `app` stands, draws the widget
+    /// `id`. A fresh context each time, as egui reports a widget from the
+    /// frame before last too.
+    fn draws(app: &mut App, id: &str) -> bool {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| crate::ui::show(app, ui));
+        output.textures_delta.clear();
+        ctx.read_response(egui::Id::new(id)).is_some()
+    }
+
+    fn draws_sign_in_card(app: &mut App) -> bool {
+        draws(app, "music-sign-in-email")
+    }
+
+    /// The signed-in window, which alone has the search field on top.
+    fn draws_main_window(app: &mut App) -> bool {
+        draws(app, "global-search")
+    }
+
+    fn listener() -> User {
+        User {
+            id: "listener".into(),
+            display_name: Some("Listener".into()),
+            ..User::default()
+        }
+    }
+
+    /// Launch restores the saved session behind a quiet window, never the
+    /// sign-in card that Home replaces a moment later.
+    #[test]
+    fn launch_shows_no_sign_in_card_while_the_saved_session_restores() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.restoring_session = true;
+        assert!(app.is_restoring_session());
+        assert!(!draws_sign_in_card(&mut app));
+
+        // The account follows the connected session in a separate event.
+        app.handle_auth(AuthStatus::Connected {
+            username: "listener".into(),
+        });
+        assert!(app.is_restoring_session());
+        assert!(!draws_sign_in_card(&mut app));
+
+        app.handle_api(ApiResponse::Me(Ok(User {
+            id: "listener".into(),
+            ..User::default()
+        })));
+        assert!(!app.is_restoring_session());
+        assert!(!draws_sign_in_card(&mut app), "Home, signed in");
+        app.backend.shutdown();
+    }
+
+    /// A quick restore draws nothing that moves; a slow one fades in a
+    /// spinner, and asks to be drawn again in time to do so.
+    #[test]
+    fn a_slow_restore_shows_it_is_still_connecting() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.restoring_session = true;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut frame = |time: f64| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| crate::ui::show(&mut app, ui),
+            );
+            output.textures_delta.clear();
+            output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+        };
+        // egui draws a new context's first frames back to back.
+        frame(10.0);
+        frame(10.1);
+        let quiet = frame(10.2);
+        assert!(
+            quiet > Duration::from_millis(700) && quiet <= Duration::from_millis(800),
+            "{quiet:?}"
+        );
+        let quiet = frame(10.6);
+        assert!(
+            quiet > Duration::from_millis(300) && quiet <= Duration::from_millis(400),
+            "{quiet:?}"
+        );
+        assert!(
+            frame(12.0) <= Duration::from_millis(33),
+            "the spinner turns"
+        );
+        app.backend.shutdown();
+    }
+
+    /// Once launch finds sign-in is needed, the card shows, and it stays up
+    /// while a sign-in from it connects, with no empty frame before Home.
+    #[test]
+    fn the_sign_in_card_shows_once_launch_needs_it() {
+        for outcome in [
+            AuthStatus::SignedOut,
+            AuthStatus::Failed("Couldn't reach the server".into()),
+        ] {
+            let mut app = headless_app();
+            app.backend.set_offline(true);
+            app.restoring_session = true;
+            app.handle_auth(outcome);
+            assert!(!app.is_restoring_session());
+            assert!(draws_sign_in_card(&mut app));
+
+            app.handle_auth(AuthStatus::Connecting);
+            assert!(draws_sign_in_card(&mut app));
+            app.handle_auth(AuthStatus::Connected {
+                username: "listener".into(),
+            });
+            assert!(!app.is_restoring_session());
+            assert!(draws_sign_in_card(&mut app));
+            app.backend.shutdown();
+        }
+    }
+
+    /// Without a saved session to restore, launch goes straight to the card.
+    #[test]
+    fn launch_without_restoring_shows_the_sign_in_card() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        assert!(!app.restoring_session);
+        assert!(!app.is_restoring_session());
+        assert!(draws_sign_in_card(&mut app));
+        app.backend.shutdown();
+    }
+
+    /// With its account on file, launch opens straight onto the app while
+    /// the saved session is restored, and stays there once it is back.
+    #[test]
+    fn launch_opens_onto_the_cached_account_while_its_session_restores() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.restoring_session = true;
+        app.user = Some(listener());
+        assert!(draws_main_window(&mut app));
+        assert!(!draws_sign_in_card(&mut app));
+
+        app.handle_auth(AuthStatus::Connected {
+            username: "Listener".into(),
+        });
+        assert!(draws_main_window(&mut app));
+        app.handle_api(ApiResponse::Me(Ok(listener())));
+        assert!(!app.is_restoring_session());
+        assert!(draws_main_window(&mut app));
+        app.backend.shutdown();
+    }
+
+    /// A failed restore takes down the account it showed, for the sign-in
+    /// card, but keeps it on file to try again at the next launch. Signing
+    /// out forgets it.
+    #[test]
+    fn a_failed_restore_keeps_the_account_on_file_until_sign_out() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.restoring_session = true;
+        app.user = Some(listener());
+        app.account_cache = Some(CachedAccount {
+            origin: crate::music_backend::api_origin(),
+            user: listener(),
+        });
+
+        app.handle_auth(AuthStatus::Failed("Couldn't reach the server".into()));
+        assert_eq!(app.user, None);
+        assert!(app.account_cache.is_some());
+        assert!(draws_sign_in_card(&mut app));
+
+        app.session_dirty = false;
+        app.handle_auth(AuthStatus::SignedOut);
+        assert_eq!(app.account_cache, None);
+        assert!(app.session_dirty);
+        app.backend.shutdown();
+    }
+
+    /// Launch shows only the account last signed in to this server, and only
+    /// while its session is being restored.
+    #[test]
+    fn launch_opens_onto_the_account_last_signed_in_to_this_server() {
+        let session = SessionState {
+            account: Some(CachedAccount {
+                origin: "https://music.example".into(),
+                user: listener(),
+            }),
+            ..SessionState::default()
+        };
+        assert_eq!(
+            launch_account(&session, true, "https://music.example"),
+            Some(listener())
+        );
+        assert_eq!(
+            launch_account(&session, false, "https://music.example"),
+            None,
+            "no session to restore"
+        );
+        assert_eq!(
+            launch_account(&session, true, "http://127.0.0.1:5176"),
+            None,
+            "another server"
+        );
+        assert_eq!(
+            launch_account(&SessionState::default(), true, "https://music.example"),
+            None
+        );
+    }
+
+    /// The account that answers is saved with the session, for the next
+    /// launch to open onto.
+    #[test]
+    fn the_signed_in_account_is_saved_for_the_next_launch() {
+        let mut app = test_app("launch-account");
+        app.backend.set_offline(true);
+        app.handle_api(ApiResponse::Me(Ok(listener())));
+        assert!(app.session_dirty);
+        app.save_session();
+
+        let saved = SessionState::load(&app.dirs.session_file());
+        assert_eq!(
+            launch_account(&saved, true, &crate::music_backend::api_origin()),
+            Some(listener())
+        );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
     }
 
     /// Previous and Next move a restored track without starting playback.

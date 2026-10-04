@@ -1585,6 +1585,14 @@ pub struct CachedRootlist {
     pub entries: Vec<crate::player::RootlistEntry>,
 }
 
+/// The profile of the account last signed in to a music server. The next
+/// launch opens onto it while that server restores the saved session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CachedAccount {
+    pub origin: String,
+    pub user: crate::api::models::User,
+}
+
 /// Restorable UI session: what was open when the app last closed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1611,6 +1619,9 @@ pub struct SessionState {
     /// Last good playlist tree, scoped to the account that supplied it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rootlist: Option<CachedRootlist>,
+    /// The signed-in account, cleared when it signs out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<CachedAccount>,
     /// Shuffle mode saved across contexts and restarts.
     pub shuffle_on: bool,
     /// Each table's chosen sort, by encoded page, restored at start.
@@ -1672,7 +1683,7 @@ impl SessionState {
 
 #[cfg(test)]
 mod session_tests {
-    use super::{CachedRootlist, SessionState};
+    use super::{CachedAccount, CachedRootlist, SessionState};
     use crate::player::RootlistEntry;
 
     #[test]
@@ -1680,6 +1691,25 @@ mod session_tests {
         let state: SessionState = serde_json::from_str(r#"{"last_page":"home"}"#).unwrap();
         assert_eq!(state.last_page.as_deref(), Some("home"));
         assert_eq!(state.rootlist, None);
+        assert_eq!(state.account, None);
+    }
+
+    #[test]
+    fn the_account_round_trips_with_its_server() {
+        let state = SessionState {
+            account: Some(CachedAccount {
+                origin: "https://music.example".into(),
+                user: crate::api::models::User {
+                    id: "listener".into(),
+                    display_name: Some("Listener".into()),
+                    ..Default::default()
+                },
+            }),
+            ..SessionState::default()
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(serde_json::from_str::<SessionState>(&json).unwrap(), state);
     }
 
     #[test]
