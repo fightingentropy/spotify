@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::api::models::{Page, SavedTrack, Track};
 use crate::model::PagedList;
 
-const VERSION: u32 = 1;
+/// 2: older likes carry the date their song reached the library.
+const VERSION: u32 = 2;
 const FRESH_SECONDS: i64 = 15 * 60;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
