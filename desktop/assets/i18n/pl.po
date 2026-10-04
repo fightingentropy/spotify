@@ -1412,10 +1412,6 @@ msgstr "Autoprzewijanie środkowym przyciskiem"
 msgid "Custom title bar"
 msgstr "Własny pasek tytułu"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Wizualizacja na pasku odtwarzacza"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "Zgodnie z systemem używa Twoich kolorów Omarchy."
@@ -1471,13 +1467,6 @@ msgid ""
 msgstr ""
 "Rysuj własny pasek tytułu i przyciski okna Spotifast zamiast standardowych "
 "przycisków Windows."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Pokazuje ruch utworu za przyciskami paska odtwarzacza, gdy gra na tym "
-"komputerze."
 
 #: src/ui/settings.rs:996
 msgid "Off"

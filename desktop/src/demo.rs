@@ -673,72 +673,6 @@ fn play_here(app: &mut App) {
     app.local.position_ms = now.as_ref().map_or(0, |now| now.position_ms);
 }
 
-/// Half a second of stereo sound shaped like a busy mix, the same every
-/// time: a bass line, chords and their overtones at uneven levels up
-/// through the mids and highs, a bright hi-hat hiss and pink noise
-/// beneath, so a visualizer shows peaks across the whole range rather
-/// than a slope from the bass.
-#[cfg(feature = "demo")]
-fn demo_sound() -> Vec<f64> {
-    // Frequency and level of each partial, uneven on purpose so
-    // neighbouring bands stand at different heights.
-    const PARTIALS: [(f64, f64); 18] = [
-        (55.0, 0.16),
-        (110.0, 0.07),
-        (146.8, 0.1),
-        (196.0, 0.04),
-        (246.9, 0.09),
-        (392.0, 0.03),
-        (523.3, 0.08),
-        (740.0, 0.025),
-        (880.0, 0.07),
-        (1174.7, 0.02),
-        (1568.0, 0.06),
-        (2093.0, 0.018),
-        (2637.0, 0.05),
-        (3520.0, 0.014),
-        (4698.6, 0.04),
-        (6271.9, 0.012),
-        (8372.0, 0.03),
-        (11175.3, 0.01),
-    ];
-    let rate = f64::from(librespot_playback::SAMPLE_RATE);
-    let mut seed = 0x2545_f491_u32;
-    let mut white = move || {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        f64::from(seed) / f64::from(u32::MAX) - 0.5
-    };
-    // Paul Kellet's economy filter turns white noise pink; the difference
-    // of two white samples leaves only the treble, like a hi-hat.
-    let (mut b0, mut b1, mut b2, mut last) = (0.0, 0.0, 0.0, 0.0);
-    (0..librespot_playback::SAMPLE_RATE as usize / 2)
-        .flat_map(|index| {
-            let time = index as f64 / rate;
-            let noise = white();
-            b0 = 0.99765 * b0 + noise * 0.099_046;
-            b1 = 0.963 * b1 + noise * 0.296_516_4;
-            b2 = 0.57 * b2 + noise * 1.052_691_3;
-            let pink = (b0 + b1 + b2 + noise * 0.1848) * 0.12;
-            let hiss = (noise - last) * 0.05;
-            last = noise;
-            let sample = PARTIALS
-                .iter()
-                .map(|(hertz, level)| {
-                    // Everything above the bass half again as loud, so the
-                    // skin's bars, four bands each, stand tall too.
-                    let level = if *hertz > 100.0 { level * 1.5 } else { *level };
-                    level * (time * hertz * std::f64::consts::TAU).sin()
-                })
-                .sum::<f64>()
-                + pink
-                + hiss;
-            [sample, sample]
-        })
-        .collect()
-}
-
 #[cfg(feature = "demo")]
 pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
     // Default screenshots to the main window regardless of saved settings.
@@ -783,16 +717,6 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 // as without this override.
                 play_here(app);
                 app.local.playback = crate::player::Playback::Paused;
-            }
-            "player-bar-spectrum" | "player-bar-waveform" => {
-                app.settings.player_bar_vis = if surface == "player-bar-spectrum" {
-                    crate::settings::PlayerBarVis::Spectrum
-                } else {
-                    crate::settings::PlayerBarVis::Waveform
-                };
-                play_here(app);
-                app.local.playback = crate::player::Playback::Playing;
-                app.winamp.tap.push(&demo_sound(), 1.0);
             }
             // The sign-in card and the card while the session connects.
             "signed-out" => {
@@ -4046,122 +3970,6 @@ mod tests {
         );
     }
 
-    /// The player bar's visualizer draws only when chosen and while the
-    /// song plays on this computer, and asks for frames only then.
-    #[cfg(feature = "demo")]
-    #[test]
-    fn the_player_bar_visualizer_moves_only_when_chosen_and_playing() {
-        use crate::settings::PlayerBarVis;
-        let (ctx, mut app) = accessible_app("player-bar-vis");
-        let draw = |app: &mut App| {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1280.0, 800.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| crate::ui::player_bar::show(app, ui),
-            );
-            output.textures_delta.clear();
-            output
-        };
-        // Both draw an untextured mesh; the waveform also strokes its line
-        // in many short runs.
-        let lines = |output: &egui::FullOutput| {
-            output
-                .shapes
-                .iter()
-                .filter(|shape| matches!(&shape.shape, egui::Shape::Path(_)))
-                .count()
-        };
-        let drawn = |output: &egui::FullOutput| {
-            output.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Mesh(mesh)
-                    if mesh.texture_id == egui::TextureId::default() && !mesh.vertices.is_empty())
-            })
-        };
-        let spectrum = |output: &egui::FullOutput| drawn(output) && lines(output) < 20;
-        let waveform = |output: &egui::FullOutput| drawn(output) && lines(output) >= 20;
-        let wants_frames = |output: &egui::FullOutput| {
-            output
-                .viewport_output
-                .get(&egui::ViewportId::ROOT)
-                .is_some_and(|viewport| {
-                    viewport.repaint_delay < std::time::Duration::from_millis(100)
-                })
-        };
-
-        // #given a song playing here with the spectrum chosen
-        apply_flags(&mut app, None, Some("player-bar-spectrum"));
-        draw(&mut app);
-        let output = draw(&mut app);
-        assert!(spectrum(&output), "the spectrum is drawn");
-        assert!(wants_frames(&output));
-
-        // #when the waveform is chosen
-        app.settings.player_bar_vis = PlayerBarVis::Waveform;
-        let output = draw(&mut app);
-        assert!(waveform(&output), "the waveform is drawn");
-        assert!(!spectrum(&output));
-
-        // #when it is turned off
-        app.settings.player_bar_vis = PlayerBarVis::Off;
-        let output = draw(&mut app);
-        assert!(!drawn(&output));
-        assert!(!wants_frames(&output), "nothing to animate");
-
-        // #when the song is paused
-        app.settings.player_bar_vis = PlayerBarVis::Waveform;
-        app.local.playback = crate::player::Playback::Paused;
-        let output = draw(&mut app);
-        assert!(!waveform(&output), "a paused song is still");
-        app.backend.shutdown();
-    }
-
-    #[test]
-    fn visualizer_requires_its_explicit_control() {
-        use crate::settings::PlayerBarVis;
-        use egui::accesskit::{Action as AccessibleAction, Role};
-        let (ctx, mut app) = accessible_app("player-bar-visualizer-control");
-        accessible_frame(&ctx, &mut app, vec![]);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            pointer_click(egui::pos2(6.0, 796.0), egui::PointerButton::Primary),
-        );
-        assert_eq!(app.settings.player_bar_vis, PlayerBarVis::Off);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let control = accessible_node(&tree, "Visualizer", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(control, AccessibleAction::Click, None)],
-        );
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let spectrum = accessible_node(&tree, "Spectrum", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(spectrum, AccessibleAction::Focus, None)],
-        );
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
-        );
-        assert_eq!(app.settings.player_bar_vis, PlayerBarVis::Spectrum);
-        // A later click in blank space cannot silently change the selection.
-        accessible_frame(
-            &ctx,
-            &mut app,
-            pointer_click(egui::pos2(6.0, 796.0), egui::PointerButton::Primary),
-        );
-        assert_eq!(app.settings.player_bar_vis, PlayerBarVis::Spectrum);
-        app.backend.shutdown();
-    }
-
     #[test]
     fn artwork_opens_one_now_playing_panel_and_escape_preserves_playback() {
         use egui::accesskit::{Action as AccessibleAction, Role};
@@ -5523,9 +5331,8 @@ mod tests {
     /// Pages and expanded lyrics keep the selected theme while artwork changes.
     #[test]
     fn artwork_does_not_paint_page_or_player_backgrounds() {
-        use crate::settings::{PlayerBarVis, ThemeChoice};
+        use crate::settings::ThemeChoice;
         let (ctx, mut app) = accessible_app("neutral-backgrounds");
-        app.settings.player_bar_vis = PlayerBarVis::Off;
         for choice in [ThemeChoice::Dark, ThemeChoice::Light] {
             app.apply(Action::SetTheme(choice), &ctx);
             for expanded in [false, true] {

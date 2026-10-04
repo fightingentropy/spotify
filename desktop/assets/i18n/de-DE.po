@@ -1409,10 +1409,6 @@ msgstr "Autoscroll per Mittelklick"
 msgid "Custom title bar"
 msgstr "Eigene Titelleiste"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Visualizer in der Wiedergabeleiste"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "„System folgen“ verwendet deine Omarchy-Farben."
@@ -1469,13 +1465,6 @@ msgid ""
 msgstr ""
 "Eigene Titelleiste und Fensterschaltflächen von Spotifast statt der "
 "Standardelemente von Windows zeichnen."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Zeigt den Song in Bewegung hinter den Steuerelementen der Wiedergabeleiste, "
-"während er hier läuft."
 
 #: src/ui/settings.rs:996
 msgid "Off"

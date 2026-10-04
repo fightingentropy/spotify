@@ -1403,10 +1403,6 @@ msgstr "Desplazamiento con clic central"
 msgid "Custom title bar"
 msgstr "Barra de título personalizada"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Visualizador en la barra de reproducción"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "Seguir el sistema usa tus colores de Omarchy."
@@ -1461,13 +1457,6 @@ msgid ""
 msgstr ""
 "Dibuja la barra de título y los botones de ventana propios de Spotifast en "
 "lugar de los estándar de Windows."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Muestra la canción en movimiento detrás de los controles de la barra de "
-"reproducción mientras suena aquí."
 
 #: src/ui/settings.rs:996
 msgid "Off"

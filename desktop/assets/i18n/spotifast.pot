@@ -1373,10 +1373,6 @@ msgstr ""
 msgid "Custom title bar"
 msgstr ""
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr ""
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr ""
@@ -1424,11 +1420,6 @@ msgstr ""
 msgid ""
 "Draw Spotifast's own title bar and window buttons instead of the standard "
 "Windows ones."
-msgstr ""
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
 msgstr ""
 
 #: src/ui/settings.rs:996

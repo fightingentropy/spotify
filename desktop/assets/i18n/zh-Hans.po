@@ -1362,10 +1362,6 @@ msgstr "中键自动滚动"
 msgid "Custom title bar"
 msgstr "自定义标题栏"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "播放栏可视化效果"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "“跟随系统”会使用你的 Omarchy 配色。"
@@ -1416,11 +1412,6 @@ msgid ""
 "Draw Spotifast's own title bar and window buttons instead of the standard "
 "Windows ones."
 msgstr "使用 Spotifast 自己的标题栏和窗口按钮，而不是 Windows 标准样式。"
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr "歌曲在本机播放时，在播放栏控件后方显示它的律动。"
 
 #: src/ui/settings.rs:996
 msgid "Off"

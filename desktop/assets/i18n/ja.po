@@ -1396,10 +1396,6 @@ msgstr "中クリックで自動スクロール"
 msgid "Custom title bar"
 msgstr "カスタムタイトルバー"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "プレイヤーバーのビジュアライザー"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "「システムに合わせる」ではOmarchyの色を使います。"
@@ -1453,13 +1449,6 @@ msgid ""
 "Windows ones."
 msgstr ""
 "Windows標準のものではなく、Spotifast独自のタイトルバーとウインドウボタンを表"
-"示します。"
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"このコンピューターで再生中の曲の動きを、プレイヤーバーの操作ボタンの背後に表"
 "示します。"
 
 #: src/ui/settings.rs:996

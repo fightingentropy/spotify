@@ -1409,10 +1409,6 @@ msgstr "Автопрокрутка средней кнопкой"
 msgid "Custom title bar"
 msgstr "Собственный заголовок окна"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Визуализатор в панели плеера"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "«Как в системе» использует цвета Omarchy."
@@ -1467,13 +1463,6 @@ msgid ""
 "Draw Spotifast's own title bar and window buttons instead of the standard "
 "Windows ones."
 msgstr "Свои заголовок и кнопки окна Spotifast вместо стандартных из Windows."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Показывает движение трека за кнопками панели плеера, пока он играет на этом "
-"компьютере."
 
 #: src/ui/settings.rs:996
 msgid "Off"

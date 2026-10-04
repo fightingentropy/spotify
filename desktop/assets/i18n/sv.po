@@ -1400,10 +1400,6 @@ msgstr "Autoskrollning med mittenklick"
 msgid "Custom title bar"
 msgstr "Anpassad namnlist"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Visualisering i spelarfältet"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "”Följ systemet” använder dina Omarchy-färger."
@@ -1456,12 +1452,6 @@ msgid ""
 msgstr ""
 "Rita Spotifasts egen namnlist och fönsterknappar i stället för Windows "
 "standardknappar."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Visar låten i rörelse bakom spelarfältets kontroller medan den spelas här."
 
 #: src/ui/settings.rs:996
 msgid "Off"

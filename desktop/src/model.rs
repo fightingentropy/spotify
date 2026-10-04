@@ -1140,7 +1140,6 @@ pub enum Action {
     SetRandomSkin(bool),
     /// Cycle bars, scope, and off.
     CycleVisualiser,
-    /// A click on the player bar's empty space: spectrum, waveform, off.
     /// Set the visualizer mode directly.
     SetVisualiser(crate::settings::VisMode),
     /// Open or close the playlist window under the mini player.

@@ -166,10 +166,9 @@ verification flow independently of the old app bundle.
   Escape or clicking outside dismisses it; **Open desktop app** restores the
   full window and Dock icon. A fresh app launch opens the desktop. Other
   platforms retain the Winamp mini player.
-- Native themes, an explicit player Visualizer menu and keyboard shortcuts.
+- Native themes and keyboard shortcuts.
 
 The website and mobile app remain separate clients of the same service. Spotify
 Connect, Spotify account authorization, upstream self-updates, and unsupported
 Spotify-only library shelves are not exposed. MilkDrop is an optional upstream
-build feature; the standard build keeps the in-player spectrum and waveform
-without downloading MilkDrop presets.
+build feature and is not included in the standard desktop build.

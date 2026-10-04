@@ -1406,10 +1406,6 @@ msgstr "Automatisch scrollen met middelklik"
 msgid "Custom title bar"
 msgstr "Aangepaste titelbalk"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Visualisatie in de spelerbalk"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "“Systeem volgen” gebruikt je Omarchy-kleuren."
@@ -1464,13 +1460,6 @@ msgid ""
 msgstr ""
 "Teken de eigen titelbalk en vensterknoppen van Spotifast in plaats van de "
 "standaardknoppen van Windows."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Toont het nummer in beweging achter de knoppen van de spelerbalk terwijl het "
-"hier speelt."
 
 #: src/ui/settings.rs:996
 msgid "Off"

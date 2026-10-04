@@ -1366,10 +1366,6 @@ msgstr "中鍵自動捲動"
 msgid "Custom title bar"
 msgstr "自訂標題列"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "播放列視覺效果"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "「跟隨系統」會使用你的 Omarchy 色彩。"
@@ -1420,11 +1416,6 @@ msgid ""
 "Draw Spotifast's own title bar and window buttons instead of the standard "
 "Windows ones."
 msgstr "使用 Spotifast 自己的標題列和視窗按鈕，而不是 Windows 的標準樣式。"
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr "歌曲在本機播放時，在播放列控制項後方顯示它的律動。"
 
 #: src/ui/settings.rs:996
 msgid "Off"

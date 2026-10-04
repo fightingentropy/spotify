@@ -1402,10 +1402,6 @@ msgstr "Rolagem automática com o botão do meio"
 msgid "Custom title bar"
 msgstr "Barra de título personalizada"
 
-#: src/ui/settings.rs:786
-msgid "Player bar visualizer"
-msgstr "Visualizador na barra do player"
-
 #: src/ui/settings.rs:797
 msgid "Follow system uses your Omarchy colours."
 msgstr "Seguir o sistema usa as cores do Omarchy."
@@ -1460,13 +1456,6 @@ msgid ""
 msgstr ""
 "Desenha a barra de título e os botões de janela do próprio Spotifast em vez "
 "dos padrões do Windows."
-
-#: src/ui/settings.rs:861
-msgid ""
-"Show the song moving behind the player bar's controls while it plays here."
-msgstr ""
-"Mostra a música em movimento atrás dos controles da barra do player enquanto "
-"toca aqui."
 
 #: src/ui/settings.rs:996
 msgid "Off"
