@@ -72,4 +72,16 @@ describe("Spotify albums", () => {
     expect(parseSpotifyAlbumSearch({ albums: { items: [webAlbum] } })[0].releaseDate).toBe("2017-03-03");
     expect(parseSpotifyAlbumCatalog(webAlbum).tracks[0].durationMs).toBe(228000);
   });
+  test("reads current Pathfinder trackDuration and skips invalid legacy duration fields", () => {
+    for (const duration of [
+      { trackDuration: { totalMilliseconds: 225868 } },
+      { trackDuration: { totalMilliseconds: "181270" }, duration: { totalMilliseconds: 0 } },
+      { trackDuration: { totalMilliseconds: -1 }, duration: { totalMilliseconds: 225868 } },
+      { duration: { totalMilliseconds: 0 }, durationMs: 225868 },
+    ]) {
+      const track = { uri: `spotify:track:${trackId}`, name: "Patient Zero", ...duration };
+      const result = parseSpotifyAlbumCatalog({ data: { albumUnion: { ...album, tracks: { items: [{ track }] } } } });
+      expect(result.tracks[0].durationMs).toBe(duration.trackDuration?.totalMilliseconds === "181270" ? 181270 : 225868);
+    }
+  });
 });

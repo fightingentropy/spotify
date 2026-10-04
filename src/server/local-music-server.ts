@@ -94,6 +94,7 @@ import {
 import {
   configureDiscover,
   discoverCatalogMetadata,
+  findDiscoverStagedSong,
   handleDiscoverPromote,
   handleDiscoverStageNow,
   handleDiscoverStagingStatus,
@@ -1888,7 +1889,8 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
       if (!source) return notFound("Song not found");
       const snapshot = await getLibrary(source);
       const entry = snapshot.entriesById.get(id);
-      return entry ? jsonCached(request, songForRequest(entry.song, request)) : notFound("Song not found");
+      const song = entry?.song ?? await findDiscoverStagedSong(source, id);
+      return song ? jsonCached(request, songForRequest(song, request)) : notFound("Song not found");
     }
     if (request.method === "PATCH") {
       const source = librarySourceForRequest(request);

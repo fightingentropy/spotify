@@ -1,6 +1,7 @@
 import { stagedAudioMatchesQuality } from "./licensed-audio-output";
 import { classifyAudioBytes } from "../lib/audio-codec-detect";
 import { existsSync } from "node:fs";
+import { parseFile } from "music-metadata";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
@@ -160,28 +161,52 @@ function discoverManifestPath(source: LibrarySource): string {
 }
 
 let discoverManifestCache: DiscoverManifest | null = null;
+let discoverManifestCachePath = "";
 let discoverManifestChain: Promise<unknown> = Promise.resolve();
 const coordinateDiscoverStage = createDiscoverStageCoordinator<DiscoverStagingEntry>();
+const failedDurationProbes = new Map<string, number>();
+
+function positiveDurationMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function measuredDiscoverDurationMs(path: string): Promise<number | undefined> {
+  // A damaged/unsupported file must not trigger a full parse on each status poll.
+  if ((failedDurationProbes.get(path) ?? 0) > Date.now()) return undefined;
+  const metadata = await parseFile(path, { duration: true, skipCovers: true }).catch(() => null);
+  const duration = positiveDurationMs((metadata?.format.duration ?? 0) * 1000);
+  if (duration) {
+    failedDurationProbes.delete(path);
+    return Math.max(1, Math.round(duration));
+  }
+  if (failedDurationProbes.size >= 256) failedDurationProbes.delete(failedDurationProbes.keys().next().value!);
+  failedDurationProbes.set(path, Date.now() + 60_000);
+  return undefined;
+}
 
 async function readDiscoverManifest(source: LibrarySource): Promise<DiscoverManifest> {
-  if (discoverManifestCache) return discoverManifestCache;
+  const path = discoverManifestPath(source);
+  if (discoverManifestCache && discoverManifestCachePath === path) return discoverManifestCache;
   try {
-    const raw = await readFile(discoverManifestPath(source), "utf8");
+    const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as DiscoverManifest;
     if (parsed && parsed.version === DISCOVER_MANIFEST_VERSION && parsed.entries && typeof parsed.entries === "object") {
       discoverManifestCache = { version: DISCOVER_MANIFEST_VERSION, entries: parsed.entries };
+      discoverManifestCachePath = path;
       return discoverManifestCache;
     }
   } catch {
     // no manifest yet
   }
   discoverManifestCache = { version: DISCOVER_MANIFEST_VERSION, entries: {} };
+  discoverManifestCachePath = path;
   return discoverManifestCache;
 }
 
 async function writeDiscoverManifest(source: LibrarySource, manifest: DiscoverManifest): Promise<void> {
   discoverManifestCache = manifest;
   const target = discoverManifestPath(source);
+  discoverManifestCachePath = target;
   await mkdir(dirname(target), { recursive: true });
   const tempPath = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -196,6 +221,34 @@ function withDiscoverManifestLock<T>(task: () => Promise<T>): Promise<T> {
     () => {},
   );
   return run;
+}
+
+async function discoverManifestWithDurations(
+  source: LibrarySource,
+  trackIds?: Set<string>,
+  hint?: { trackId: string; durationMs?: number },
+): Promise<DiscoverManifest> {
+  return withDiscoverManifestLock(async () => {
+    const manifest = await readDiscoverManifest(source);
+    let changed = false;
+    for (const entry of Object.values(manifest.entries)) {
+      if (trackIds && !trackIds.has(entry.trackId)) continue;
+      if (positiveDurationMs(entry.durationMs)) continue;
+      const path = resolve(source.root, entry.stagedRelPath);
+      if (!existsSync(path)) continue;
+      const durationMs = (hint?.trackId === entry.trackId ? positiveDurationMs(hint.durationMs) : undefined)
+        ?? await measuredDiscoverDurationMs(path);
+      if (durationMs) {
+        entry.durationMs = durationMs;
+        changed = true;
+      }
+    }
+    // Persist successful repairs once; subsequent reads only check numbers.
+    if (changed) await writeDiscoverManifest(source, manifest).catch(() => {
+      // Playback can use the recovered duration even if a metadata write fails.
+    });
+    return manifest;
+  });
 }
 
 // yt-dlp installs into prefixes that launchd's minimal PATH omits, so probe known
@@ -313,6 +366,7 @@ async function writeDiscoverStagedFile(
   const tempPath = `${stagedAudioPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tempPath, audio.bytes);
   await rename(tempPath, stagedAudioPath);
+  failedDurationProbes.delete(stagedAudioPath);
 
   const sidecar: LocalSidecar = {
     version: 1,
@@ -350,7 +404,7 @@ async function writeDiscoverStagedFile(
     artist: item.artist,
     album: item.album,
     imageUrl: item.imageUrl,
-    durationMs: item.durationMs,
+    durationMs: positiveDurationMs(item.durationMs) ?? await measuredDiscoverDurationMs(stagedAudioPath),
     firstSeenAt: now,
     lastSeenAt: now,
     lossless: classifyAudioBytes(audio.bytes).quality === "lossless",
@@ -375,7 +429,9 @@ async function stageDiscoverTrack(source: LibrarySource, item: DiscoverStageItem
       // Refresh ordinary previews for a fallback save, so current Premium
       // credentials and the best audio selector get a chance to upgrade them.
       const fallbackReady = !item.libraryFallback || existing?.libraryFallback || existing?.lossless !== false;
-      return existingUsable && (item.preview || existing.lossless !== false || existing.providerDownload === true) && fallbackReady ? existing : null;
+      if (!existingUsable || !(item.preview || existing.lossless !== false || existing.providerDownload === true) || !fallbackReady) return null;
+      const repaired = await discoverManifestWithDurations(source, new Set([item.trackId]), item);
+      return repaired.entries[item.trackId] ?? existing;
     },
     async () => {
       const audio = item.preview
@@ -440,7 +496,7 @@ function discoverEntryToSong(entry: DiscoverStagingEntry): PlayerSong {
       ? `/api/files/local/${encodeRelativePath(entry.coverRelPath)}`
       : entry.imageUrl || `/api/artwork/local/${encodeURIComponent(entry.finalId)}`,
     audioUrl: `/api/files/local/${encodeRelativePath(entry.stagedRelPath)}`,
-    duration: entry.durationMs ? Math.round(entry.durationMs / 1000) : undefined,
+    duration: positiveDurationMs(entry.durationMs) ? entry.durationMs! / 1000 : undefined,
     source: "server",
     localPath: entry.stagedRelPath,
     staged: true,
@@ -449,13 +505,24 @@ function discoverEntryToSong(entry: DiscoverStagingEntry): PlayerSong {
 }
 
 export async function discoverCatalogMetadata(source: LibrarySource, trackId: string): Promise<Partial<PlayerSong>> {
-  const entry = (await readDiscoverManifest(source)).entries[trackId];
+  const entry = (await discoverManifestWithDurations(source, new Set([trackId]))).entries[trackId];
   return entry ? {
     title: entry.title,
     artist: entry.artist,
     album: entry.album,
     imageUrl: entry.imageUrl,
+    duration: positiveDurationMs(entry.durationMs) ? entry.durationMs! / 1000 : undefined,
   } : {};
+}
+
+/** Staged songs live outside the normal library scan but remain addressable by their playback id. */
+export async function findDiscoverStagedSong(source: LibrarySource, id: string): Promise<PlayerSong | null> {
+  if (!source.shared) return null;
+  const manifest = await readDiscoverManifest(source);
+  const entry = Object.values(manifest.entries).find(candidate => candidate.finalId === id || `discover:${candidate.trackId}` === id);
+  if (!entry || !existsSync(resolve(source.root, entry.stagedRelPath))) return null;
+  const repaired = await discoverManifestWithDurations(source, new Set([entry.trackId]));
+  return repaired.entries[entry.trackId] ? discoverEntryToSong(repaired.entries[entry.trackId]) : null;
 }
 
 // Discover staging files live in the shared root but are streamed by clients
@@ -503,7 +570,7 @@ function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
     artist,
     album: typeof value.album === "string" ? value.album.trim() : undefined,
     imageUrl: typeof value.imageUrl === "string" ? value.imageUrl.trim() : undefined,
-    durationMs: typeof value.durationMs === "number" && value.durationMs > 0 ? value.durationMs : undefined,
+    durationMs: positiveDurationMs(value.durationMs),
     preview,
     libraryFallback: preview && value.libraryFallback === true,
     resolved: resolved && typeof resolved === "object" ? (resolved as DiscoverResolved) : undefined,
@@ -514,7 +581,7 @@ function normalizeDiscoverStageItem(raw: unknown): DiscoverStageItem | null {
 async function discoverStagingStatusBody(
   source: LibrarySource,
 ): Promise<{ entries: Array<{ trackId: string; id: string; audioUrl: string; duration?: number }> }> {
-  const manifest = await readDiscoverManifest(source);
+  const manifest = await discoverManifestWithDurations(source);
   const entries = Object.values(manifest.entries)
     .filter((entry) => existsSync(resolve(source.root, entry.stagedRelPath)))
     .map((entry) => {
@@ -523,7 +590,7 @@ async function discoverStagingStatusBody(
         trackId: entry.trackId,
         id: entry.finalId,
         audioUrl: signDiscoverMediaUrl(audioUrl) || audioUrl,
-        duration: entry.durationMs ? Math.round(entry.durationMs / 1000) : undefined,
+        duration: positiveDurationMs(entry.durationMs) ? entry.durationMs! / 1000 : undefined,
       };
     });
   return { entries };
@@ -683,7 +750,7 @@ export async function handleYouTubeMusicPlaylist(request: Request, listId: strin
   }
   if (!mix.entries.length) return json({ error: "This mix is empty right now" }, { status: 502 });
 
-  const manifest = await readDiscoverManifest(source);
+  const manifest = await discoverManifestWithDurations(source, new Set(mix.entries.map(entry => `yt:${entry.videoId}`)));
   const songs: PlayerSong[] = mix.entries.map((entry) => {
     const trackId = `yt:${entry.videoId}`;
     const cached = manifest.entries[trackId];
@@ -693,7 +760,7 @@ export async function handleYouTubeMusicPlaylist(request: Request, listId: strin
         ...discoverEntryToSong(cached),
         title: entry.title,
         artist: entry.artist,
-        duration: entry.duration ?? (cached.durationMs ? Math.round(cached.durationMs / 1000) : undefined),
+        duration: positiveDurationMs(cached.durationMs) ? cached.durationMs! / 1000 : entry.duration,
         youtubeVideoId: entry.videoId,
       });
     }

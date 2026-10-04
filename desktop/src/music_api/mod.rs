@@ -494,6 +494,14 @@ impl MusicApi {
         song.audio_url = self.absolute(&song.audio_url);
         song.lyrics_url = song.lyrics_url.map(|s| self.absolute(&s));
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // History and partial catalog responses can omit the length. Keep a
+        // known duration instead of disabling the player's progress and seek.
+        if song.duration_ms == 0 {
+            if let Some(known) = state.songs.get(&song.uri()) {
+                song.duration_ms = known.duration_ms;
+                song.duration = known.duration;
+            }
+        }
         // Fresh catalog responses still describe the provider recording. A keep
         // may already have resolved it to a different, pre-existing library ID.
         let resolved = song
@@ -700,6 +708,10 @@ impl MusicApi {
             self.request(Method::POST, "/api/discover/stage", Some(body))
                 .await?,
         )?;
+        if staged.duration_ms == 0 && !staged.duration.is_some_and(|duration| duration > 0.0) {
+            staged.duration_ms = song.duration_ms;
+            staged.duration = song.duration;
+        }
         staged.discover_track_id = song.discover_track_id.clone();
         staged.youtube_video_id = song.youtube_video_id.clone();
         staged.preview = preview || song.youtube_video_id.is_some();

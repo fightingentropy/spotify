@@ -388,6 +388,64 @@ async fn staging_preserves_placeholder_alias_and_never_saves_on_play() {
 }
 
 #[tokio::test]
+async fn staging_keeps_catalog_duration_when_the_media_response_omits_it() {
+    for (duration, expected) in [
+        (None, 123_500),
+        (Some(0.0), 123_500),
+        (Some(121.75), 121_750),
+    ] {
+        let server = Server::new(move |r| {
+            assert_eq!(r.path, "/api/discover/stage");
+            assert_eq!(r.body["durationMs"], 123_500);
+            let mut value = song("staged-file");
+            value["duration"] = json!(duration);
+            reply(value)
+        });
+        let api = server.api();
+        let mut value = song("discover:abc");
+        value["audioUrl"] = json!("");
+        value["discoverTrackId"] = json!("ABCDEFGHIJKLMNOPQRSTUV");
+        api.remember(decode(value).unwrap());
+
+        let resolved = api
+            .resolve_song("spotify:track:discover:abc")
+            .await
+            .unwrap();
+        assert_eq!(resolved.duration_ms, expected);
+        assert_eq!(
+            resolved
+                .local_track("spotify:track:discover:abc")
+                .duration_ms,
+            expected
+        );
+        assert_eq!(
+            api.resolve_song(&resolved.uri()).await.unwrap().duration_ms,
+            expected
+        );
+        assert_eq!(server.seen.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn partial_metadata_cannot_erase_a_known_track_duration() {
+    let api = MusicApi::new("https://music.example.test", crate::http::Http::default()).unwrap();
+    api.remember(decode(song("track")).unwrap());
+    for duration in [Value::Null, json!(0)] {
+        let mut value = song("track");
+        value["duration"] = duration;
+        let remembered = api.remember(decode(value).unwrap());
+        assert_eq!(remembered.duration_ms, 123_500);
+        assert_eq!(remembered.duration, Some(123.5));
+    }
+    let mut corrected = song("track");
+    corrected["duration"] = json!(121.75);
+    assert_eq!(
+        api.remember(decode(corrected).unwrap()).duration_ms,
+        121_750
+    );
+}
+
+#[tokio::test]
 async fn cached_staged_preview_still_refreshes_expired_or_missing_media() {
     let server = Server::new(|r| {
         assert_eq!(r.path, "/api/discover/stage");

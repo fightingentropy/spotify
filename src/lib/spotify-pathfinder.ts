@@ -151,7 +151,12 @@ function releaseDateFromAlbum(albumValue: Record<string, unknown> | null): strin
 
 function durationMsFromTrackData(data: Record<string, unknown>): number {
   const duration = toObject(data.duration);
-  return toFiniteNumber(duration?.totalMilliseconds) ?? toFiniteNumber(data.durationMs) ?? 0;
+  const trackDuration = toObject(data.trackDuration);
+  for (const value of [trackDuration?.totalMilliseconds, duration?.totalMilliseconds, data.durationMs, data.duration_ms]) {
+    const milliseconds = toFiniteNumber(value);
+    if (milliseconds !== null && milliseconds > 0) return milliseconds;
+  }
+  return 0;
 }
 
 function normalizeCookie(cookie?: string): string {

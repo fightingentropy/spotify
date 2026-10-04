@@ -164,7 +164,13 @@ export function applyDiscoverStaging(
   return tracks.map((track) => {
     const ready = staged.get(track.id);
     return ready
-      ? { ...track, staged: true, audioId: ready.id, audioUrl: ready.audioUrl }
+      ? {
+        ...track,
+        durationMs: typeof ready.duration === "number" && Number.isFinite(ready.duration) && ready.duration > 0
+          ? Math.round(ready.duration * 1000)
+          : track.durationMs,
+        staged: true, audioId: ready.id, audioUrl: ready.audioUrl,
+      }
       : { ...track, staged: false };
   });
 }
@@ -193,7 +199,7 @@ const readDiscoverCards = createDiscoverCardCache();
 // materializes on play. Mirrors the mobile discoverTrackToPlayerSong so the Top-50
 // playlist detail renders + plays exactly like the old Discover row (lossless).
 export function discoverStagedToPlayerSong(track: DiscoverStagedTrack): PlayerSong {
-  const duration = track.durationMs ? Math.round(track.durationMs / 1000) : undefined;
+  const duration = track.durationMs ? track.durationMs / 1000 : undefined;
   if (track.staged && track.audioUrl && track.audioId) {
     return {
       id: track.audioId,
