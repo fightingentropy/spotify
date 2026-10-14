@@ -1,4 +1,4 @@
-import { looksNonCanonicalTrack } from "@/lib/song-dedupe";
+import { looksNonCanonicalTrack, normalizeSongPart } from "@/lib/song-dedupe";
 
 const LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/";
 const LASTFM_REQUEST_TIMEOUT_MS = 8_000;
@@ -7,6 +7,39 @@ const LASTFM_REQUEST_TIMEOUT_MS = 8_000;
 const MAX_SEEDS = 8;
 
 type SeedTrack = { title: string; artist: string };
+
+export function recommendationKey(track: SeedTrack): string {
+  const clean = (value: string) => normalizeSongPart(value).replace(/[^\p{L}\p{N}]/gu, "");
+  return `${clean(track.title)}::${clean(track.artist)}`;
+}
+
+// Apply exclusions AFTER reading the shared candidate cache. A previous
+// listener's exclusions and signed media URLs must never become cached output.
+export function selectRecommendations<T extends SeedTrack & { id: string }>(
+  candidates: T[], excluded: SeedTrack[], excludedIds: Set<string>, limit: number,
+): T[] {
+  const seen = new Set(excluded.map(recommendationKey));
+  const ids = new Set(excludedIds);
+  const pool = candidates.filter(track => {
+    const key = recommendationKey(track);
+    if (ids.has(track.id) || seen.has(key) || looksNonCanonicalTrack(track.title, track.artist)) return false;
+    ids.add(track.id); seen.add(key); return true;
+  });
+  const selected: T[] = [];
+  const artistCounts = new Map<string, number>();
+  while (pool.length && selected.length < limit) {
+    const lastArtist = normalizeSongPart(selected.at(-1)?.artist ?? "");
+    const eligible = (track: T) => (artistCounts.get(normalizeSongPart(track.artist)) ?? 0) < 3;
+    let index = pool.findIndex(track => eligible(track) && normalizeSongPart(track.artist) !== lastArtist);
+    if (index < 0) index = pool.findIndex(eligible);
+    if (index < 0) break;
+    const [track] = pool.splice(index, 1);
+    const artist = normalizeSongPart(track.artist);
+    artistCounts.set(artist, (artistCounts.get(artist) ?? 0) + 1);
+    selected.push(track);
+  }
+  return selected;
+}
 
 function toObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -48,6 +81,22 @@ function lastFmUrl(method: string, params: Record<string, string>, apiKey: strin
   return `${LASTFM_API_URL}?${search.toString()}`;
 }
 
+async function lastFmPayload(method: string, params: Record<string, string>, apiKey: string): Promise<unknown> {
+  const response = await fetchWithTimeout(lastFmUrl(method, params, apiKey));
+  if (!response?.ok) {
+    console.warn("Recommendation provider unavailable", { method, status: response?.status ?? 0 });
+    return null;
+  }
+  const payload: unknown = await response.json().catch(() => null);
+  const error = toObject(payload)?.error;
+  if (typeof error === "number") {
+    // Log only the provider code, never request URLs, API keys or listening data.
+    console.warn("Recommendation provider error", { method, code: error });
+    return null;
+  }
+  return payload;
+}
+
 // Pull {title, artist} pairs out of a Last.fm track-list response. Both
 // track.getSimilar and artist.getTopTracks nest their rows under a single
 // container key (`similartracks`/`toptracks`) → `track[]`, each row carrying a
@@ -84,30 +133,21 @@ function artistsFromSimilar(payload: unknown): string[] {
 }
 
 async function getSimilarTracks(seed: SeedTrack, apiKey: string, limit: number): Promise<SeedTrack[]> {
-  const url = lastFmUrl(
+  const payload = await lastFmPayload(
     "track.getsimilar",
     { artist: seed.artist, track: seed.title, limit: String(limit) },
     apiKey,
   );
-  const response = await fetchWithTimeout(url);
-  if (!response?.ok) return [];
-  const payload = await response.json().catch(() => null);
   return tracksFromTrackList(payload, "similartracks");
 }
 
 async function getSimilarArtists(artist: string, apiKey: string, limit: number): Promise<string[]> {
-  const url = lastFmUrl("artist.getsimilar", { artist, limit: String(limit) }, apiKey);
-  const response = await fetchWithTimeout(url);
-  if (!response?.ok) return [];
-  const payload = await response.json().catch(() => null);
+  const payload = await lastFmPayload("artist.getsimilar", { artist, limit: String(limit) }, apiKey);
   return artistsFromSimilar(payload);
 }
 
 async function getArtistTopTracks(artist: string, apiKey: string, limit: number): Promise<SeedTrack[]> {
-  const url = lastFmUrl("artist.gettoptracks", { artist, limit: String(limit) }, apiKey);
-  const response = await fetchWithTimeout(url);
-  if (!response?.ok) return [];
-  const payload = await response.json().catch(() => null);
+  const payload = await lastFmPayload("artist.gettoptracks", { artist, limit: String(limit) }, apiKey);
   return tracksFromTrackList(payload, "toptracks");
 }
 
@@ -144,7 +184,11 @@ export async function fetchLastFmSimilarTracks(
       const topTrackLists = await Promise.all(
         artists.map((artist) => getArtistTopTracks(artist, apiKey, perSeed).catch(() => [])),
       );
-      for (const list of topTrackLists) fallback.push(...list);
+      // Keep the artist-graph fallback mixed; otherwise the seed artist's
+      // entire top list crowds out related artists before resolution is capped.
+      for (let i = 0; i < Math.max(0, ...topTrackLists.map(list => list.length)); i++) {
+        for (const list of topTrackLists) if (list[i]) fallback.push(list[i]);
+      }
       return fallback;
     }),
   );
@@ -153,7 +197,7 @@ export async function fetchLastFmSimilarTracks(
   const seen = new Set<string>();
   for (const list of collected) {
     for (const track of list) {
-      const key = `${track.title.toLowerCase()}::${track.artist.toLowerCase()}`;
+      const key = recommendationKey(track);
       if (seen.has(key)) continue;
       seen.add(key);
       deduped.push(track);

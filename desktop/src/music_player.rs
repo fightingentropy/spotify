@@ -38,6 +38,8 @@ struct QueuePlan {
     manual: VecDeque<String>,
     history: Vec<String>,
     current: Option<String>,
+    radio_seed: Option<String>,
+    recommendations: VecDeque<String>,
 }
 
 impl QueuePlan {
@@ -64,6 +66,19 @@ impl QueuePlan {
                 self.cursor = Some(start);
             }
             self.current = Some(self.tracks[self.order[self.cursor.unwrap()]].clone());
+            if self.tracks.len() == 1
+                && spec
+                    .context_uri
+                    .as_ref()
+                    .is_none_or(|context| context.starts_with("spotify:track:"))
+                && self.current.as_ref().is_some_and(|uri| {
+                    uri.starts_with("spotify:track:")
+                        && !uri.starts_with("spotify:track:radio:")
+                        && !uri.starts_with("spotify:track:podcast:")
+                })
+            {
+                self.radio_seed = self.current.clone();
+            }
         }
     }
 
@@ -86,6 +101,7 @@ impl QueuePlan {
                 self.cursor = Some(n);
                 self.tracks[self.order[n]].clone()
             })
+            .or_else(|| self.recommendations.pop_front())
         };
         if let Some(uri) = next.as_ref() {
             if let Some(previous) = self.current.replace(uri.clone()) {
@@ -116,7 +132,25 @@ impl QueuePlan {
                     .skip(self.cursor.map_or(0, |n| n + 1))
                     .map(|n| self.tracks[*n].clone()),
             )
+            .chain(self.recommendations.iter().cloned())
             .collect()
+    }
+
+    fn excluded(&self) -> Vec<String> {
+        self.tracks
+            .iter()
+            .chain(&self.history)
+            .chain(&self.manual)
+            .chain(&self.recommendations)
+            .chain(self.current.iter())
+            .cloned()
+            .collect()
+    }
+
+    fn add_recommendations(&mut self, uris: Vec<String>) {
+        let mut seen: std::collections::HashSet<_> = self.excluded().into_iter().collect();
+        self.recommendations
+            .extend(uris.into_iter().filter(|uri| seen.insert(uri.clone())));
     }
 
     fn shuffle(&mut self, enabled: bool) {
@@ -263,6 +297,7 @@ enum Prepared {
     Context(u64, LoadSpec, Result<Vec<String>, String>),
     Song(u64, MusicSong, AudioSource),
     Failed(u64, String),
+    Recommendations(u64, Result<Vec<String>, String>),
 }
 
 pub struct MusicPlayer {
@@ -284,6 +319,12 @@ pub struct MusicPlayer {
     start_position: u32,
     ffmpeg: PathBuf,
     last_position_event: Instant,
+    radio_generation: u64,
+    recommendations_task: Option<tokio::task::JoinHandle<()>>,
+    prefetch_task: Option<tokio::task::JoinHandle<()>>,
+    prefetched_uri: Option<String>,
+    recommended_for: Option<String>,
+    waiting_for_recommendations: bool,
 }
 
 impl MusicPlayer {
@@ -329,6 +370,12 @@ impl MusicPlayer {
             start_position: 0,
             ffmpeg,
             last_position_event: Instant::now(),
+            radio_generation: 0,
+            recommendations_task: None,
+            prefetch_task: None,
+            prefetched_uri: None,
+            recommended_for: None,
+            waiting_for_recommendations: false,
         })
     }
 
@@ -348,6 +395,95 @@ impl MusicPlayer {
     fn emit(&self) {
         let _ = self.events.send(Event::Local(Box::new(self.state.clone())));
         self.waker.wake();
+    }
+    fn cancel_recommendations(&mut self) {
+        self.radio_generation = self.radio_generation.wrapping_add(1);
+        if let Some(task) = self.recommendations_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.prefetch_task.take() {
+            task.abort();
+        }
+        self.recommended_for = None;
+        self.prefetched_uri = None;
+        self.waiting_for_recommendations = false;
+        self.state.recommendations_pending = false;
+        self.state.radio_seed = None;
+    }
+
+    fn request_recommendations(&mut self) {
+        if !self.config.autoplay
+            || self.recommendations_task.is_some()
+            || self.queue.recommendations.len() > 2
+        {
+            return;
+        }
+        let (Some(seed), Some(current)) =
+            (self.queue.radio_seed.clone(), self.queue.current.clone())
+        else {
+            return;
+        };
+        self.state.radio_seed = Some(seed.clone());
+        if self.recommended_for.as_ref() == Some(&current) {
+            return;
+        }
+        self.recommended_for = Some(current.clone());
+        self.state.recommendations_pending = true;
+        let generation = self.radio_generation;
+        let excluded = self.queue.excluded();
+        let api = self.api.clone();
+        let tx = self.prepared_tx.clone();
+        let ready = self.ready.clone();
+        self.recommendations_task = Some(tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                api.similar_songs(&seed, &current, &excluded),
+            )
+            .await
+            .unwrap_or_else(|_| Err("Recommendations timed out".into()));
+            let _ = tx.send(Prepared::Recommendations(generation, result));
+            ready.notify_one();
+        }));
+        self.emit();
+    }
+
+    fn advance(&mut self, automatic: bool) {
+        if self.queue.advance(self.state.repeat, automatic).is_some() {
+            self.waiting_for_recommendations = false;
+            self.load_current(0, self.desired_play);
+        } else if self.recommendations_task.is_some() {
+            // EOF/Next may beat the background response. Wait for that response,
+            // without ever restarting the seed or replacing a newer selection.
+            self.cancel();
+            self.waiting_for_recommendations = true;
+            self.state.playback = Playback::Loading;
+            self.state.position_at = None;
+            self.emit();
+        } else {
+            self.stop_at_end();
+        }
+    }
+
+    fn prefetch_next(&mut self) {
+        if !self.config.autoplay || self.queue.radio_seed.is_none() {
+            return;
+        }
+        let Some(uri) = self.queue.upcoming().first().cloned() else {
+            return;
+        };
+        if self.prefetched_uri.as_ref() == Some(&uri) {
+            return;
+        }
+        if let Some(task) = self.prefetch_task.take() {
+            task.abort();
+        }
+        self.prefetched_uri = Some(uri.clone());
+        let api = self.api.clone();
+        // Only the next recording is prepared, through the ordinary staging
+        // pipeline. Suggestions never become saved library songs.
+        self.prefetch_task = Some(tokio::spawn(async move {
+            let _ = api.resolve_song(&uri).await;
+        }));
     }
     fn fail(&mut self, message: String) {
         self.cancel();
@@ -456,7 +592,9 @@ impl MusicPlayer {
     pub async fn command(&mut self, command: PlayerCommand) {
         match command {
             PlayerCommand::Load(spec) => {
+                self.cancel_recommendations();
                 self.cancel();
+                self.queue = QueuePlan::default();
                 if let Some(shuffle) = spec.shuffle {
                     self.state.shuffle = shuffle;
                 }
@@ -518,11 +656,7 @@ impl MusicPlayer {
                 }
             },
             PlayerCommand::Next => {
-                if self.queue.advance(self.state.repeat, false).is_some() {
-                    self.load_current(0, self.desired_play);
-                } else {
-                    self.stop_at_end();
-                }
+                self.advance(false);
             }
             PlayerCommand::Previous => {
                 let new_track =
@@ -567,11 +701,29 @@ impl MusicPlayer {
             }
             PlayerCommand::AddToQueue(uri) => {
                 self.queue.manual.push_back(uri);
+                self.prefetch_next();
                 self.emit();
             }
             PlayerCommand::ClearQueue => {
                 self.queue.manual.clear();
+                self.prefetch_next();
                 self.emit();
+            }
+            PlayerCommand::SimilarSongs(enabled) => {
+                if self.config.autoplay != enabled {
+                    self.config.autoplay = enabled;
+                    let was_waiting = self.waiting_for_recommendations;
+                    self.cancel_recommendations();
+                    if !enabled {
+                        self.queue.recommendations.clear();
+                        if was_waiting {
+                            self.stop_at_end();
+                        }
+                    } else {
+                        self.request_recommendations();
+                    }
+                    self.emit();
+                }
             }
             // This service has no Spotify Connect session to transfer.
             PlayerCommand::Transfer => self.emit(),
@@ -614,9 +766,26 @@ impl MusicPlayer {
                     {
                         self.fail("Audio output stopped unexpectedly. Restart the app.".into());
                     }
+                    self.prefetch_next();
                 }
                 Prepared::Failed(generation, error) if generation == self.generation => {
                     self.fail(error)
+                }
+                Prepared::Recommendations(generation, result)
+                    if generation == self.radio_generation =>
+                {
+                    self.recommendations_task = None;
+                    self.state.recommendations_pending = false;
+                    match result {
+                        Ok(uris) => self.queue.add_recommendations(uris),
+                        Err(_) => log::debug!("Song radio has no available recommendations"),
+                    }
+                    if self.waiting_for_recommendations {
+                        self.waiting_for_recommendations = false;
+                        self.advance(false);
+                    }
+                    self.prefetch_next();
+                    self.emit();
                 }
                 _ => {}
             }
@@ -642,11 +811,7 @@ impl MusicPlayer {
                     }
                 }
                 AudioReport::Ended(generation) if generation == self.generation => {
-                    if self.queue.advance(self.state.repeat, true).is_some() {
-                        self.load_current(0, self.desired_play);
-                    } else {
-                        self.stop_at_end();
-                    }
+                    self.advance(true);
                 }
                 AudioReport::Failed(generation, error) if generation == self.generation => {
                     self.fail(error)
@@ -654,11 +819,13 @@ impl MusicPlayer {
                 _ => {}
             }
         }
+        self.request_recommendations();
     }
 }
 
 impl Drop for MusicPlayer {
     fn drop(&mut self) {
+        self.cancel_recommendations();
         self.cancel();
         let _ = self.audio.send(AudioCommand::Shutdown);
     }
@@ -1144,6 +1311,218 @@ mod tests {
         assert_eq!(q.advance(RepeatMode::Track, false).as_deref(), Some("b"));
         q.advance(RepeatMode::Off, false);
         assert_eq!(q.advance(RepeatMode::Context, true).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn song_radio_prioritizes_manual_queue_and_never_repeats_suggestions() {
+        let mut q = QueuePlan::default();
+        q.load(
+            &LoadSpec::default(),
+            vec!["spotify:track:seed".into()],
+            false,
+        );
+        assert_eq!(q.radio_seed.as_deref(), Some("spotify:track:seed"));
+        q.add_recommendations(vec![
+            "spotify:track:seed".into(),
+            "related-a".into(),
+            "related-a".into(),
+            "related-b".into(),
+        ]);
+        q.manual.push_back("chosen-next".into());
+        assert_eq!(q.upcoming(), ["chosen-next", "related-a", "related-b"]);
+        assert_eq!(
+            q.advance(RepeatMode::Track, true).as_deref(),
+            Some("spotify:track:seed")
+        );
+        assert_eq!(
+            q.advance(RepeatMode::Off, true).as_deref(),
+            Some("chosen-next")
+        );
+        assert_eq!(
+            q.advance(RepeatMode::Off, true).as_deref(),
+            Some("related-a")
+        );
+        q.add_recommendations(vec![
+            "related-a".into(),
+            "related-b".into(),
+            "chosen-next".into(),
+            "related-c".into(),
+        ]);
+        assert_eq!(q.upcoming(), ["related-b", "related-c"]);
+        assert_eq!(q.previous().as_deref(), Some("chosen-next"));
+        assert_eq!(
+            q.advance(RepeatMode::Off, false).as_deref(),
+            Some("related-a")
+        );
+        assert_eq!(
+            q.advance(RepeatMode::Off, true).as_deref(),
+            Some("related-b")
+        );
+    }
+
+    #[test]
+    fn playlists_podcasts_and_live_radio_do_not_become_song_radio() {
+        for (context, tracks) in [
+            (Some("spotify:playlist:one"), vec!["spotify:track:one"]),
+            (None, vec!["spotify:track:one", "spotify:track:two"]),
+            (None, vec!["spotify:episode:podcast"]),
+            (None, vec!["spotify:track:radio:live"]),
+            (None, vec!["spotify:track:podcast:episode"]),
+        ] {
+            let mut q = QueuePlan::default();
+            q.load(
+                &LoadSpec {
+                    context_uri: context.map(str::to_owned),
+                    ..Default::default()
+                },
+                tracks.iter().map(|s| s.to_string()).collect(),
+                false,
+            );
+            assert!(q.radio_seed.is_none());
+        }
+    }
+
+    // Exercise asynchronous queue transitions without opening an audio device.
+    fn radio_player() -> (MusicPlayer, mpsc::Sender<AudioReport>) {
+        let (events, _) = mpsc::channel();
+        let (audio, _) = mpsc::channel();
+        let (reports_tx, reports) = mpsc::channel();
+        let (prepared_tx, prepared_rx) = tokio::sync::mpsc::unbounded_channel();
+        let seed = "spotify:track:seed".to_string();
+        let mut queue = QueuePlan::default();
+        queue.load(&LoadSpec::default(), vec![seed.clone()], false);
+        (
+            MusicPlayer {
+                api: MusicApi::new("http://127.0.0.1:9", crate::http::Http::default()).unwrap(),
+                config: EngineConfig {
+                    autoplay: true,
+                    ..config()
+                },
+                events,
+                waker: Waker::default(),
+                state: LocalState {
+                    playback: Playback::Playing,
+                    radio_seed: Some(seed.clone()),
+                    ..Default::default()
+                },
+                queue,
+                generation: 0,
+                lifetime: None,
+                preparation: None,
+                prepared_tx,
+                prepared_rx,
+                ready: Arc::new(tokio::sync::Notify::new()),
+                audio,
+                reports,
+                desired_play: true,
+                start_position: 0,
+                ffmpeg: PathBuf::new(),
+                last_position_event: Instant::now(),
+                radio_generation: 0,
+                recommendations_task: None,
+                prefetch_task: None,
+                prefetched_uri: None,
+                recommended_for: Some(seed),
+                waiting_for_recommendations: false,
+            },
+            reports_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn eof_moves_into_related_music_and_keeps_manual_queue_first() {
+        let (mut player, reports) = radio_player();
+        player
+            .queue
+            .add_recommendations(vec!["spotify:track:related".into()]);
+        player.queue.manual.push_back("spotify:track:manual".into());
+        reports.send(AudioReport::Ended(0)).unwrap();
+        player.tick().await;
+        assert_eq!(
+            player.queue.current.as_deref(),
+            Some("spotify:track:manual")
+        );
+        assert_eq!(player.queue.upcoming(), ["spotify:track:related"]);
+        assert!(player.desired_play);
+        reports.send(AudioReport::Ended(player.generation)).unwrap();
+        player.tick().await;
+        assert_eq!(
+            player.queue.current.as_deref(),
+            Some("spotify:track:related")
+        );
+    }
+
+    #[tokio::test]
+    async fn recommendations_arriving_after_eof_continue_instead_of_restarting_the_seed() {
+        let (mut player, reports) = radio_player();
+        player.recommendations_task = Some(tokio::spawn(std::future::pending()));
+        reports.send(AudioReport::Ended(0)).unwrap();
+        player.tick().await;
+        assert!(player.waiting_for_recommendations);
+        player.recommendations_task.take().unwrap().abort();
+        player
+            .prepared_tx
+            .send(Prepared::Recommendations(
+                0,
+                Ok(vec!["spotify:track:related".into()]),
+            ))
+            .unwrap();
+        player.tick().await;
+        assert_eq!(
+            player.queue.current.as_deref(),
+            Some("spotify:track:related")
+        );
+        assert!(player.desired_play);
+        assert!(!player.waiting_for_recommendations);
+    }
+
+    #[tokio::test]
+    async fn a_new_playlist_rejects_a_late_radio_result() {
+        let (mut player, _) = radio_player();
+        player
+            .command(PlayerCommand::Load(LoadSpec {
+                context_uri: Some("spotify:playlist:new".into()),
+                uris: vec!["spotify:track:chosen".into(), "spotify:track:next".into()],
+                play: true,
+                ..Default::default()
+            }))
+            .await;
+        player
+            .prepared_tx
+            .send(Prepared::Recommendations(
+                0,
+                Ok(vec!["spotify:track:stale".into()]),
+            ))
+            .unwrap();
+        player.tick().await;
+        assert_eq!(
+            player.queue.current.as_deref(),
+            Some("spotify:track:chosen")
+        );
+        assert_eq!(player.queue.upcoming(), ["spotify:track:next"]);
+        assert!(player.queue.radio_seed.is_none());
+    }
+
+    #[tokio::test]
+    async fn disabling_autoplay_keeps_the_current_song_and_manual_queue() {
+        let (mut player, _) = radio_player();
+        player
+            .queue
+            .add_recommendations(vec!["spotify:track:related".into()]);
+        player.queue.manual.push_back("spotify:track:manual".into());
+        player.command(PlayerCommand::SimilarSongs(false)).await;
+        player
+            .prepared_tx
+            .send(Prepared::Recommendations(
+                0,
+                Ok(vec!["spotify:track:stale".into()]),
+            ))
+            .unwrap();
+        player.tick().await;
+        assert_eq!(player.state.playback, Playback::Playing);
+        assert_eq!(player.queue.current.as_deref(), Some("spotify:track:seed"));
+        assert_eq!(player.queue.upcoming(), ["spotify:track:manual"]);
+        assert!(player.state.radio_seed.is_none());
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod downloads;
 mod listening;
 mod mapping;
 mod models;
+mod recommendations;
 #[cfg(test)]
 mod review_tests;
 #[cfg(test)]

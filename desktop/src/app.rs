@@ -2361,6 +2361,8 @@ impl App {
         }
         let track_changed =
             state.track != self.local.track || state.track_sequence != self.local.track_sequence;
+        let recommendations_changed = state.radio_seed != self.local.radio_seed
+            || (self.local.recommendations_pending && !state.recommendations_pending);
         let reconnected = state.connected && !self.local.connected;
         if state.shuffle != self.local.shuffle
             && self
@@ -2441,6 +2443,15 @@ impl App {
         }
         if track_changed {
             self.on_now_playing_changed();
+        }
+        if recommendations_changed
+            && (self.show_queue_panel
+                || matches!(self.page(), Page::Queue)
+                || (self.settings.winamp_window && self.settings.playlist_open))
+        {
+            // Recommendations change without a track change. Show the result
+            // immediately instead of leaving a stale empty queue for 20 seconds.
+            self.refresh_queue(true);
         }
         if reconnected {
             if let Some(request) = self.queued_play.take() {
@@ -9209,6 +9220,8 @@ impl App {
             }
             Action::SettingsChanged => {
                 self.settings_dirty = true;
+                self.backend
+                    .player(PlayerCommand::SimilarSongs(self.settings.similar_songs));
                 ctx.set_theme(self.theme_preference());
             }
             Action::RestartEngine => {
@@ -10453,7 +10466,7 @@ pub fn engine_config(
         device_name: settings.device_name.trim().to_string(),
         bitrate_kbps: settings.bitrate,
         normalisation: settings.normalisation,
-        autoplay: settings.autoplay,
+        autoplay: settings.similar_songs,
         gapless: settings.gapless,
         backend: settings.platform_backend(),
         buffer_ms: settings.audio_buffer_ms,
@@ -10578,9 +10591,9 @@ fn friendly_page_error(locale: Locale, error: &crate::api::ApiError) -> String {
 }
 
 /// What the engine is told to play. A single song goes as a context of
-/// its own rather than a list of one: Spotify resolves a track's URI as a
-/// context, and a context with a URI is what librespot's autoplay carries
-/// on from when it ends, the way one song from a search does in Spotify.
+/// its own rather than a list of one. The music backend uses that context
+/// to continue a standalone selection with similar songs. Album and playlist
+/// contexts keep their ordered tracks.
 fn local_load(request: &PlayRequest, shuffle: bool) -> LoadSpec {
     let single_song = request.context_uri.is_none()
         && request.uris.len() == 1
@@ -14453,6 +14466,59 @@ mod tests {
         );
         app.manual_queue.clear();
         assert_eq!(app.queued_rows_len(), 0);
+    }
+
+    #[test]
+    fn song_radio_results_refresh_the_visible_queue_without_waiting_for_the_poll() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.auth = AuthStatus::Connected {
+            username: "alice".into(),
+        };
+        app.show_queue_panel = true;
+        app.local.connected = true;
+        app.local.playback = Playback::Playing;
+        app.local.track = Some(crate::player::LocalTrack {
+            uri: "spotify:track:seed".into(),
+            ..Default::default()
+        });
+        app.local.radio_seed = Some("spotify:track:seed".into());
+        app.local.recommendations_pending = true;
+        app.queue = loaded_queue("spotify:track:seed", &[]);
+        app.queue_fetched_at = Some(Instant::now());
+        let before = app.queue_seq;
+
+        let mut state = app.local.clone();
+        state.recommendations_pending = false;
+        app.handle_local(state.clone());
+        assert_eq!(
+            app.queue_seq,
+            before + 1,
+            "a fresh but empty queue must refresh"
+        );
+        app.handle_api(ApiResponse::Queue {
+            seq: app.queue_seq,
+            result: Ok(Queue {
+                currently_playing: Some(queued_song("spotify:track:seed")),
+                queue: vec![queued_song("spotify:track:related")],
+            }),
+        });
+        assert_eq!(queue_uris(&app).1, ["spotify:track:related"]);
+
+        app.handle_local(state.clone());
+        assert_eq!(
+            app.queue_seq,
+            before + 1,
+            "ordinary position updates do not refetch"
+        );
+        state.radio_seed = None;
+        app.handle_local(state);
+        assert_eq!(
+            app.queue_seq,
+            before + 2,
+            "turning autoplay off refreshes suggestions too"
+        );
+        app.backend.shutdown();
     }
 
     /// Changing shuffle rechecks the queue to reflect the new playback order.

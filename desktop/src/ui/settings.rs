@@ -248,6 +248,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             keep_playing.clone(),
             "Keep playback running in the system tray. Quit from the tray menu to stop.",
         ),
+        RowText::new(
+            "Autoplay similar songs",
+            "After a single song, keep listening to related music. Playlists keep their own order.",
+        ),
     ];
     if section_matches(&needle, &playback, &playback_rows) {
         any_visible = true;
@@ -259,6 +263,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     &palette,
                     &keep_playing,
                     &mut app.settings.keep_playing_in_background,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            });
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[2], |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    &gettext(locale, "Autoplay similar songs"),
+                    &mut app.settings.similar_songs,
                 )
                 .changed()
                 {

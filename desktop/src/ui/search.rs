@@ -445,13 +445,6 @@ fn songs(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: usize
     }
     theme::section_title(ui, &palette, &gettext(app.locale, "Songs"));
     ui.add_space(4.0);
-    let uris: Arc<[String]> = page
-        .items
-        .iter()
-        .map(|track| track.uri.clone())
-        .collect::<Vec<_>>()
-        .into();
-    let context = RowContext::Uris(Arc::clone(&uris));
     let items: Vec<PlayableItem> = page
         .items
         .iter()
@@ -459,6 +452,9 @@ fn songs(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: usize
         .map(PlayableItem::Track)
         .collect();
     for (index, item) in items.iter().take(limit).enumerate() {
+        // Search is a way to choose a song, not a playlist of title matches.
+        // A single-song context lets the player continue with related music.
+        let context = RowContext::Uris(Arc::from([item.uri().to_owned()]));
         widgets::track_row(
             ui,
             app,

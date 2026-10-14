@@ -163,6 +163,9 @@ impl LocalTrack {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalState {
+    /// The original song behind our service's automatic recommendations.
+    pub radio_seed: Option<String>,
+    pub recommendations_pending: bool,
     pub playback: Playback,
     pub track: Option<LocalTrack>,
     pub position_ms: u32,
@@ -274,6 +277,8 @@ impl LoadSpec {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerCommand {
+    /// Enable or disable our service's single-song continuation.
+    SimilarSongs(bool),
     Toggle,
     Next,
     Previous,
@@ -600,6 +605,9 @@ impl Engine {
     fn send_command(&self, command: PlayerCommand) -> Result<()> {
         let spirc = &self.spirc;
         match command {
+            // The HTTP music backend handles this preference; Connect keeps
+            // its own autoplay setting supplied at engine construction.
+            PlayerCommand::SimilarSongs(_) => {}
             PlayerCommand::Toggle => spirc.play_pause()?,
             PlayerCommand::Next => spirc.next()?,
             PlayerCommand::Previous => spirc.prev()?,

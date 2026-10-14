@@ -446,6 +446,53 @@ fn partial_metadata_cannot_erase_a_known_track_duration() {
 }
 
 #[tokio::test]
+async fn similar_songs_use_the_selected_recording_and_filter_repeats_without_staging() {
+    let seed_id = "AAAAAAAAAAAAAAAAAAAAAA";
+    let server = Server::new(move |r| {
+        assert_eq!(r.method, "POST");
+        assert_eq!(r.path, "/api/smart-shuffle/recommend");
+        assert_eq!(
+            r.body["seeds"][0],
+            json!({"title":"Chosen song","artist":"Chosen artist"})
+        );
+        assert!(
+            r.body["excludeIds"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(seed_id))
+        );
+        reply(json!({"tracks":[
+            {"id":seed_id,"title":"Chosen song","artist":"Chosen artist"},
+            {"id":"BBBBBBBBBBBBBBBBBBBBBB","title":"Chosen song!","artist":"CHOSEN ARTIST"},
+            {"id":"CCCCCCCCCCCCCCCCCCCCCC","title":"Related song","artist":"Related artist","durationMs":181270},
+            {"id":"CCCCCCCCCCCCCCCCCCCCCC","title":"Related song","artist":"Related artist","durationMs":181270},
+            {"id":"invalid","title":"Bad entry","artist":"Other"}
+        ]}))
+    });
+    let api = server.api();
+    let seed = api.remember(MusicSong {
+        id: format!("discover:{seed_id}"),
+        title: "Chosen song".into(),
+        artist: "Chosen artist".into(),
+        discover_track_id: Some(seed_id.into()),
+        ..Default::default()
+    });
+    let result = api
+        .similar_songs(&seed.uri(), &seed.uri(), &[seed.uri()])
+        .await
+        .unwrap();
+    assert_eq!(result, ["spotify:track:discover:CCCCCCCCCCCCCCCCCCCCCC"]);
+    let next = api.song_metadata(&result[0]).await.unwrap();
+    assert_eq!(next.duration_ms, 181270);
+    assert!(next.audio_url.is_empty());
+    assert_eq!(
+        server.seen.lock().unwrap().len(),
+        1,
+        "Recommendations alone must not download or save music"
+    );
+}
+
+#[tokio::test]
 async fn cached_staged_preview_still_refreshes_expired_or_missing_media() {
     let server = Server::new(|r| {
         assert_eq!(r.path, "/api/discover/stage");

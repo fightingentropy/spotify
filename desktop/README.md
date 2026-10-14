@@ -37,6 +37,17 @@ existing Keychain item once more. Choose **Always Allow** in that macOS prompt.
 Later updates signed with the same Developer ID team and bundle identity should
 retain that approval. Complete password prompts locally on the Mac.
 
+## Similar songs
+
+Playing a song from search starts that song on its own, then continues with
+related tracks from our recommendation API. The next track is prepared while
+music plays. Your manually queued songs play first; listened tracks and duplicate
+recordings are excluded. A new album or playlist selection cancels the old radio
+and retains its order. **Settings → Playback → Autoplay similar songs** turns
+this continuation off without interrupting the current song. Recommendations
+use Last.fm's track and artist relationships, not search-title matches; if the
+service has no suitable results, playback ends normally.
+
 ## Radio and podcasts
 
 **Radio** opens the same live stations as the website, including Dromos 89.8 and

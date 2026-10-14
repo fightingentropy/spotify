@@ -261,6 +261,8 @@ pub struct Settings {
     pub bitrate: u16,
     pub normalisation: bool,
     pub autoplay: bool,
+    /// Continue a single-song selection with related music from our service.
+    pub similar_songs: bool,
     pub gapless: bool,
     /// librespot backend name; `None` picks the platform default.
     pub audio_backend: Option<String>,
@@ -444,6 +446,7 @@ impl Default for Settings {
             bitrate: 320,
             normalisation: false,
             autoplay: false,
+            similar_songs: true,
             gapless: true,
             audio_backend: None,
             audio_device: None,

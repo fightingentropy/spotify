@@ -217,8 +217,24 @@ pub(super) fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
             ui,
             &palette,
             Icon::ListVideo,
-            &gettext(app.locale, "Nothing queued"),
-            &gettext(app.locale, "Queued songs appear here."),
+            &gettext(
+                app.locale,
+                if app.local.recommendations_pending {
+                    "Finding similar songs…"
+                } else {
+                    "Nothing queued"
+                },
+            ),
+            &gettext(
+                app.locale,
+                if app.local.recommendations_pending {
+                    "Related music will follow this song. Songs you add to the queue play first."
+                } else if app.local.radio_seed.is_some() {
+                    "No similar songs available right now. You can add songs to the queue."
+                } else {
+                    "Queued songs appear here."
+                },
+            ),
         );
         return;
     }
@@ -348,7 +364,11 @@ pub(super) fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
             gettext(
                 app.locale,
                 // Translators: Upcoming songs from the current playlist or album, after manually queued songs.
-                "Next up",
+                if app.local.radio_seed.is_some() {
+                    "Similar songs"
+                } else {
+                    "Next up"
+                },
             ),
             theme::semibold(14.0),
             palette.text,
