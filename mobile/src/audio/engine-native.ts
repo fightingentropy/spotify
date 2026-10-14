@@ -235,6 +235,7 @@ function computeNext(s: StoreState): NextTrack | null {
     repeatMode: s.repeatMode,
     playFuture: s.playFuture,
     shuffleRemaining: s.shuffleRemaining,
+    songRadio: s.songRadio,
   });
   const index = indices[0];
   if (index === undefined) return null;
@@ -555,7 +556,7 @@ async function onEnded(e: EndedEvent): Promise<void> {
     s.cancelSleepTimer();
     return;
   }
-  if (s.repeatMode === "one" || (s.repeatMode === "all" && s.queue.length === 1)) {
+  if (s.repeatMode === "one" || (s.repeatMode === "all" && s.queue.length === 1 && !s.songRadio)) {
     // With a one-item queue, store.next() cannot create a current-song change for
     // the subscription to observe. Replay directly so repeat-all does not stop on
     // (or remain parked at the end of) its only track.
@@ -573,7 +574,7 @@ async function onEnded(e: EndedEvent): Promise<void> {
     if (skipToDownloaded()) return;
     // Repeat-all over an effectively one-item offline subset should replay that
     // local item even when the canonical queue still contains remote-only rows.
-    if (s.repeatMode === "all" && song && resolveOfflinePlaybackSong(song).source === "offline") {
+    if (s.repeatMode === "all" && !s.songRadio && song && resolveOfflinePlaybackSong(song).source === "offline") {
       currentListen = createPlayListen(song);
       setLastPosition(0, song.id);
       await AudioEngine.seek(activeDeck, 0);

@@ -25,7 +25,7 @@ import {
   withAccountScope,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { toggleSongInList } from "@/audio/actions";
+import { toggleSearchSong } from "@/audio/actions";
 import { catalogRequestState, catalogSongKey, reconcileCatalogSongs } from "@/lib/catalog-reconciliation";
 import { useOnlineStatus } from "@/lib/use-connectivity";
 import { keyFor, useOfflineStore } from "@/store/offline";
@@ -207,7 +207,7 @@ function PlaylistResultRow({ playlist, onPress }: { playlist: CatalogPlaylist | 
 
 type SearchRow =
   | { kind: "header"; key: string; title: string }
-  | { kind: "song"; key: string; song: PlayerSong; list: PlayerSong[]; index: number }
+  | { kind: "song"; key: string; song: PlayerSong }
   | { kind: "artist"; key: string; artist: CatalogArtist }
   | { kind: "album"; key: string; album: CatalogAlbum }
   | { kind: "playlist"; key: string; playlist: CatalogPlaylist };
@@ -216,7 +216,7 @@ function addSongSection(out: SearchRow[], title: string, key: string, songs: Pla
   if (songs.length === 0) return;
   out.push({ kind: "header", key: `hdr:${key}`, title });
   songs.forEach((song, index) =>
-    out.push({ kind: "song", key: `${key}:${song.id}:${index}`, song, list: songs, index }),
+    out.push({ kind: "song", key: `${key}:${song.id}:${index}`, song }),
   );
 }
 
@@ -534,7 +534,7 @@ export default function SearchScreen() {
             return (
               <SongListItem
                 song={item.song}
-                onPress={() => { remember(query); toggleSongInList(item.list, item.index); }}
+              onPress={() => { remember(query); toggleSearchSong(item.song); }}
                 showActions
               />
             );

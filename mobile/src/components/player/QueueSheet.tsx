@@ -29,6 +29,8 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
   const playFuture = usePlayerStore((s) => s.playFuture);
   const shuffleRemaining = usePlayerStore((s) => s.shuffleRemaining);
   const recommendedIds = usePlayerStore((s) => s.recommendedIds);
+  const songRadio = usePlayerStore((s) => s.songRadio);
+  const retrySongRadio = usePlayerStore((s) => s.retrySongRadio);
   const advanceToIndex = usePlayerStore((s) => s.advanceToIndex);
   const removeFromQueue = usePlayerStore((s) => s.removeFromQueue);
   const moveQueuedSong = usePlayerStore((s) => s.moveQueuedSong);
@@ -43,8 +45,9 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
         repeatMode,
         playFuture,
         shuffleRemaining,
+        songRadio,
       }),
-    [queue.length, currentIndex, shuffle, repeatMode, playFuture, shuffleRemaining],
+    [queue.length, currentIndex, shuffle, repeatMode, playFuture, shuffleRemaining, songRadio],
   );
 
   // A Smart Shuffle recommendation: sparkle by the title, a trailing [+] to Add
@@ -168,6 +171,24 @@ export function QueueSheet({ visible, onClose }: { visible: boolean; onClose: ()
                   Now playing
                 </Text>
                 {renderRow(currentSong, currentIndex, true)}
+                {songRadio ? (
+                  <View style={{ paddingHorizontal: 16, paddingTop: 12, gap: 4 }}>
+                    <Text style={{ color: MONO_PRIMARY, fontSize: 14 }}>
+                      Similar music based on {songRadio.seed.title}
+                    </Text>
+                    <Text accessibilityLiveRegion="polite" style={{ color: MONO_SECONDARY, fontSize: 13 }}>
+                      {!isOnline ? "Connect to load more similar songs."
+                        : songRadio.status === "loading" || songRadio.status === "idle" ? "Finding similar songs…"
+                        : songRadio.status === "unavailable" ? "Couldn't find more songs right now."
+                        : "Your queued songs play first."}
+                    </Text>
+                    {isOnline && songRadio.status === "unavailable" ? (
+                      <PressableScale onPress={retrySongRadio} accessibilityRole="button" accessibilityLabel="Retry finding similar songs" style={{ minHeight: 44, justifyContent: "center", alignSelf: "flex-start" }}>
+                        <Text style={{ color: MONO_ACTIVE, fontSize: 14, fontWeight: "600" }}>Try again</Text>
+                      </PressableScale>
+                    ) : null}
+                  </View>
+                ) : null}
                 <Text
                   className="mb-1 mt-3 px-4 text-xs font-semibold uppercase tracking-wide"
                   style={{ color: MONO_TERTIARY }}

@@ -6,6 +6,9 @@ playlist, playback-history, import, and discovery APIs. They must both expose:
 - Home, search, library, liked songs, radio, podcasts, events, and playlists.
 - Upload/import, settings, profile, and weekly listening statistics.
 - Like, queue, play, seek, shuffle/repeat, playlist, and account workflows.
+- A searched song continues with related music through `/api/smart-shuffle/recommend`.
+  Recommendations are temporary previews; manual queue additions play first.
+  Selecting an album or playlist ends that song radio and preserves collection order.
 
 `src/lib/client-parity.ts` is the machine-readable route contract and
 `tests/client-parity.test.ts` prevents one client from silently dropping a
@@ -21,10 +24,9 @@ Some capabilities are deliberately platform-specific rather than parity bugs:
   Background downloads use URLSession on iOS and WorkManager on Android.
 - The browser keeps desktop multi-column chrome, keyboard navigation, and hover
   interactions that do not apply to native screens.
-- Web and macOS search start a song radio using `/api/smart-shuffle/recommend`:
-  related tracks are temporary previews, manual queue additions play first, and
-  choosing an album or playlist ends that radio. Expo still uses its separate
-  opt-in Smart Shuffle controller.
+- Expo also offers opt-in Smart Shuffle to interleave recommendations within a
+  collection. Search autoplay works independently of that setting. Offline,
+  mobile continues through cached tracks and waits for connectivity to fetch more.
 - Native may add RSS feeds to its device-local podcast list. The browser uses
   the server-curated podcast list.
 

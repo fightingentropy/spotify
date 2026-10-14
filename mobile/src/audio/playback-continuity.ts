@@ -49,6 +49,7 @@ async function refreshPlaybackCache(): Promise<void> {
           repeatMode: state.repeatMode,
           playFuture: state.playFuture,
           shuffleRemaining: state.shuffleRemaining,
+          songRadio: state.songRadio,
         },
       );
       const scope = getOfflineAccountScope();

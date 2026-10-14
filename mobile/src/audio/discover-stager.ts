@@ -1,11 +1,11 @@
 import { isUnstagedDiscoverSong, stageDiscoverSong } from "@/lib/discover-queue";
-import { usePlayerStore } from "@/store/player";
+import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 
 // Just-in-time staging for Discover queues. Tapping a Discover track queues the
 // whole row; the not-yet-staged entries enter as placeholders (empty audioUrl)
 // and this materializes them on demand — the current placeholder so it can play,
-// plus upcoming-track prefetch so linear advances stay gapless. Both audio engines
+// plus upcoming-track prefetch in playback order. Both audio engines
 // idle on a placeholder (never load an empty URL) and reload once
 // replaceStagedSong swaps in the real source.
 //
@@ -23,7 +23,7 @@ import type { PlayerSong } from "@/types/player";
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 
-// How many upcoming slots to warm ahead of the current track (linear playback).
+// How many upcoming slots to warm ahead of the current track.
 // Two keeps transitions gapless even when a song is short or the user skips fast.
 const PREFETCH_AHEAD = 2;
 let started = false;
@@ -120,16 +120,11 @@ function evaluate(s: ReturnType<typeof usePlayerStore.getState>): void {
     consecutiveCurrentFailures = 0;
   }
 
-  // Prefetch the next few ahead (linear only — shuffle's next pick is random, so
-  // warming a specific slot would usually be wrong). Staging while the current track
-  // plays keeps transitions seamless even through short songs / quick skips; stage()
-  // dedupes in-flight ids and blacklists failed prefetches, so a deeper window can't
-  // double-fire or thrash.
-  if (!s.shuffle) {
-    for (let offset = 1; offset <= PREFETCH_AHEAD; offset += 1) {
-      const upcoming = s.queue[s.currentIndex + offset] ?? null;
-      if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming, "prefetch");
-    }
+  // Use the same order as Next/crossfade, including manual additions and shuffle.
+  // Preparing two tracks while this one plays avoids a resolver wait at EOF.
+  for (const index of getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, PREFETCH_AHEAD, s)) {
+    const upcoming = s.queue[index];
+    if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming, "prefetch");
   }
 }
 
@@ -154,7 +149,10 @@ export function startDiscoverQueueStager(): void {
       state.queue !== prev.queue ||
       state.currentIndex !== prev.currentIndex ||
       state.isPlaying !== prev.isPlaying ||
-      state.shuffle !== prev.shuffle
+      state.shuffle !== prev.shuffle ||
+      state.repeatMode !== prev.repeatMode ||
+      state.playFuture !== prev.playFuture ||
+      state.shuffleRemaining !== prev.shuffleRemaining
     ) {
       evaluate(state);
     }

@@ -5,6 +5,7 @@ import { markPlaybackEngaged } from "@/audio/publish-gate";
 import { seek } from "@/audio/engine";
 import { resolvePlaybackStartIndex } from "@/lib/playback-continuity";
 import { songKind } from "@/lib/player-song";
+import { isSameLogicalPlaybackSong } from "@/lib/staged-song-replacement";
 import type { PlayerSong } from "@/types/player";
 
 // High-level playback actions the UI calls. The store is the single source of
@@ -52,6 +53,17 @@ export function playSongs(
 export function playSong(song: PlayerSong): void {
   markPlaybackEngaged();
   usePlayerStore.getState().setQueue([song], 0);
+}
+
+// Search results are matches, not a listening order. Continue the selected song
+// with related music instead of playing other recordings with a similar title.
+export function toggleSearchSong(song: PlayerSong): void {
+  const state = usePlayerStore.getState();
+  if (isSameLogicalPlaybackSong(state.currentSong, song)) {
+    state.toggle();
+  } else {
+    state.startSongRadio(song);
+  }
 }
 
 // Tap a tile: toggle if it's already current, otherwise start it within its list.

@@ -158,7 +158,7 @@ function evaluate(): void {
   // pending result can never leak into a new queue and a disabled mode doesn't
   // sit on a stale buffer.
   if (s.queueToken !== poolToken) resetPool(s.queueToken);
-  if (!s.smartShuffleEnabled) {
+  if (s.songRadio || !s.smartShuffleEnabled) {
     pool = [];
     return;
   }

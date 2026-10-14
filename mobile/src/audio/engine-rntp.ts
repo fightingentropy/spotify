@@ -238,7 +238,7 @@ async function onEnded(): Promise<void> {
     s.cancelSleepTimer();
     return;
   }
-  if (s.repeatMode === "one" || (s.repeatMode === "all" && s.queue.length === 1)) {
+  if (s.repeatMode === "one" || (s.repeatMode === "all" && s.queue.length === 1 && !s.songRadio)) {
     // Replay in place; flush + rearm the play-listen.
     // Repeat-all needs the same direct replay for a one-item queue because
     // store.next() leaves the current id unchanged and therefore cannot trigger
@@ -252,7 +252,7 @@ async function onEnded(): Promise<void> {
   flushPlayListen(currentListen);
   if (offlinePlayback || !getIsOnline()) {
     if (skipToDownloaded()) return;
-    if (s.repeatMode === "all" && resolveOfflinePlaybackSong(song).source === "offline") {
+    if (s.repeatMode === "all" && !s.songRadio && resolveOfflinePlaybackSong(song).source === "offline") {
       currentListen = createPlayListen(song);
       setLastPosition(0, song.id);
       await TrackPlayer.seekTo(0);

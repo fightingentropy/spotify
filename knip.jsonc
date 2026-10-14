@@ -35,7 +35,9 @@
         "metro.config.js",
         "plugins/*.js",
         "scripts/*.mjs",
-        "tests/**/*.test.ts"
+        "tests/**/*.test.ts",
+        // Runs in a subprocess so native boundary mocks cannot affect web tests.
+        "tests/fixtures/song-radio-scenarios.ts"
       ],
       "project": ["src/**/*.{ts,tsx,css}", "global.css", "modules/**/*.ts", "plugins/**/*.js", "scripts/**/*.mjs", "tests/**/*.ts"]
     },

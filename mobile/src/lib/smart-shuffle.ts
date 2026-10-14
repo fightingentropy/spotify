@@ -1,5 +1,5 @@
 import { discoverTrackToPlayerSong } from "@/lib/discover-queue";
-import { apiFetch } from "@/lib/http";
+import { apiFetchWithTimeout } from "@/lib/http";
 import type { DiscoverTrack } from "@/lib/api";
 import type { PlayerSong } from "@/types/player";
 
@@ -20,13 +20,14 @@ export async function fetchRecommendations(input: {
   exclude?: { title: string; artist: string }[];
   excludeIds?: string[];
   limit?: number;
-}): Promise<DiscoverTrack[]> {
-  const res = await apiFetch("/api/smart-shuffle/recommend", {
+}, signal?: AbortSignal): Promise<DiscoverTrack[]> {
+  const res = await apiFetchWithTimeout("/api/smart-shuffle/recommend", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
-  });
-  if (!res.ok) return [];
+    signal,
+  }, 45_000);
+  if (!res.ok) throw new Error("Related music is temporarily unavailable");
   const json = (await res.json().catch(() => null)) as { tracks?: DiscoverTrack[] } | null;
   return json?.tracks ?? [];
 }

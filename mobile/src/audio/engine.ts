@@ -4,11 +4,13 @@ import { startPlaybackContinuity } from "@/audio/playback-continuity";
 import * as nativeEngine from "@/audio/engine-native";
 import * as rntpEngine from "@/audio/engine-rntp";
 import { startSmartShuffleController } from "@/audio/smart-shuffle-controller";
+import { startSongRadioController } from "@/audio/song-radio-controller";
 import { useOfflineStore } from "@/store/offline";
 export { restorePlaybackState } from "@/audio/playback-sync";
 export { startSleepTimerWatchdog } from "@/audio/sleep";
 
 const isIOS = Platform.OS === "ios";
+let songRadioStarted = false;
 
 export async function initAudio(): Promise<void> {
   // Playback source selection reads the hydrated download records synchronously.
@@ -25,6 +27,10 @@ export async function initAudio(): Promise<void> {
   // Smart Shuffle top-up loop — also a store subscription; keeps recommended
   // tracks buffered ahead of the current track while the mode is on.
   startSmartShuffleController();
+  if (!songRadioStarted) {
+    songRadioStarted = true;
+    startSongRadioController();
+  }
   if (isIOS) {
     await nativeEngine.initNativeAudio();
     return;

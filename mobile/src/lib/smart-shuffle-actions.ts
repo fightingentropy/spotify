@@ -28,6 +28,9 @@ export async function addRecommendationToContext(song: PlayerSong, _index?: numb
   const guardKey = song.discoverTrackId ?? song.id;
   if (addInFlight.has(guardKey)) return;
   addInFlight.add(guardKey);
+  // The destination belongs to this tap, even if playback changes while saving.
+  const context = usePlayerStore.getState().queueContext;
+  const keepInLiked = Boolean(usePlayerStore.getState().songRadio) || context?.kind === "liked";
   try {
     // Prepare a permanent copy: prefer the lossless providers, then let the
     // Worker download YouTube audio if they fail. Playback previews alone are
@@ -44,8 +47,7 @@ export async function addRecommendationToContext(song: PlayerSong, _index?: numb
       return;
     }
 
-    const context = usePlayerStore.getState().queueContext;
-    if (context?.kind === "liked") {
+    if (keepInLiked) {
       await useLikesStore.getState().toggleLike(promoted.id, true, promoted);
     } else if (context?.playlistId && context.editable) {
       await addSongToPlaylist(context.playlistId, promoted);
