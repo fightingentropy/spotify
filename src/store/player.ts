@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { moveUpcomingSong, rememberQueueRemoval, restoreQueueRemoval, type QueueRemoval } from "@spotify/shared/queue-editing";
 import { songKind } from "@/lib/player-song";
 import type { PlayerSong } from "@/types/player";
+import { selectRecommendations } from "@/lib/recommendations";
 import {
   createShuffleRemaining,
   getNextShufflePool,
@@ -14,9 +15,13 @@ export {
   SLEEP_TIMER_MINUTE_OPTIONS,
   sleepTimerRemainingMinutes,
 } from "@spotify/shared/sleep-timer";
-export { chooseNextShuffleIndex } from "@spotify/shared/shuffle";
 
 type PlayerState = {
+  songRadio: SongRadio | null;
+  startSongRadio: (song: PlayerSong) => void;
+  setSongRadioStatus: (token: number, status: SongRadio["status"]) => void;
+  appendSongRadio: (token: number, songs: PlayerSong[]) => void;
+  retrySongRadio: () => void;
   queue: PlayerSong[];
   currentIndex: number; // index in queue
   currentSong: PlayerSong | null;
@@ -70,7 +75,28 @@ type PlayerState = {
 
 type SetQueueOptions = {
   respectShuffle?: boolean;
+  songRadio?: boolean;
 };
+
+type RadioSeed = Pick<PlayerSong, "id" | "title" | "artist" | "discoverTrackId">;
+type SongRadio = {
+  token: number;
+  seed: RadioSeed;
+  seen: RadioSeed[];
+  status: "idle" | "loading" | "ready" | "unavailable";
+  // Only an exhausted queue may resume when a delayed batch arrives. An
+  // explicit pause, new selection, failure, or sleep timer cancels this intent.
+  waiting: boolean;
+};
+let radioToken = 0;
+
+function radioSeed(song: PlayerSong): RadioSeed {
+  return { id: song.id, title: song.title, artist: song.artist, discoverTrackId: song.discoverTrackId };
+}
+
+function cancelRadioWait(state: PlayerState): SongRadio | null {
+  return state.songRadio?.waiting ? { ...state.songRadio, waiting: false } : state.songRadio;
+}
 
 type AdvanceToIndexOptions = {
   // True when the target index was peeked from playFuture (the redo stack), so
@@ -240,6 +266,7 @@ export type UpcomingPlaybackState = {
   repeatMode: PlayerState["repeatMode"];
   playFuture: number[];
   shuffleRemaining: number[];
+  songRadio?: SongRadio | null;
 };
 
 // The next `count` queue indices in *playback* order — the order next() would
@@ -278,7 +305,7 @@ export function getUpcomingPlaybackIndices(
       const pool =
         validRemaining.length > 0
           ? validRemaining
-          : state.repeatMode === "all"
+          : state.repeatMode === "all" && !state.songRadio
             ? createShuffleRemaining(queueLength, safeCurrent)
             : [];
       for (const index of pool) {
@@ -293,7 +320,7 @@ export function getUpcomingPlaybackIndices(
   for (let index = safeCurrent + 1; index < queueLength && result.length < count; index += 1) {
     push(index);
   }
-  if (state.repeatMode === "all") {
+  if (state.repeatMode === "all" && !state.songRadio) {
     for (let index = 0; index <= safeCurrent && result.length < count; index += 1) {
       push(index);
     }
@@ -302,10 +329,43 @@ export function getUpcomingPlaybackIndices(
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
+  songRadio: null,
+  startSongRadio: (song) => { get().setQueue([song], 0, { songRadio: true }); },
+  setSongRadioStatus: (token, status) => set((s) => s.songRadio?.token === token
+    ? { songRadio: { ...s.songRadio, status, waiting: status === "unavailable" ? false : s.songRadio.waiting } }
+    : s),
+  retrySongRadio: () => set((s) => s.songRadio
+    ? { songRadio: { ...s.songRadio, status: "idle" } } : s),
+  appendSongRadio: (token, songs) => {
+    let resume = false;
+    set((s) => {
+      if (s.songRadio?.token !== token) return s;
+      const excluded = [...s.songRadio.seen, ...s.queue];
+      const ids = new Set(excluded.flatMap((song) => [song.id, song.discoverTrackId ?? ""]));
+      const additions = selectRecommendations(
+        songs.filter((song) => songKind(song) === "music" && (!song.discoverTrackId || !ids.has(song.discoverTrackId))),
+        excluded, ids, 12,
+      ).map((song) => ({ ...song, recommended: true }));
+      resume = s.songRadio.waiting && additions.length > 0;
+      return {
+        queue: additions.length ? [...s.queue, ...additions] : s.queue,
+        shuffleRemaining: s.shuffle
+          ? [...s.shuffleRemaining, ...additions.map((_, index) => s.queue.length + index)]
+          : s.shuffleRemaining,
+        songRadio: {
+          ...s.songRadio,
+          seen: [...s.songRadio.seen, ...additions.map(radioSeed)].slice(-300),
+          status: additions.length ? "ready" : "unavailable",
+          waiting: false,
+        },
+      };
+    });
+    if (resume) get().next();
+  },
   playbackError: null,
   failPlayback: (songId, message) => set((state) =>
     state.currentSong?.id === songId
-      ? { isPlaying: false, playbackError: { songId, message } }
+      ? { isPlaying: false, playbackError: { songId, message }, songRadio: cancelRadioWait(state) }
       : state,
   ),
   clearPlaybackError: () => set({ playbackError: null }),
@@ -346,6 +406,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       : -1;
     const currentSong = start >= 0 ? queue[start] ?? null : null;
     set(() => ({
+      songRadio: options?.songRadio && currentSong && songKind(currentSong) === "music"
+        ? { token: ++radioToken, seed: radioSeed(currentSong), seen: [radioSeed(currentSong)], status: "idle", waiting: false }
+        : null,
       lastQueueRemoval: null,
       queue,
       currentIndex: start,
@@ -360,6 +423,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   setSong: (song) =>
     set({
+      songRadio: null,
       lastQueueRemoval: null,
       currentSong: song,
       playbackError: null,
@@ -378,6 +442,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           ...s,
           currentIndex: index,
           currentSong: s.queue[index],
+          songRadio: cancelRadioWait(s),
           isPlaying: nextPlaying,
         };
       }
@@ -391,6 +456,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         ...s,
         currentIndex: index,
         currentSong: s.queue[index],
+        songRadio: cancelRadioWait(s),
         playHistory: pushHistory(s.playHistory, s.currentIndex),
         playFuture: fromFuture ? future.slice(0, -1) : [],
         shuffleRemaining: fromFuture ? s.shuffleRemaining : removeQueueIndex(s.shuffleRemaining, index),
@@ -407,6 +473,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return s.currentSong?.id === song.id ? { currentSong: song } : s;
       }
       const queue = s.queue.slice();
+      song = { ...song, recommended: queue[matchIndex].recommended };
       queue[matchIndex] = song;
       return {
         queue,
@@ -420,6 +487,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return s.currentSong?.id === oldId ? { currentSong: song } : s;
       }
       const queue = s.queue.slice();
+      song = { ...song, recommended: queue[matchIndex].recommended };
       queue[matchIndex] = song;
       return {
         queue,
@@ -428,6 +496,24 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   addToQueue: (song) =>
     set((s) => {
+      if (song.recommended) song = { ...song, recommended: false };
+      if (s.songRadio && s.currentIndex >= 0) {
+        const firstRecommendation = s.queue.findIndex((item, index) => index > s.currentIndex && item.recommended);
+        const insertAt = firstRecommendation < 0 ? s.queue.length : firstRecommendation;
+        const queue = s.queue.slice();
+        queue.splice(insertAt, 0, song);
+        const upcoming = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s);
+        const remapped = remapQueueIndices(upcoming, insertAt, 1);
+        return {
+          queue,
+          playHistory: remapQueueIndices(s.playHistory, insertAt, 1),
+          playFuture: s.shuffle ? [] : remapQueueIndices(s.playFuture, insertAt, 1),
+          shuffleRemaining: s.shuffle ? [
+            ...remapped.filter((index) => !queue[index].recommended), insertAt,
+            ...remapped.filter((index) => queue[index].recommended),
+          ] : s.shuffleRemaining,
+        };
+      }
       const queue = [...s.queue, song];
       const appendedIndex = queue.length - 1;
       if (s.currentIndex < 0) {
@@ -445,6 +531,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
   playNext: (song) =>
     set((s) => {
+      if (song.recommended) song = { ...song, recommended: false };
       if (s.currentIndex < 0) {
         const queue = [...s.queue, song];
         return {
@@ -509,12 +596,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         shuffleRemaining: remapQueueIndices(s.shuffleRemaining, index, -1),
       };
     }),
-  play: () => set({ isPlaying: true, playbackError: null }),
-  pause: () => set({ isPlaying: false }),
-  toggle: () => set((s) => ({ isPlaying: !s.isPlaying })),
+  play: () => set((s) => ({ isPlaying: true, playbackError: null, songRadio: cancelRadioWait(s) })),
+  pause: () => set((s) => ({ isPlaying: false, songRadio: cancelRadioWait(s) })),
+  toggle: () => set((s) => ({ isPlaying: !s.isPlaying, songRadio: cancelRadioWait(s) })),
   next: () =>
     set((s) => {
       if (s.queue.length === 0) return s.isPlaying ? { ...s, isPlaying: false } : s;
+      if (s.songRadio) {
+        const index = getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, 1, s)[0];
+        if (index === undefined) return {
+          isPlaying: false,
+          songRadio: { ...s.songRadio, waiting: s.songRadio.status !== "unavailable" },
+        };
+        return {
+          currentIndex: index, currentSong: s.queue[index], isPlaying: true,
+          songRadio: cancelRadioWait(s),
+          playHistory: s.shuffle ? pushHistory(s.playHistory, s.currentIndex) : s.playHistory,
+          playFuture: s.shuffle && s.playFuture.at(-1) === index ? s.playFuture.slice(0, -1) : s.playFuture,
+          shuffleRemaining: removeQueueIndex(s.shuffleRemaining, index),
+        };
+      }
       if (s.shuffle) {
         if (s.queue.length === 1) {
           return s.repeatMode === "all"
@@ -566,6 +667,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   previous: () =>
     set((s) => {
       if (s.queue.length === 0) return s;
+      s = { ...s, songRadio: cancelRadioWait(s) };
       if (s.shuffle) {
         const history = s.playHistory.slice();
         const idx = history.pop();
@@ -581,7 +683,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
       const atStart = s.currentIndex <= 0;
       if (atStart) {
-        if (s.repeatMode === "all") {
+        if (s.repeatMode === "all" && !s.songRadio) {
           const idx = s.queue.length - 1;
           return { ...s, currentIndex: idx, currentSong: s.queue[idx], isPlaying: true };
         }
@@ -609,7 +711,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         shuffle,
         playHistory: [],
         playFuture: [],
-        shuffleRemaining: shuffle ? createShuffleRemaining(s.queue.length, s.currentIndex) : [],
+        shuffleRemaining: shuffle ? (s.songRadio
+          ? getUpcomingPlaybackIndices(s.queue.length, s.currentIndex, s.queue.length, s)
+          : createShuffleRemaining(s.queue.length, s.currentIndex)) : [],
       };
     }),
   cycleRepeatMode: () =>

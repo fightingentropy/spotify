@@ -31,6 +31,8 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
   const lastRemoval = usePlayerStore((s) => s.lastQueueRemoval);
   const undoRemoval = usePlayerStore((s) => s.undoQueueRemoval);
   const repeatMode = usePlayerStore((s) => s.repeatMode);
+  const songRadio = usePlayerStore((s) => s.songRadio);
+  const retrySongRadio = usePlayerStore((s) => s.retrySongRadio);
   const drag = useRef<{ from: number; to: number; songId: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null>(null);
 
@@ -45,9 +47,9 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
 
   const upNext = useMemo<QueueEntry[]>(() =>
     getUpcomingPlaybackIndices(queue.length, currentIndex, queue.length, {
-      shuffle, repeatMode, shuffleRemaining, playFuture,
+      shuffle, repeatMode, shuffleRemaining, playFuture, songRadio,
     }).map((queueIndex) => ({ song: queue[queueIndex], queueIndex })),
-    [queue, currentIndex, shuffle, repeatMode, shuffleRemaining, playFuture],
+    [queue, currentIndex, shuffle, repeatMode, shuffleRemaining, playFuture, songRadio],
   );
 
   const resolveDisplaySong = useMemo(
@@ -147,6 +149,7 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
               {displaySong.title}
             </span>
             <span className="block truncate text-xs opacity-70">{displaySong.artist}</span>
+            {songRadio && entry.song.recommended && !highlighted ? <span className="block text-[11px] text-white/45">Similar song</span> : null}
           </span>
         </button>
         {removable ? <button
@@ -277,8 +280,15 @@ export default function QueueSheet({ open, onClose }: QueueSheetProps) {
               ) : null}
 
               <div className="text-sm font-medium text-white/60 mb-2 mt-6">Next up</div>
+              {songRadio ? <div className="mb-3 px-2 text-xs text-white/50" role="status">
+                {songRadio.status === "idle" || songRadio.status === "loading"
+                  ? "Finding similar songs…"
+                  : songRadio.status === "unavailable"
+                    ? <>Couldn’t find more similar songs. <button type="button" onClick={retrySongRadio} className="ml-1 min-h-8 font-medium text-white hover:underline">Try again</button></>
+                    : <>Similar music based on {songRadio.seed.title}</>}
+              </div> : null}
               {upNext.length === 0 ? (
-                <div className="text-sm opacity-60 px-2 py-2">Nothing queued</div>
+                songRadio?.status === "loading" || songRadio?.status === "idle" ? null : <div className="text-sm opacity-60 px-2 py-2">Nothing queued</div>
               ) : (
                 <div className="space-y-1">{upNext.map((entry) => renderRow(entry))}</div>
               )}

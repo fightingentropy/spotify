@@ -11,6 +11,7 @@ import NowPlayingSidebar from "@/components/NowPlayingSidebar";
 import { PlayerBar } from "@/components/PlayerBar";
 import { LikeFeedback } from "@/components/LikeFeedback";
 import { DiscoverQueueStager } from "@/client/DiscoverQueueStager";
+import { SongRadioController } from "@/client/SongRadioController";
 import LegacyServiceWorkerCleanup from "@/components/LegacyServiceWorkerCleanup";
 import { PageHeader, PageLayout } from "@/components/PageLayout";
 import HomePage from "@/client/pages/HomePage";
@@ -348,6 +349,7 @@ function Shell() {
       <PlayerBar />
       <LikeFeedback />
       <DiscoverQueueStager />
+      <SongRadioController />
       <MobileNav />
     </>
   );

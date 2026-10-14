@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { usePlayerStore } from "@/store/player";
+import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
 import { requestImmediatePlayback } from "@/lib/playback-gesture";
 import { isUnstagedDiscoverSong, stageDiscoverSong } from "@/client/discover-queue";
 import { playbackFailureMessage } from "@/client/playback-recovery";
@@ -16,6 +16,11 @@ export function DiscoverQueueStager(): null {
   const currentIndex = usePlayerStore((s) => s.currentIndex);
   const currentSongId = usePlayerStore((s) => s.currentSong?.id ?? null);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const shuffle = usePlayerStore((s) => s.shuffle);
+  const shuffleRemaining = usePlayerStore((s) => s.shuffleRemaining);
+  const playFuture = usePlayerStore((s) => s.playFuture);
+  const repeatMode = usePlayerStore((s) => s.repeatMode);
+  const songRadio = usePlayerStore((s) => s.songRadio);
   const replaceStagedSong = usePlayerStore((s) => s.replaceStagedSong);
   const failPlayback = usePlayerStore((s) => s.failPlayback);
 
@@ -57,13 +62,14 @@ export function DiscoverQueueStager(): null {
       stage(current.id, current);
     }
 
-    // Prefetch one ahead (linear only — shuffle's next pick is random). Stage it
-    // while the current track plays so the transition is gapless.
-    if (isPlaying && !usePlayerStore.getState().shuffle) {
-      const upcoming = queue[currentIndex + 1] ?? null;
-      if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming.id, upcoming);
-    }
-  }, [queue, currentIndex, currentSongId, isPlaying, failPlayback, replaceStagedSong]);
+    // The shuffle pool is already ordered. Warm the same next track that the
+    // queue and crossfade use, including manual additions ahead of autoplay.
+    const nextIndex = getUpcomingPlaybackIndices(queue.length, currentIndex, 1, {
+      shuffle, shuffleRemaining, playFuture, repeatMode, songRadio,
+    })[0];
+    const upcoming = nextIndex === undefined ? null : queue[nextIndex];
+    if (upcoming && isUnstagedDiscoverSong(upcoming)) stage(upcoming.id, upcoming);
+  }, [queue, currentIndex, currentSongId, isPlaying, failPlayback, replaceStagedSong, shuffle, shuffleRemaining, playFuture, repeatMode, songRadio]);
 
   return null;
 }

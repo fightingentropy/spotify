@@ -11,6 +11,8 @@ permitted to access and copy.
 ## Features
 
 - Browse, search, like, queue, and organize a personal music library.
+- In the web and macOS players, a searched song continues with related music.
+  Manual queue additions take priority; album and playlist playback keeps its order.
 - Stream local media with byte-range support, artwork, lyrics, and sidecars.
 - Import licensed or user-authorized media through authenticated APIs.
 - Download tracks for offline playback on mobile; use the desktop Downloads

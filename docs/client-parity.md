@@ -21,6 +21,10 @@ Some capabilities are deliberately platform-specific rather than parity bugs:
   Background downloads use URLSession on iOS and WorkManager on Android.
 - The browser keeps desktop multi-column chrome, keyboard navigation, and hover
   interactions that do not apply to native screens.
+- Web and macOS search start a song radio using `/api/smart-shuffle/recommend`:
+  related tracks are temporary previews, manual queue additions play first, and
+  choosing an album or playlist ends that radio. Expo still uses its separate
+  opt-in Smart Shuffle controller.
 - Native may add RSS feeds to its device-local podcast list. The browser uses
   the server-curated podcast list.
 

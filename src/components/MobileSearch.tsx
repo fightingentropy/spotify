@@ -28,7 +28,7 @@ export default function MobileSearch() {
   const [libraryQuery, setLibraryQuery] = useState("");
   const { user, status } = useAuth();
   const { recentSearches, remember, clear } = useRecentSearches(user?.id ?? status);
-  const setQueue = usePlayerStore((state) => state.setQueue);
+  const startSongRadio = usePlayerStore((state) => state.startSongRadio);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -80,17 +80,17 @@ export default function MobileSearch() {
     [catalogState.data, catalogQuery, query, libraryKeys],
   );
 
-  const playQueueSong = (queue: PlayerSong[], index: number) => {
+  const playSong = (song: PlayerSong) => {
     remember(query);
-    const song = setQueue(queue, index);
-    if (song?.audioUrl) requestImmediatePlayback(song);
+    startSongRadio(song);
+    if (song.audioUrl) requestImmediatePlayback(song);
   };
 
-  const renderSong = (song: PlayerSong, queue: PlayerSong[], index: number) => (
+  const renderSong = (song: PlayerSong) => (
     <button
       key={song.id}
       type="button"
-      onClick={() => playQueueSong(queue, index)}
+      onClick={() => playSong(song)}
       className="wf-list-row wf-pressable flex min-h-[64px] w-full items-center gap-3 rounded-md px-2 text-left touch-manipulation hover:bg-white/[0.045] active:bg-white/[0.06]"
     >
       <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded">
@@ -157,7 +157,7 @@ export default function MobileSearch() {
             {showSongs && results.length > 0 ? (
               <section>
                 <SectionHeader title="In your library" />
-                {results.map((song) => renderSong(song, results, results.indexOf(song)))}
+                {results.map(renderSong)}
               </section>
             ) : null}
 
@@ -181,7 +181,7 @@ export default function MobileSearch() {
                   </div>
                 ) : null}
                 {!catalogState.loading && !catalogState.error
-                  ? catalogResults.map((song, index) => renderSong(song, catalogResults, index))
+                  ? catalogResults.map(renderSong)
                   : null}
               </section>
             ) : null}

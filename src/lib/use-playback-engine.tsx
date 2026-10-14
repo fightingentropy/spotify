@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { chooseNextShuffleIndex, usePlayerStore } from "@/store/player";
+import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
 import type { PlayerSong } from "@/types/player";
 import type { PlayerBarChromeProps } from "@/components/PlayerBarChrome";
 import { isBrowserLocalSong } from "@/lib/browser-local-song";
@@ -120,6 +120,7 @@ export function usePlaybackEngine(): {
   const shuffleRemaining = usePlayerStore((s) => s.shuffleRemaining);
   const playFuture = usePlayerStore((s) => s.playFuture);
   const repeatMode = usePlayerStore((s) => s.repeatMode);
+  const songRadio = usePlayerStore((s) => s.songRadio);
   const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
   const crossfadeSeconds = usePlayerStore((s) => s.crossfadeSeconds);
   const playbackRate = usePlayerStore((s) => s.playbackRate);
@@ -972,9 +973,9 @@ export function usePlaybackEngine(): {
   useEffect(() => {
     if (!currentSong || !isPlaying) return;
     const controller = new AbortController();
-    void prefetchUpcomingPlayback(queue, currentIndex, { shuffle, repeatMode, playFuture, shuffleRemaining }, controller.signal);
+    void prefetchUpcomingPlayback(queue, currentIndex, { shuffle, repeatMode, playFuture, shuffleRemaining, songRadio }, controller.signal);
     return () => controller.abort();
-  }, [currentIndex, currentSong?.id, isPlaying, queue, shuffle, repeatMode, playFuture, shuffleRemaining]);
+  }, [currentIndex, currentSong?.id, isPlaying, queue, shuffle, repeatMode, playFuture, shuffleRemaining, songRadio]);
 
   useEffect(() => {
     return () => {
@@ -1289,50 +1290,19 @@ export function usePlaybackEngine(): {
     const computeNextTarget = ():
       | { song: PlayerSong; playbackSong: PlayerSong; index: number; fromFuture: boolean }
       | null => {
-      if (!Array.isArray(queue) || queue.length === 0) return null;
-      let nextIdx: number;
-      let nextFromFuture = false;
-      if (shuffle) {
-        if (queue.length === 1) return null;
-        // Mirror next(): consume the redo stack (playFuture) before drawing a
-        // fresh index from the shuffle pool, so the crossfade target matches
-        // what next() would have chosen.
-        const peekedFuture = playFuture[playFuture.length - 1];
-        const fromFuture =
-          peekedFuture !== undefined &&
-          peekedFuture >= 0 &&
-          peekedFuture < queue.length &&
-          peekedFuture !== currentIndex;
-        const idx = fromFuture
-          ? peekedFuture
-          : chooseNextShuffleIndex(queue.length, currentIndex, shuffleRemaining);
-        if (idx === currentIndex || idx < 0 || idx >= queue.length) return null;
-        // Mirror next()'s shuffle-with-repeat-off stop behavior: if the pool is
-        // exhausted and we're not repeating, don't crossfade into a refilled pool.
-        if (!fromFuture && repeatMode !== "all") {
-          const remaining = queue
-            .map((_, index) => index)
-            .filter((index) => index !== currentIndex && shuffleRemaining.includes(index));
-          if (remaining.length === 0) return null;
-        }
-        nextIdx = idx;
-        nextFromFuture = fromFuture;
-      } else {
-        const atEnd = currentIndex >= queue.length - 1;
-        if (atEnd) {
-          if (repeatMode === "all") nextIdx = 0;
-          else return null;
-        } else {
-          nextIdx = currentIndex + 1;
-        }
-      }
+      const nextIdx = getUpcomingPlaybackIndices(queue.length, currentIndex, 1, {
+        shuffle, repeatMode, playFuture, shuffleRemaining, songRadio,
+      })[0];
+      if (nextIdx === undefined) return null;
       const nextSong = queue[nextIdx];
-      if (!nextSong) return null;
+      // A catalog placeholder may still be staging. Leave the outgoing song
+      // playing until EOF; never fade into an empty/stale audio element.
+      if (!nextSong?.audioUrl) return null;
       return {
         song: nextSong,
         playbackSong: resolvePlaybackSong(nextSong),
         index: nextIdx,
-        fromFuture: nextFromFuture,
+        fromFuture: shuffle && playFuture.at(-1) === nextIdx,
       };
     };
 
@@ -1365,6 +1335,7 @@ export function usePlaybackEngine(): {
       if (!crossfadeEnabled) return;
       if (crossfadeStartedRef.current || crossfadingRef.current) return;
       if (!isPlaying || repeatMode === "one") return;
+      if (usePlayerStore.getState().sleepAtEndOfTrack) return;
       // Podcasts: the fade-window math assumes media-time == wall-time (wrong at
       // rate != 1), and crossfading speech is undesirable anyway.
       if (currentSongIsPodcast) return;
@@ -1509,7 +1480,7 @@ export function usePlaybackEngine(): {
 
     maybeStartCrossfadeRef.current = startCrossfade;
     forceCommitCrossfadeRef.current = forceCommit;
-  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, ensureWebAudioGraph, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, setOutputLevel, shuffle, shuffleRemaining]);
+  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, ensureWebAudioGraph, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, setOutputLevel, shuffle, shuffleRemaining, songRadio]);
 
   // Cancel any in-flight crossfade ramp (and its timer) when the bar unmounts.
   useEffect(() => {
@@ -1945,24 +1916,22 @@ export function usePlaybackEngine(): {
     }
     if (currentSongIsPodcast && currentSongId) markEpisodeFinished(currentSongId);
     const audio = event.currentTarget;
-    if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1)) {
+    if (usePlayerStore.getState().sleepAtEndOfTrack) {
+      pause();
+      cancelSleepTimer();
+      return;
+    }
+    if (repeatMode === "one" || (repeatMode === "all" && queue.length <= 1 && !songRadio)) {
       // Same song id replays, so the song-change boundary never fires; flush +
       // re-arm here so each full repeat counts as a play.
       flushPlayListen();
-      // "End of track" sleep: an in-place replay never changes currentSongId, so
-      // the song-id-change effect can't see it. Stop here instead of replaying.
-      if (usePlayerStore.getState().sleepAtEndOfTrack) {
-        pause();
-        cancelSleepTimer();
-        return;
-      }
       beginPlayListen(currentSongId ? currentSong : null);
       audio.currentTime = 0;
       void playAudio(audio);
       return;
     }
     next();
-  }, [getActiveAudio, currentSongIsPodcast, currentSongId, repeatMode, queue.length, flushPlayListen, pause, cancelSleepTimer, beginPlayListen, currentSong, playAudio, next]);
+  }, [getActiveAudio, currentSongIsPodcast, currentSongId, repeatMode, queue.length, flushPlayListen, pause, cancelSleepTimer, beginPlayListen, currentSong, playAudio, next, songRadio]);
 
   const renderAudio = (ref: React.RefObject<HTMLAudioElement | null>) => (
     <audio

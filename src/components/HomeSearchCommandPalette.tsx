@@ -32,7 +32,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
   const [activeIndex, setActiveIndex] = useState(0);
   const albumLink = parseAlbumLink(query);
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const setQueue = usePlayerStore((state) => state.setQueue);
+  const startSongRadio = usePlayerStore((state) => state.startSongRadio);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -137,7 +137,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
         if (selected.kind === "album") navigate(albumPagePath(selected.album));
         else {
           requestImmediatePlayback(selected.song);
-          setQueue(results, results.indexOf(selected.song));
+          startSongRadio(selected.song);
         }
         setOpen(false);
         return;
@@ -146,7 +146,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, navigate, open, query, remember, resolvedResults, results, setQueue]);
+  }, [activeIndex, navigate, open, query, remember, resolvedResults, startSongRadio]);
 
   return (
     <div className={className}>
@@ -258,7 +258,7 @@ export function HomeSearchCommandPalette({ className }: HomeSearchCommandPalette
                     onClick={() => {
                       remember(query);
                       requestImmediatePlayback(song);
-                      setQueue(results, results.indexOf(song));
+                      startSongRadio(song);
                       setOpen(false);
                     }}
                     className={cn(
