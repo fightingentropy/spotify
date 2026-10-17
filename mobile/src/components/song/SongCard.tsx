@@ -1,5 +1,5 @@
-import { memo, useCallback } from "react";
-import { View } from "react-native";
+import { memo } from "react";
+import { ActivityIndicator, View } from "react-native";
 import { Pause, Play } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -8,7 +8,7 @@ import { DownloadButton } from "@/components/song/DownloadButton";
 import { TrackActionsButton } from "@/components/song/TrackActionsButton";
 import { colors } from "@/theme";
 import type { DownloadScope } from "@/store/offline";
-import { usePlayerStore } from "@/store/player";
+import { useSongPlaybackState } from "@/audio/buffering";
 import type { PlayerSong } from "@/types/player";
 
 // Compact grid tile. Artwork carries the colour; controls and selection stay
@@ -28,14 +28,11 @@ function SongCardComponent({
 }) {
   // Keep one narrow player subscription per visible tile. Only the old/new
   // active rows re-render when playback moves through a large collection.
-  const playbackState = usePlayerStore(
-    useCallback(
-      (s) => (s.currentSong?.id !== song.id ? "idle" : s.isPlaying ? "playing" : "paused"),
-      [song.id],
-    ),
-  );
+  const playbackState = useSongPlaybackState(song);
   const isActive = playbackState !== "idle";
-  const isActiveAndPlaying = playbackState === "playing";
+  // Loading still means "play was requested": the control pauses it.
+  const isActiveAndPlaying = playbackState === "playing" || playbackState === "loading";
+  const isLoading = playbackState === "loading";
 
   return (
     <View
@@ -76,7 +73,9 @@ function SongCardComponent({
             </MarqueeText>
           </View>
           <View className="h-10 w-10 items-center justify-center">
-            {isActiveAndPlaying ? (
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : isActiveAndPlaying ? (
               <Pause size={18} color="#fff" fill="#fff" strokeWidth={0} />
             ) : (
               <Play size={18} color="#fff" fill="#fff" strokeWidth={0} style={{ marginLeft: 1 }} />

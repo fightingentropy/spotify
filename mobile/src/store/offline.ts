@@ -1760,6 +1760,9 @@ async function applyNativeBackgroundDownloadState(
     } else {
       delete progress[state.key];
     }
+    // A byte-count tick only moves the progress ring. Keeping the records map
+    // stable stops every list subscribed to downloads from re-rendering per tick.
+    if (live && !materialChange) return { progress };
     return {
       records: { ...store.records, [state.key]: next },
       progress,

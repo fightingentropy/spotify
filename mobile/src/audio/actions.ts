@@ -73,7 +73,8 @@ export function toggleSongInList(songs: PlayerSong[], startIndex: number, contex
   markPlaybackEngaged();
   const state = usePlayerStore.getState();
   const target = songs[startIndex];
-  if (target && state.currentSong?.id === target.id) {
+  // Logical match: a staged Discover track swaps its placeholder id for the real one.
+  if (target && isSameLogicalPlaybackSong(state.currentSong, target)) {
     state.toggle();
     return;
   }

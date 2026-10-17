@@ -1,4 +1,4 @@
-import { apiFetch } from "@/lib/http";
+import { apiFetchWithTimeout } from "@/lib/http";
 import type { DiscoverTrack } from "@/lib/api";
 import type { PlayerSong } from "@/types/player";
 
@@ -46,13 +46,8 @@ export function discoverTrackToPlayerSong(track: DiscoverTrack): PlayerSong {
   };
 }
 
-// A queue entry that still needs staging before it can play. Returns a plain
-// boolean (not a `song is PlayerSong` predicate): callers always gate on
-// `song && isUnstagedDiscoverSong(song)`, and a predicate would wrongly narrow
-// `song` to `never` in the code after an early `return` in that branch.
-export function isUnstagedDiscoverSong(song: PlayerSong | null | undefined): boolean {
-  return Boolean(song && song.discoverTrackId && !song.audioUrl);
-}
+// Network-free so pure playback policies (and their tests) can share it.
+export { isUnstagedDiscoverSong } from "@/lib/discover-placeholder";
 
 // Materialize an un-staged Discover track into a playable song via the same
 // on-demand endpoint a tile tap uses. The response carries a real audioUrl + a
@@ -91,11 +86,15 @@ export async function stageDiscoverSong(
         qualityProfile: "max",
         ...(opts?.preview ? { preview: true } : {}),
       };
-  const res = await apiFetch("/api/discover/stage", {
+  // The worker gives the Mac mini 120 s per attempt (a lossless request may also
+  // fall back to YouTube). Bound the wait just beyond that so a request that never
+  // answers fails into the stager's skip/retry path instead of loading forever.
+  const preview = "preview" in body && body.preview === true;
+  const res = await apiFetchWithTimeout("/api/discover/stage", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, preview ? 150_000 : 300_000);
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error || `Couldn't load this track (${res.status})`);

@@ -34,6 +34,7 @@ import { isOwnHandledSong, MAX_CONSECUTIVE_AUDIO_ERRORS, refreshCurrentSong } fr
 import { enforceSleepTimer } from "@/audio/sleep";
 import { publishPlaybackState, setLastPosition, takePendingResumeSeek } from "@/audio/playback-sync";
 import { resetAudioProgress, setAudioProgress, useAudioProgressStore } from "@/audio/progress";
+import { setBufferingSong } from "@/audio/buffering";
 import type { PlayerSong } from "@/types/player";
 
 // iOS dual-deck native audio engine. The native AudioEngine module (two AVPlayer
@@ -144,6 +145,7 @@ function onWaiting(e: WaitingEvent): void {
   const s = usePlayerStore.getState();
   const song = s.currentSong;
   if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id) || !s.isPlaying) return;
+  setBufferingSong(song.id);
   if (isOwnHandledSong(song) || isPodcastSong(song)) return;
   armStallWatchdog(song);
 }
@@ -660,6 +662,7 @@ function onPlaying(e: PlayingEvent): void {
   if (e.deck === activeDeck) {
     const song = usePlayerStore.getState().currentSong;
     if (!song || !isCurrentTrackEvent(e, activeDeck, song.id, deckSong[e.deck]?.id)) return;
+    setBufferingSong(null);
     clearStallWatchdog(); // audio is flowing — this deck isn't stalled
     consecutiveErrors = 0;
     erroredKeyRetry = null;

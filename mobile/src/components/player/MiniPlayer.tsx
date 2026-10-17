@@ -1,4 +1,4 @@
-import { Text, View } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { usePathname } from "expo-router";
 import { Heart, Pause, Play } from "lucide-react-native";
@@ -8,6 +8,7 @@ import { MarqueeText } from "@/components/ui/MarqueeText";
 import { GlassSurface } from "@/components/ui/GlassSurface";
 import { useSongLike } from "@/components/song/useSongLike";
 import { useAudioProgress } from "@/audio/progress";
+import { useIsAwaitingAudio } from "@/audio/buffering";
 import { selectionAsync } from "@/lib/haptics";
 import { colors, layout } from "@/theme";
 import { usePlayerStore } from "@/store/player";
@@ -77,6 +78,7 @@ function MiniPlayerProgress() {
 export function MiniPlayer() {
   const song = usePlayerStore((s) => s.currentSong);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const awaitingAudio = useIsAwaitingAudio();
   const toggle = usePlayerStore((s) => s.toggle);
   const openNowPlaying = useUiStore((s) => s.openNowPlaying);
   const insets = useSafeAreaInsets();
@@ -154,6 +156,7 @@ export function MiniPlayer() {
         hitSlop={10}
         accessibilityRole="button"
         accessibilityLabel={isPlaying ? "Pause" : "Play"}
+        accessibilityState={{ busy: awaitingAudio }}
         style={{
           width: 44,
           height: 44,
@@ -162,7 +165,9 @@ export function MiniPlayer() {
         }}
       >
         <View>
-          {isPlaying ? (
+          {awaitingAudio ? (
+            <ActivityIndicator color={colors.foreground} />
+          ) : isPlaying ? (
             <Pause size={26} color={colors.foreground} fill={colors.foreground} />
           ) : (
             <Play size={26} color={colors.foreground} fill={colors.foreground} />

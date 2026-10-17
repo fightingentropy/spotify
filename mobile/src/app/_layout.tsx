@@ -7,7 +7,7 @@ import { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { DarkTheme, Redirect, Stack, ThemeProvider, useSegments } from "expo-router";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Platform, View, type ColorValue } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import {
@@ -18,6 +18,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { AudioBootstrap } from "@/components/AudioBootstrap";
 import { MiniPlayer } from "@/components/player/MiniPlayer";
 import { PlayerSheets } from "@/components/player/PlayerSheets";
+import { HeaderBackButton } from "@/components/nav/HeaderBackButton";
 import { TabBar } from "@/components/nav/TabBar";
 import { ProfileMenu } from "@/components/profile/ProfileMenu";
 import { initOfflineSync, useOfflineStore } from "@/store/offline";
@@ -62,6 +63,13 @@ const headerOptions = {
   // Show only the back chevron — not the previous route's title (which was the
   // expo-router group name "(tabs)").
   headerBackButtonDisplayMode: "minimal",
+  // Android gets the same round back control iOS draws natively.
+  ...(Platform.OS === "android"
+    ? {
+        headerLeft: ({ canGoBack, tintColor }: { canGoBack?: boolean; tintColor?: ColorValue }) =>
+          canGoBack ? <HeaderBackButton tintColor={tintColor} /> : null,
+      }
+    : {}),
 } as const;
 
 const spotifyNavigationTheme = {

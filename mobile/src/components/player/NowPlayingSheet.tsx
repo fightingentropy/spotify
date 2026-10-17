@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn, runOnJS } from "react-native-reanimated";
@@ -25,6 +25,7 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { MarqueeText } from "@/components/ui/MarqueeText";
 import { Sheet } from "@/components/ui/Sheet";
 import { Scrubber } from "@/components/player/Scrubber";
+import { useIsAwaitingAudio } from "@/audio/buffering";
 import { LyricsView } from "@/components/player/LyricsView";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
 import { useSongLike } from "@/components/song/useSongLike";
@@ -233,6 +234,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
   );
   const lyricsAvailable = Boolean(song?.lyricsUrl || offlineLyricsPath);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
+  const awaitingAudio = useIsAwaitingAudio();
   const shuffle = usePlayerStore((state) => state.shuffle);
   const smartShuffleEnabled = usePlayerStore((state) => state.smartShuffleEnabled);
   const repeatMode = usePlayerStore((state) => state.repeatMode);
@@ -449,6 +451,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
                   onPress={toggle}
                   accessibilityRole="button"
                   accessibilityLabel={isPlaying ? "Pause" : "Play"}
+                  accessibilityState={{ busy: awaitingAudio }}
                   style={{
                     width: 64,
                     height: 64,
@@ -459,7 +462,9 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
                     backgroundColor: "#fff",
                   }}
                 >
-                  {isPlaying ? (
+                  {awaitingAudio ? (
+                    <ActivityIndicator color="#000" />
+                  ) : isPlaying ? (
                     <Pause size={26} color="#000" fill="#000" strokeWidth={0} />
                   ) : (
                     <Play

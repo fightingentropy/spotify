@@ -37,6 +37,7 @@ import {
   takePendingResumeSeek,
 } from "@/audio/playback-sync";
 import { resetAudioProgress, setAudioProgress } from "@/audio/progress";
+import { setBufferingSong } from "@/audio/buffering";
 import type { PlayerSong } from "@/types/player";
 
 // The RNTP single-player audio backend (Android + non-iOS fallback). On iOS the
@@ -401,6 +402,8 @@ export async function initRntpAudio(): Promise<void> {
         onProgress(position, duration);
       });
       TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
+        const buffering = state === State.Loading || state === State.Buffering;
+        setBufferingSong(buffering ? usePlayerStore.getState().currentSong?.id ?? null : null);
         if (state === State.Playing) {
           clearStallWatchdog();
           consecutiveErrors = 0;

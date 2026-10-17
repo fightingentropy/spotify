@@ -26,6 +26,7 @@ import { deletePlaylist, renamePlaylist } from "@/lib/playlist-actions";
 import { canDeletePlaylist } from "@/lib/playlist-policy";
 import { playSongs } from "@/audio/actions";
 import { publishPlaybackState } from "@/audio/playback-sync";
+import { useIsAwaitingAudio } from "@/audio/buffering";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 import { keyFor, useOfflineStore } from "@/store/offline";
@@ -139,6 +140,7 @@ export function PlaylistDetailScreen({
   const openListeningModes = useUiStore((s) => s.openListeningModes);
   const isThisContext = usePlayerStore((s) => s.queueContextKey === contextKey);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const awaitingAudio = useIsAwaitingAudio();
   const togglePlay = usePlayerStore((s) => s.toggle);
 
   // Apply the user's chosen sort for this playlist (Date added / Title / …); the
@@ -442,7 +444,9 @@ export function PlaylistDetailScreen({
             style={{ backgroundColor: colors.emerald }}
           >
             <View>
-              {showPause ? (
+              {showPause && awaitingAudio ? (
+                <ActivityIndicator color="#000" />
+              ) : showPause ? (
                 <Pause size={28} color="#000" fill="#000" />
               ) : (
                 <Play size={28} color="#000" fill="#000" style={{ marginLeft: 3 }} />

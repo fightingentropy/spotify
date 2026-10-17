@@ -1,5 +1,5 @@
-import { memo, useCallback } from "react";
-import { View } from "react-native";
+import { memo } from "react";
+import { ActivityIndicator, View } from "react-native";
 import { Pause, Play } from "lucide-react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -8,7 +8,7 @@ import { DownloadButton } from "@/components/song/DownloadButton";
 import { TrackActionsButton } from "@/components/song/TrackActionsButton";
 import { colors } from "@/theme";
 import type { DownloadScope } from "@/store/offline";
-import { usePlayerStore } from "@/store/player";
+import { useSongPlaybackState } from "@/audio/buffering";
 import type { PlayerSong } from "@/types/player";
 
 // List rows stay visually flat. Active playback is communicated with a neutral
@@ -33,14 +33,11 @@ function SongListItemComponent({
 }) {
   // One selector per visible row instead of two subscriptions evaluating the
   // same song-id comparison on every player-store update.
-  const playbackState = usePlayerStore(
-    useCallback(
-      (s) => (s.currentSong?.id !== song.id ? "idle" : s.isPlaying ? "playing" : "paused"),
-      [song.id],
-    ),
-  );
+  const playbackState = useSongPlaybackState(song);
   const isActive = playbackState !== "idle";
-  const isActiveAndPlaying = playbackState === "playing";
+  // Loading still means "play was requested": the control pauses it.
+  const isActiveAndPlaying = playbackState === "playing" || playbackState === "loading";
+  const isLoading = playbackState === "loading";
 
   return (
     <View
@@ -75,7 +72,9 @@ function SongListItemComponent({
 
       {isActive ? (
         <View className="h-9 w-9 items-center justify-center">
-          {isActiveAndPlaying ? (
+          {isLoading ? (
+            <ActivityIndicator size="small" color={colors.foreground} />
+          ) : isActiveAndPlaying ? (
             <Pause size={17} color={colors.foreground} fill={colors.foreground} strokeWidth={0} />
           ) : (
             <Play size={17} color={colors.foreground} fill={colors.foreground} strokeWidth={0} style={{ marginLeft: 1 }} />

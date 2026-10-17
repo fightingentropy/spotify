@@ -62,6 +62,10 @@ class BackgroundDownloadCoordinator private constructor(
   private val jobs = linkedMapOf<String, BackgroundDownloadJob>()
   private var activeAccount = "anonymous"
   private val lock = Any()
+  // Progress arrives once per socket read (hundreds of times per song). Each
+  // event re-renders every screen subscribed to downloads, so forward at most a
+  // few per second; status changes and completion are always delivered.
+  private val lastProgressNotifiedAt = mutableMapOf<String, Long>()
 
   fun restoreAndSchedule() {
     synchronized(lock) {
@@ -236,12 +240,17 @@ class BackgroundDownloadCoordinator private constructor(
     synchronized(lock) {
       val job = jobs[key] ?: return
       if (job.transferToken != transferToken || job.status == "ready" || job.status == "error") return
+      val becameActive = job.status != "downloading"
       job.status = "downloading"
       job.bytesWritten = written
       job.bytesExpected = expected
       job.progress = if (expected > 0) (written.toDouble() / expected.toDouble()).coerceIn(0.0, 1.0) else 0.0
       job.updatedAt = nowMilliseconds()
-      notifyLocked(job)
+      val lastNotifiedAt = lastProgressNotifiedAt[key] ?: 0L
+      if (becameActive || job.updatedAt - lastNotifiedAt >= PROGRESS_NOTIFY_INTERVAL_MS) {
+        lastProgressNotifiedAt[key] = job.updatedAt
+        notifyLocked(job)
+      }
     }
   }
 
@@ -249,6 +258,7 @@ class BackgroundDownloadCoordinator private constructor(
     synchronized(lock) {
       val job = jobs[key] ?: return
       if (job.transferToken != transferToken) return
+      lastProgressNotifiedAt.remove(key)
       job.status = "ready"
       job.progress = 1.0
       job.audioPath = audioPath
@@ -267,6 +277,7 @@ class BackgroundDownloadCoordinator private constructor(
     synchronized(lock) {
       val job = jobs[key] ?: return
       if (job.transferToken != transferToken || job.status == "ready") return
+      lastProgressNotifiedAt.remove(key)
       job.status = "error"
       job.error = message
       job.pendingStage = null
@@ -495,6 +506,7 @@ class BackgroundDownloadCoordinator private constructor(
   companion object {
     const val NOTIFICATION_CHANNEL_ID = "background-downloads"
     const val UNIQUE_WORK_PREFIX = "bgdl:"
+    private const val PROGRESS_NOTIFY_INTERVAL_MS = 250L
 
     @Volatile
     private var instance: BackgroundDownloadCoordinator? = null
