@@ -525,6 +525,30 @@ export async function findDiscoverStagedSong(source: LibrarySource, id: string):
   return repaired.entries[entry.trackId] ? discoverEntryToSong(repaired.entries[entry.trackId]) : null;
 }
 
+/**
+ * Listening history keeps the media URLs a staged song had when it played. Mint
+ * fresh ones from the manifest, signed exactly as staging hands them out: the
+ * files exist only in the shared root, so signing the stored path for a
+ * non-owner's own library would point at a missing ".discover" folder.
+ */
+export async function signedDiscoverStagedSongs(
+  source: LibrarySource,
+  ids: Iterable<string>,
+): Promise<Map<string, PlayerSong>> {
+  const songs = new Map<string, PlayerSong>();
+  const wanted = new Set(ids);
+  if (!source.shared || wanted.size === 0) return songs;
+  const manifest = await readDiscoverManifest(source);
+  for (const entry of Object.values(manifest.entries)) {
+    for (const id of [entry.finalId, `discover:${entry.trackId}`]) {
+      if (!wanted.has(id) || songs.has(id)) continue;
+      if (!existsSync(resolve(source.root, entry.stagedRelPath))) continue;
+      songs.set(id, signDiscoverSong(discoverEntryToSong(entry)));
+    }
+  }
+  return songs;
+}
+
 // Discover staging files live in the shared root but are streamed by clients
 // that can't present private-proxy auth or a session cookie — notably the native
 // iOS AVPlayer, which fetches the URL directly (bypassing the Worker). Sign

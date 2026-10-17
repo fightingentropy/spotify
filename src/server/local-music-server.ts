@@ -101,6 +101,7 @@ import {
   handleDiscoverSync,
   handleYouTubeMusicPlaylist,
   handleYouTubePlaylistSearch,
+  signedDiscoverStagedSongs,
 } from "./local-discover";
 import {
   configureUploads,
@@ -564,15 +565,33 @@ async function handleMediaRefresh(request: Request): Promise<Response> {
   const currentByTrack = new Map(
     (snapshot?.songs ?? []).map((song) => [trackKey(song.title, song.artist), song] as const),
   );
+  const isStagedMedia = (song: MediaRefreshItem) =>
+    song.imageUrl.includes("/.discover/") || song.audioUrl.includes("/.discover/");
+  // Discover staging lives in the shared root whoever played the track.
+  const stagedById = await signedDiscoverStagedSongs(
+    sharedLibrarySource(),
+    (songs as MediaRefreshItem[])
+      .filter((song) => isStagedMedia(song) && !snapshot?.entriesById.has(song.id))
+      .map((song) => song.id),
+  );
   return json(
     {
       songs: (songs as MediaRefreshItem[]).map((song) => {
         // History can retain old artwork/audio paths after a restore or file
-        // replacement. Refresh exact library ids for every song. Only temporary
-        // Discover copies may fall back to a title/artist match after promotion.
-        const stagedMedia = song.imageUrl.includes("/.discover/") || song.audioUrl.includes("/.discover/");
+        // replacement. Refresh exact library ids for every song. A Discover copy
+        // that is still staged is re-signed from the manifest; one that is gone
+        // may fall back to a title/artist match after promotion.
+        const stagedSong = stagedById.get(song.id);
+        if (stagedSong) {
+          return {
+            id: song.id,
+            imageUrl: stagedSong.imageUrl,
+            audioUrl: stagedSong.audioUrl,
+            lyricsUrl: stagedSong.lyricsUrl,
+          };
+        }
         const currentSong = snapshot?.entriesById.get(song.id)?.song
-          ?? (stagedMedia ? currentByTrack.get(trackKey(song.title, song.artist)) : undefined);
+          ?? (isStagedMedia(song) ? currentByTrack.get(trackKey(song.title, song.artist)) : undefined);
         const media = currentSong ?? song;
         return {
           id: song.id,
