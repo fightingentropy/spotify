@@ -49,6 +49,9 @@ export type YouTubePreviewConfig = {
   // Prefer Premium Opus (774) or AAC (141), then the best available audio.
   // Premium formats require a valid account session and extraction support.
   format: string;
+  // yt-dlp player clients for a cookies download. Defaults to the first entry
+  // of PREMIUM_PLAYER_CLIENTS; the resilient download walks the whole list.
+  playerClient?: string;
   // Extra dirs prepended to PATH for the yt-dlp subprocess. yt-dlp's standalone
   // binary shells out to `deno` (the JS challenge solver) by PATH lookup; under
   // launchd the server's PATH omits Homebrew, so deno must be added explicitly or
@@ -272,6 +275,10 @@ export function scoreYouTubeCandidate(
   const isTopic = /\btopic\b/i.test(channel);
   if (isTopic && artistOverlap > 0) score += 0.25;
   if (/official\s+(audio|video|music\s+video)/i.test(entryTitle)) score += 0.05;
+  // The artist's own channel ("SZA", "Official Arctic Monkeys") outranks lyric
+  // and fan re-uploads that sit a few seconds closer to Spotify's duration. Those
+  // re-uploads often lack the Premium audio formats.
+  if (overlap(artistToks, channelToks) >= 0.5) score += 0.1;
 
   // Duration: the worker resolves the rec to a Spotify track first, so durationMs
   // is known. This is what kills the vetiver-farming webinars and album mixes.
@@ -333,10 +340,15 @@ export function pickBestYouTubeMatch(
 // I/O — search + download via yt-dlp.
 // ---------------------------------------------------------------------------
 
-function ytdlpBaseArgs(config: YouTubePreviewConfig): string[] {
-  const args = ["--no-warnings", "--no-playlist", "--socket-timeout", "15", "--retries", "2"];
-  if (config.cookiesFile) args.push("--cookies", config.cookiesFile);
-  return args;
+const YTDLP_BASE_ARGS = ["--no-warnings", "--no-playlist", "--socket-timeout", "15", "--retries", "2"];
+
+// The Music client alone exposes Premium 774/141. `default` adds web_creator and
+// tv requests that cost ~1.5 s per song on the mini, so it is only the second try
+// for a video the Music client can't serve.
+const PREMIUM_PLAYER_CLIENTS = ["web_music", "web_music,default"];
+
+function cookiesArgs(config: YouTubePreviewConfig): string[] {
+  return config.cookiesFile ? ["--cookies", config.cookiesFile] : [];
 }
 
 export async function searchYouTube(
@@ -346,7 +358,7 @@ export async function searchYouTube(
   const query = `ytsearch${config.searchCount}:${opts.artist} ${opts.title}`.replace(/\s+/g, " ").trim();
   const { stdout } = await execFileAsync(
     config.ytDlpPath,
-    [...ytdlpBaseArgs(config), "--flat-playlist", "-J", query],
+    [...YTDLP_BASE_ARGS, ...cookiesArgs(config), "--flat-playlist", "-J", query],
     { maxBuffer: 8 * 1024 * 1024, timeout: 45_000, env: execEnv(config) },
   );
   const parsed = JSON.parse(stdout) as { entries?: YouTubeSearchEntry[] };
@@ -387,9 +399,15 @@ export async function resolveYouTubePreviewMatch(
   opts: { title: string; artist: string; durationMs?: number },
   config: YouTubePreviewConfig = DEFAULT_YOUTUBE_PREVIEW_CONFIG,
 ): Promise<YouTubePreviewMatch | null> {
-  const entries = await searchYouTube(opts, config).catch(() => [] as YouTubeSearchEntry[]);
-  if (entries.length === 0) return null;
-  return pickBestYouTubeMatch(opts, entries, config.minConfidence);
+  // Search signed out first: it is ~0.85 s faster on the mini, and Premium only
+  // matters for the download. YouTube hides some results from signed-out users
+  // ("Jamie xx Gosh" returns none), so search signed in before giving up.
+  for (const cookiesFile of new Set([undefined, config.cookiesFile])) {
+    const entries = await searchYouTube(opts, { ...config, cookiesFile }).catch(() => [] as YouTubeSearchEntry[]);
+    const match = pickBestYouTubeMatch(opts, entries, config.minConfidence);
+    if (match) return match;
+  }
+  return null;
 }
 
 const PREVIEW_AUDIO_EXTS = new Set([".opus", ".m4a", ".ogg", ".webm"]);
@@ -403,7 +421,7 @@ export async function downloadYouTubePreviewAudio(
   const dir = await mkdtemp(join(tmpdir(), "yt-preview-"));
   try {
     const args = [
-      ...ytdlpBaseArgs(config),
+      ...YTDLP_BASE_ARGS,
       "-f",
       config.format,
       "-x",
@@ -413,7 +431,13 @@ export async function downloadYouTubePreviewAudio(
     if (config.ffmpegLocation) args.push("--ffmpeg-location", config.ffmpegLocation);
     // The ordinary logged-in web client can omit all audio-only formats even
     // with valid Premium cookies. The Music client exposes Premium 774/141.
-    if (config.cookiesFile) args.push("--extractor-args", "youtube:player_client=web_music,default");
+    if (config.cookiesFile) {
+      args.push(
+        ...cookiesArgs(config),
+        "--extractor-args",
+        `youtube:player_client=${config.playerClient ?? PREMIUM_PLAYER_CLIENTS[0]}`,
+      );
+    }
     const origin = config.cookiesFile ? "https://music.youtube.com" : "https://www.youtube.com";
     args.push(`${origin}/watch?v=${videoId}`);
     await execFileAsync(config.ytDlpPath, args, { maxBuffer: 8 * 1024 * 1024, timeout: 120_000, env: execEnv(config) });
@@ -434,7 +458,7 @@ function extOf(name: string): string {
   return dot >= 0 ? name.slice(dot).toLowerCase() : "";
 }
 
-// Download, falling back to anonymous if a cookies (Premium) attempt fails. A
+// Download through each Premium player-client set, then fall back to anonymous. A
 // cookies-authenticated request whose JS n-challenge can't be solved (e.g. deno
 // missing) returns NO usable formats — strictly worse than anonymous ~131k opus —
 // so dropping the cookies and retrying keeps refetch/preview working.
@@ -442,12 +466,15 @@ export async function downloadYouTubePreviewAudioResilient(
   videoId: string,
   config: YouTubePreviewConfig = DEFAULT_YOUTUBE_PREVIEW_CONFIG,
 ): Promise<{ bytes: Buffer; ext: string }> {
-  try {
-    return await downloadYouTubePreviewAudio(videoId, config);
-  } catch (err) {
-    if (!config.cookiesFile) throw err;
-    return downloadYouTubePreviewAudio(videoId, { ...config, cookiesFile: undefined });
+  if (!config.cookiesFile) return downloadYouTubePreviewAudio(videoId, config);
+  for (const playerClient of PREMIUM_PLAYER_CLIENTS) {
+    try {
+      return await downloadYouTubePreviewAudio(videoId, { ...config, playerClient });
+    } catch {
+      // Try the next player-client set.
+    }
   }
+  return downloadYouTubePreviewAudio(videoId, { ...config, cookiesFile: undefined });
 }
 
 export type YouTubeMusicPlaylistEntry = {
@@ -505,7 +532,7 @@ export async function fetchYouTubeMusicPlaylist(
   config: YouTubePreviewConfig = DEFAULT_YOUTUBE_PREVIEW_CONFIG,
 ): Promise<YouTubeMusicPlaylist> {
   const url = `https://music.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
-  // NOTE: deliberately NOT ytdlpBaseArgs() — that sets --no-playlist, which would
+  // NOTE: deliberately NOT YTDLP_BASE_ARGS — that sets --no-playlist, which would
   // collapse the mix to a single track. We want the whole flat list.
   const args = ["--no-warnings", "--flat-playlist", "--dump-single-json", "--socket-timeout", "15", "--retries", "2"];
   if (config.cookiesFile) args.push("--cookies", config.cookiesFile);

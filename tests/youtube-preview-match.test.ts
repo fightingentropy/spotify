@@ -103,6 +103,20 @@ describe("pickBestYouTubeMatch", () => {
     expect(pickBestYouTubeMatch(opts, entries, 0.5)?.videoId).toBe("studio");
   });
 
+  test("the artist's own upload outranks a lyric or fan re-upload with a closer duration", () => {
+    const sza = pickBestYouTubeMatch({ title: "Good Days", artist: "SZA", durationMs: 279_000 }, [
+      { id: "lyrics", title: "SZA - Good Days (Lyrics)", channel: "7clouds", duration: 278 },
+      { id: "artist", title: "SZA - Good Days (Audio)", channel: "SZA", duration: 281 },
+    ], 0.5);
+    expect(sza?.videoId).toBe("artist");
+
+    const arcticMonkeys = pickBestYouTubeMatch({ title: "Do I Wanna Know?", artist: "Arctic Monkeys", durationMs: 272_000 }, [
+      { id: "official", title: "Arctic Monkeys - Do I Wanna Know? (Official Video)", channel: "Official Arctic Monkeys", duration: 266 },
+      { id: "fan", title: "Arctic Monkeys - Do I Wanna Know?", channel: "Rodrigo Lima", duration: 273 },
+    ], 0.5);
+    expect(arcticMonkeys?.videoId).toBe("official");
+  });
+
   test("accented and case-folded artist/title still match", () => {
     const entries: YouTubeSearchEntry[] = [
       { id: "ok", title: "Ben Böhmer - Breathing", uploader: "Anjunadeep", duration: 223 },
