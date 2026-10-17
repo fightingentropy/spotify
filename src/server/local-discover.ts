@@ -253,7 +253,7 @@ async function discoverManifestWithDurations(
 
 // yt-dlp installs into prefixes that launchd's minimal PATH omits, so probe known
 // locations (mirrors ffmpegPath()). ~/.local/bin is checked FIRST because that's
-// where scripts/install-mini-yt-dlp.sh drops the self-updating standalone binary
+// where scripts/install-mini-yt-dlp.sh drops the self-updating zipapp build
 // (`yt-dlp -U` weekly) — YouTube breaks extraction often, so the auto-updated copy
 // must win over a possibly-stale Homebrew one.
 function ytDlpPath(): string {

@@ -113,6 +113,10 @@ function evaluate(s: ReturnType<typeof usePlayerStore.getState>): void {
   const current = s.queue[s.currentIndex] ?? null;
   if (current && isUnstagedDiscoverSong(current)) {
     stage(current, "current");
+    // Staging runs a YouTube download on the Mac mini. Give the song the user is
+    // waiting on the server to itself; swapping in its staged source re-runs this
+    // evaluation, which then warms the upcoming tracks.
+    return;
   } else if (current) {
     // A real, playable current track means the queue is healthy — clear the breaker
     // (handles the case where the current track became playable via prefetch rather

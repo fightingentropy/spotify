@@ -10,7 +10,9 @@ SERVICE_LABEL="${SERVICE_LABEL:-xyz.streamarena.spotify-ytdlp-update}"
 # Weekly self-update. YouTube breaks extraction frequently; a stale yt-dlp is the
 # usual cause of Smart Shuffle previews failing to resolve.
 UPDATE_INTERVAL="${UPDATE_INTERVAL:-604800}"
-YTDLP_URL="${YTDLP_URL:-https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos}"
+# The zipapp build starts in ~0.5 s. The yt-dlp_macos PyInstaller build unpacks
+# itself on every launch (~7 s on the mini), and staging runs yt-dlp per song.
+YTDLP_URL="${YTDLP_URL:-https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp}"
 INSTALL_DENO="${INSTALL_DENO:-0}"
 
 usage() {
@@ -19,7 +21,7 @@ Usage: scripts/install-mini-yt-dlp.sh [options]
 
 Installs the self-updating yt-dlp used for discovery playback and permanent
 YouTube downloads when the lossless providers are unavailable:
-  - /Users/hermes/.local/bin/yt-dlp            (standalone macOS binary, `yt-dlp -U`)
+  - /Users/hermes/.local/bin/yt-dlp            (zipapp on Homebrew python3, `yt-dlp -U`)
   - /Users/hermes/.local/bin/spotify-ytdlp-update  (the weekly updater wrapper)
   - /Library/LaunchDaemons/xyz.streamarena.spotify-ytdlp-update.plist
 
@@ -38,7 +40,7 @@ Environment:
   MINI_HOSTS             Fallback hosts. Default: m4mini-ts, Tailscale IP, m4mini.local, LAN IP.
   SSH_KEY                Default: ~/.ssh/id_ed25519_codex_m4mini
   SERVICE_LABEL          Default: xyz.streamarena.spotify-ytdlp-update
-  YTDLP_URL              Standalone binary URL. Default: yt-dlp_macos latest release.
+  YTDLP_URL              yt-dlp build URL. Default: the latest zipapp (needs python3 >= 3.10).
 USAGE
 }
 
@@ -80,14 +82,20 @@ ytdlp="$bin_dir/yt-dlp"
 
 mkdir -p "$bin_dir" "$state_dir"
 
-echo "==> downloading yt-dlp standalone from $YTDLP_URL"
+# The zipapp runs on python3 via PATH; macOS's own /usr/bin/python3 is too old.
+if ! /opt/homebrew/bin/python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+  echo "error: yt-dlp needs Homebrew python3 >= 3.10 (brew install python)" >&2
+  exit 1
+fi
+
+echo "==> downloading yt-dlp from $YTDLP_URL"
 tmp_bin="$(mktemp)"
 curl -fL --connect-timeout 10 --max-time 120 -o "$tmp_bin" "$YTDLP_URL"
 install -m 755 "$tmp_bin" "$ytdlp"
 rm -f "$tmp_bin"
 echo "==> yt-dlp version: $("$ytdlp" --version)"
 
-# Weekly self-update wrapper. `-U` rewrites the standalone binary in place; it runs
+# Weekly self-update wrapper. `-U` rewrites the zipapp in place; it runs
 # as hermes (LaunchDaemon UserName) so it can write to ~/.local/bin.
 cat > "$bin_dir/spotify-ytdlp-update" <<'SCRIPT'
 #!/bin/bash

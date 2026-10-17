@@ -60,6 +60,9 @@ export function DiscoverQueueStager(): null {
       // suppressed until that track is actually selected.
       failedRef.current.delete(current.id);
       stage(current.id, current);
+      // Staging runs a YouTube download on the Mac mini. Leave it to the track the
+      // listener is waiting on; the staged swap re-runs this effect for the next one.
+      return;
     }
 
     // The shuffle pool is already ordered. Warm the same next track that the
