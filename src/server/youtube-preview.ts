@@ -16,13 +16,10 @@
 // ambiguous title word ("Vetiver") pulling in unrelated uploads, and hour-long
 // "Full Album Continuous Mix" uploads scoring as high as the real single.
 
-import { execFile } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runYtDlp } from "./ytdlp-runner";
 
 export type YouTubeSearchEntry = {
   id?: string;
@@ -225,6 +222,11 @@ function execEnv(config: YouTubePreviewConfig): NodeJS.ProcessEnv | undefined {
   return { ...process.env, PATH: [...config.extraPath, base].filter(Boolean).join(":") };
 }
 
+// Returns what yt-dlp prints. ytdlp-runner.ts runs it in a warm helper when it can.
+function ytDlp(config: YouTubePreviewConfig, args: string[], timeoutMs: number, maxBuffer = 8 * 1024 * 1024): Promise<string> {
+  return runYtDlp({ ytDlpPath: config.ytDlpPath, args, env: execEnv(config), timeoutMs, maxBuffer });
+}
+
 // ---------------------------------------------------------------------------
 // Pure scoring (no I/O) — exported so it can be unit-tested against fixtures.
 // ---------------------------------------------------------------------------
@@ -356,11 +358,7 @@ export async function searchYouTube(
   config: YouTubePreviewConfig,
 ): Promise<YouTubeSearchEntry[]> {
   const query = `ytsearch${config.searchCount}:${opts.artist} ${opts.title}`.replace(/\s+/g, " ").trim();
-  const { stdout } = await execFileAsync(
-    config.ytDlpPath,
-    [...YTDLP_BASE_ARGS, ...cookiesArgs(config), "--flat-playlist", "-J", query],
-    { maxBuffer: 8 * 1024 * 1024, timeout: 45_000, env: execEnv(config) },
-  );
+  const stdout = await ytDlp(config, [...YTDLP_BASE_ARGS, ...cookiesArgs(config), "--flat-playlist", "-J", query], 45_000);
   const parsed = JSON.parse(stdout) as { entries?: YouTubeSearchEntry[] };
   return Array.isArray(parsed.entries) ? parsed.entries : [];
 }
@@ -386,11 +384,7 @@ export async function searchYouTubePlaylists(
   ];
   if (config.cookiesFile) args.push("--cookies", config.cookiesFile);
   args.push(buildYouTubePlaylistSearchUrl(normalized));
-  const { stdout } = await execFileAsync(config.ytDlpPath, args, {
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: 10_000,
-    env: execEnv(config),
-  });
+  const stdout = await ytDlp(config, args, 10_000);
   const parsed = JSON.parse(stdout) as { entries?: unknown };
   return parseYouTubePlaylistSearchEntries(parsed.entries, boundedLimit);
 }
@@ -440,7 +434,7 @@ export async function downloadYouTubePreviewAudio(
     }
     const origin = config.cookiesFile ? "https://music.youtube.com" : "https://www.youtube.com";
     args.push(`${origin}/watch?v=${videoId}`);
-    await execFileAsync(config.ytDlpPath, args, { maxBuffer: 8 * 1024 * 1024, timeout: 120_000, env: execEnv(config) });
+    await ytDlp(config, args, 120_000);
 
     const files = await readdir(dir);
     const audioFile = files.find((f) => PREVIEW_AUDIO_EXTS.has(extOf(f)));
@@ -537,11 +531,7 @@ export async function fetchYouTubeMusicPlaylist(
   const args = ["--no-warnings", "--flat-playlist", "--dump-single-json", "--socket-timeout", "15", "--retries", "2"];
   if (config.cookiesFile) args.push("--cookies", config.cookiesFile);
   args.push(url);
-  const { stdout } = await execFileAsync(config.ytDlpPath, args, {
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 60_000,
-    env: execEnv(config),
-  });
+  const stdout = await ytDlp(config, args, 60_000, 64 * 1024 * 1024);
   const data = JSON.parse(stdout) as {
     title?: string;
     thumbnails?: Array<{ url?: string }>;
