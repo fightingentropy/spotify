@@ -156,6 +156,7 @@ import {
   fetchDiscoverPlaylist,
   macMiniDiscoverFetch,
   markDiscoverStaged,
+  prepareTopCatalogSong,
   readDiscoverStagingStatus,
   registerDiscoverRoutes,
   runDiscoverFill,
@@ -1287,6 +1288,8 @@ app.get("/api/search/catalog", async (c) => {
   });
   const staged = applyDiscoverStaging(uniqueTracks, stagedById);
   const results: PlayerSong[] = staged.map((track) => ({ ...discoverStagedToPlayerSong(track), preview: true }));
+  // Someone browsing playlists isn't about to play a song.
+  if (!includeYouTubePlaylists) prepareTopCatalogSong(c.env, results, (work) => c.executionCtx.waitUntil(work));
   const playlists: Array<SpotifyCatalogPlaylist | YouTubeCatalogPlaylist> = [
     ...spotify.catalog.playlists,
     ...youtube.playlists,

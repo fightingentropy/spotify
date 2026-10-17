@@ -227,6 +227,38 @@ export function discoverStagedToPlayerSong(track: DiscoverStagedTrack): PlayerSo
   };
 }
 
+// What the mini needs to stage a search's top song before anyone taps it, or
+// null when that song is already staged and plays at once.
+export function catalogPreparePayload(results: PlayerSong[]): Record<string, unknown> | null {
+  const top = results[0];
+  if (!top?.discoverTrackId || top.audioUrl) return null;
+  return {
+    trackId: top.discoverTrackId,
+    title: top.title,
+    artist: top.artist,
+    album: top.album,
+    imageUrl: top.imageUrl,
+    durationMs: top.duration ? Math.round(top.duration * 1000) : undefined,
+  };
+}
+
+// Search's likeliest tap is its top song. The mini waits for the results to
+// settle while someone is still typing, then stages that song in the background,
+// so a tap on it joins or reuses the download (handleDiscoverPrepare).
+export function prepareTopCatalogSong(
+  env: CloudflareEnv,
+  results: PlayerSong[],
+  waitUntil: (work: Promise<unknown>) => void,
+): void {
+  const payload = catalogPreparePayload(results);
+  if (!payload || !isMacMiniMusicConfigured(env)) return;
+  waitUntil(
+    macMiniDiscoverFetch(env, "/api/discover/prepare", "POST", payload, 5_000)
+      .then((response) => response.body?.cancel())
+      .catch(() => {}),
+  );
+}
+
 // Refresh Home's cached mix metadata from the mini in the background. Keep the
 // provider deadline inside the post-response budget; a miss retains the previous
 // card and the detail route can still retry its live playlist fetch.

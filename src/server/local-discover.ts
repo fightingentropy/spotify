@@ -12,6 +12,7 @@ import {
   LOCAL_MEDIA_DISCOVER_DIRNAME,
 } from "../lib/local-media-path";
 import type { PlayerSong } from "../types/player";
+import { createDiscoverPrepareQueue } from "./discover-prepare-queue";
 import { createDiscoverStageCoordinator } from "./discover-stage-coordinator";
 import { json, jsonCached, readJsonBody } from "./local-http";
 import {
@@ -164,6 +165,7 @@ let discoverManifestCache: DiscoverManifest | null = null;
 let discoverManifestCachePath = "";
 let discoverManifestChain: Promise<unknown> = Promise.resolve();
 const coordinateDiscoverStage = createDiscoverStageCoordinator<DiscoverStagingEntry>();
+const prepareDiscoverTrackSoon = createDiscoverPrepareQueue({ settleMs: 600, retryMs: 10 * 60 * 1000 });
 const failedDurationProbes = new Map<string, number>();
 
 function positiveDurationMs(value: unknown): number | undefined {
@@ -651,6 +653,24 @@ export async function handleDiscoverSync(request: Request): Promise<Response> {
     })();
   }
   return json(await discoverStagingStatusBody(source));
+}
+
+// The Worker sends each search's top song here before anyone taps it. Staging
+// it in the background means a tap on that song joins or reuses this download.
+export async function handleDiscoverPrepare(request: Request): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return forbiddenLibraryResponse();
+  const payload = await readJsonBody<Record<string, unknown>>(request);
+  const item = normalizeDiscoverStageItem(payload && typeof payload === "object" ? { ...payload, preview: true } : null);
+  if (!item) return json({ error: "trackId, title, and artist are required" }, { status: 400 });
+  prepareDiscoverTrackSoon(`${source.root}\0${item.trackId}`, async () => {
+    // A song already in the library plays from there.
+    const wanted = trackKey(item.title, item.artist);
+    if ((await getLibrary(source)).songs.some((song) => trackKey(song.title, song.artist) === wanted)) return true;
+    return (await stageDiscoverTrack(source, item)) !== null;
+  });
+  return json({ queued: true }, { status: 202 });
 }
 
 export async function handleDiscoverStageNow(request: Request): Promise<Response> {

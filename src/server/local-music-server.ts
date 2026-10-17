@@ -96,6 +96,7 @@ import {
   discoverCatalogMetadata,
   findDiscoverStagedSong,
   handleDiscoverPromote,
+  handleDiscoverPrepare,
   handleDiscoverStageNow,
   handleDiscoverStagingStatus,
   handleDiscoverSync,
@@ -1827,6 +1828,9 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
   }
   if (pathname === "/api/discover/stage" && request.method === "POST") {
     return handleDiscoverStageNow(request);
+  }
+  if (pathname === "/api/discover/prepare" && request.method === "POST") {
+    return handleDiscoverPrepare(request);
   }
   if (pathname === "/api/discover/promote" && request.method === "POST") {
     return handleDiscoverPromote(request);
