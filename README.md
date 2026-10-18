@@ -247,6 +247,6 @@ media.
 
 Use `bun run upload` for a dry run and `bun run deploy` to publish through the Node-based `cf` CLI. The Cloudflare Vite plugin beta reads `cloudflare.config.ts`. Existing local D1 state and type-generation commands remain on Wrangler.
 
-Pinned CLI: `cf@1.0.0-beta.12` on Node 22.18 or newer. `cf auth login` is separate from Wrangler login. Verify the selected account before remote operations. Deployment settings live in `cloudflare.config.ts`; keep the original Wrangler configuration for local data and any remaining Wrangler commands.
+Pinned CLI: `cf@1.0.0-beta.17` on Node 22.18 or newer. `cf auth login` is separate from Wrangler login. Verify the selected account before remote operations. Deployment settings live in `cloudflare.config.ts`; keep the original Wrangler configuration for local data and any remaining Wrangler commands.
 
 `bun run build` also copies the generated Cloudflare static assets to `dist/client`, preserving the Mac mini static-server and deployment paths. Use this script before a Mini deployment; direct `vite build` does not stage that copy.
