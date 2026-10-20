@@ -1,4 +1,4 @@
-import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -39,14 +39,7 @@ type PlaylistDetailScreenProps = {
   playlistId?: string;
   apiPath?: string;
   queueContextKey?: `playlist:${string}`;
-  localPayload?: PlaylistPayload;
-  localLoading?: boolean;
-  localError?: string | null;
-  onLocalRetry?: () => void;
-  coverContent?: ReactElement;
-  showDownloadAction?: boolean;
   emptyTitle?: string;
-  emptySubtitle?: string;
 };
 
 export function PlaylistDetailScreen({
@@ -54,14 +47,7 @@ export function PlaylistDetailScreen({
   playlistId,
   apiPath,
   queueContextKey,
-  localPayload,
-  localLoading = false,
-  localError = null,
-  onLocalRetry,
-  coverContent,
-  showDownloadAction = true,
   emptyTitle,
-  emptySubtitle,
 }: PlaylistDetailScreenProps = {}) {
   const insets = useSafeAreaInsets();
   const { id: routeId } = useLocalSearchParams<{ id: string }>();
@@ -73,7 +59,7 @@ export function PlaylistDetailScreen({
   // navigator, so apiPath is absent even though the resolved request is still
   // provider-backed. Classify the actual request path to preserve local-first
   // reconciliation and offline filtering on every entry point.
-  const providerReadThrough = !localPayload && isProviderReadThroughRequest(requestPath);
+  const providerReadThrough = isProviderReadThroughRequest(requestPath);
   const remotePlaylist = useApiData<PlaylistPayload>(
     withAccountScope(requestPath, user?.id ?? status),
     // Unknown until the server answers. Treating the loading state as an
@@ -81,14 +67,11 @@ export function PlaylistDetailScreen({
     // likes store; catalog/read-through playlists deliberately return null too.
     { playlist: null, songs: [], likedSongIds: null },
     {
-      enabled: !localPayload && status !== "loading" && !!id,
+      enabled: status !== "loading" && !!id,
       keepPreviousData: !providerReadThrough,
     },
   );
-  const data = localPayload ?? remotePlaylist.data;
-  const loading = localPayload ? localLoading : remotePlaylist.loading;
-  const error = localPayload ? localError : remotePlaylist.error;
-  const retry = localPayload ? (onLocalRetry ?? remotePlaylist.retry) : remotePlaylist.retry;
+  const { data, loading, error, retry } = remotePlaylist;
   const library = useApiData<SearchIndexPayload>(
     withAccountScope("/api/search-index", user?.id ?? status),
     { songs: [] },
@@ -105,7 +88,7 @@ export function PlaylistDetailScreen({
     [accountScope, offlineRecords],
   );
   const spotifyCatalogPlaylist =
-    !localPayload && !!apiPath && apiPath.startsWith("/api/catalog/spotify/playlists/");
+    !!apiPath && apiPath.startsWith("/api/catalog/spotify/playlists/");
   const [additionalSongs, setAdditionalSongs] = useState<PlaylistPayload["songs"]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -377,11 +360,11 @@ export function PlaylistDetailScreen({
               borderColor: colors.hairline,
             }}
           >
-            {coverContent ?? (cover ? (
+            {cover ? (
               <CoverImage src={cover} style={{ width: "100%", height: "100%" }} />
             ) : (
               <Music size={52} color={colors.muted} />
-            ))}
+            )}
           </View>
         </View>
         <Text numberOfLines={2} className="mt-5 text-center text-3xl font-extrabold" style={{ color: "#fff" }}>
@@ -401,7 +384,7 @@ export function PlaylistDetailScreen({
         style={{ backgroundColor: colors.background }}
       >
         <View className="flex-row items-center" style={{ gap: 22 }}>
-          {count > 0 && showDownloadAction ? (
+          {count > 0 ? (
             <BatchDownloadButton songs={songs} scope={contextKey} size={30} />
           ) : null}
           {editable ? (
@@ -514,10 +497,9 @@ export function PlaylistDetailScreen({
                 (providerReadThrough && !isOnline ? "Connect to view this playlist" : "This playlist is empty")
               }
               subtitle={
-                emptySubtitle ??
-                (providerReadThrough && !isOnline
+                providerReadThrough && !isOnline
                   ? "Downloaded matches from your library stay available offline."
-                  : undefined)
+                  : undefined
               }
             />
           )

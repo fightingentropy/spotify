@@ -4,7 +4,6 @@ import { Download, Heart, ListMusic } from "lucide-react-native";
 import { useRouter, type Href } from "expo-router";
 import { Screen, CONTENT_BOTTOM_INSET } from "@/components/ui/Screen";
 import { EmailVerificationBanner } from "@/components/EmailVerificationBanner";
-import { MadeForYouCover } from "@/components/playlist/MadeForYouCover";
 import { ProfileButton } from "@/components/profile/ProfileButton";
 import { PlaylistScrollerTile } from "@/components/playlist/PlaylistScrollerTile";
 import { ScrollerTile } from "@/components/song/ScrollerTile";
@@ -21,7 +20,6 @@ import {
   withAccountScope,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { MADE_FOR_YOU_DEFINITIONS } from "@/lib/made-for-you";
 import { useLikesStore } from "@/store/likes";
 import { usePlayerStore } from "@/store/player";
 import { useOfflineStore, keyFor } from "@/store/offline";
@@ -238,26 +236,6 @@ export default function HomeScreen() {
             </HScroller>
           </View>
         ) : loading && stats.loading ? <ActivityIndicator color={colors.muted} style={{ marginBottom: 24 }} /> : null}
-
-        <View style={{ marginBottom: 34 }}>
-          <SectionTitle title="Made for you" />
-          <HScroller>
-            {MADE_FOR_YOU_DEFINITIONS.map((definition) => (
-              <PlaylistScrollerTile
-                key={definition.kind}
-                name={definition.name}
-                subtitle={definition.subtitle}
-                cover={<MadeForYouCover kind={definition.kind} />}
-                onPress={() =>
-                  router.push({
-                    pathname: "/made-for-you/[kind]",
-                    params: { kind: definition.kind },
-                  } as unknown as Href)
-                }
-              />
-            ))}
-          </HScroller>
-        </View>
 
         {youtubeHome.shelves.map((shelf) => (
           <View key={shelf.id} style={{ marginBottom: 34 }}>

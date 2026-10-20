@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { Text, View } from "react-native";
 import { CoverImage } from "@/components/CoverImage";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -12,13 +11,11 @@ export function PlaylistScrollerTile({
   name,
   subtitle,
   imageUrl,
-  cover,
   onPress,
 }: {
   name: string;
   subtitle?: string;
   imageUrl?: string | null;
-  cover?: ReactNode;
   onPress: () => void;
 }) {
   return (
@@ -38,13 +35,11 @@ export function PlaylistScrollerTile({
           backgroundColor: colors.card,
         }}
       >
-        {cover ?? (
-          <CoverImage
-            src={imageUrl}
-            style={{ width: "100%", height: "100%" }}
-            recyclingKey={imageUrl ?? name}
-          />
-        )}
+        <CoverImage
+          src={imageUrl}
+          style={{ width: "100%", height: "100%" }}
+          recyclingKey={imageUrl ?? name}
+        />
       </View>
       <View style={{ minHeight: 48, paddingHorizontal: 1, paddingTop: 9 }}>
         <Text

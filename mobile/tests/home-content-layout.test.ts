@@ -5,13 +5,14 @@ const homeScreen = await Bun.file(
 ).text();
 
 describe("home content layout", () => {
-  test("keeps generated mixes after the listening shortcuts and history", () => {
-    expect(homeScreen).toContain('<SectionTitle title="Made for you" />');
-    expect(homeScreen).toContain("MADE_FOR_YOU_DEFINITIONS.map");
-    expect(homeScreen).toContain('pathname: "/made-for-you/[kind]"');
-    expect(homeScreen).toContain('<SectionTitle title="Discover" />');
-    expect(homeScreen).toContain("Continue listening");
+  test("keeps YouTube Music shelves between listening history and Discover", () => {
+    expect(homeScreen).not.toContain("Made for you");
     expect(homeScreen).toContain("/api/stats/home");
-    expect(homeScreen.indexOf('<SectionTitle title="Continue listening"')).toBeLessThan(homeScreen.indexOf('<SectionTitle title="Made for you"'));
+    const history = homeScreen.indexOf('<SectionTitle title="Continue listening"');
+    const shelves = homeScreen.indexOf("youtubeHome.shelves.map");
+    const discover = homeScreen.indexOf('<SectionTitle title="Discover" />');
+    expect(history).toBeGreaterThan(-1);
+    expect(history).toBeLessThan(shelves);
+    expect(shelves).toBeLessThan(discover);
   });
 });
