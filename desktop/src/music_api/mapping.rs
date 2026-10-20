@@ -136,6 +136,34 @@ pub(super) fn playlist(
     }
 }
 
+/// A YouTube Music Home shelf. Its cards keep Home's own cover and subtitle;
+/// only a mix opened from elsewhere falls back to the generic mix artwork.
+pub(super) fn home_shelf(shelf: MusicHomeShelf) -> HomeShelf {
+    HomeShelf {
+        id: shelf.id,
+        title: shelf.title,
+        eyebrow: shelf.eyebrow.filter(|eyebrow| !eyebrow.trim().is_empty()),
+        playlists: shelf
+            .playlists
+            .into_iter()
+            .filter(|card| card.id.starts_with("yt-mix-") && !card.name.trim().is_empty())
+            .map(|card| Playlist {
+                uri: format!("spotify:playlist:{}", card.id),
+                id: card.id,
+                name: card.name,
+                description: Some(card.subtitle).filter(|subtitle| !subtitle.is_empty()),
+                images: images(card.image_url.as_deref()),
+                owner: Owner {
+                    display_name: Some("YouTube Music".into()),
+                    ..Default::default()
+                },
+                public: Some(false),
+                ..Default::default()
+            })
+            .collect(),
+    }
+}
+
 pub(super) fn album(a: MusicAlbum) -> Album {
     let id = if a.provider == "youtube" {
         format!("youtube:{}", a.id)

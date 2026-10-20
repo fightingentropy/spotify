@@ -456,6 +456,17 @@ pub struct TrackCount {
     pub total: u32,
 }
 
+/// One shelf of the account owner's YouTube Music Home, in YouTube's order.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct HomeShelf {
+    pub id: String,
+    pub title: String,
+    /// A small label above the title, like "Similar to".
+    #[serde(default)]
+    pub eyebrow: Option<String>,
+    pub playlists: Vec<Playlist>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Playlist {
     #[serde(default)]

@@ -18,7 +18,10 @@ function freshnessMs(url: string): number {
   // Playback history changes more often than the library. Search and catalog
   // results can survive a quick backspace or reopening the search dialog.
   if (path.startsWith("/api/stats/")) return 5_000;
-  if (path.startsWith("/api/search/") || path.startsWith("/api/catalog/") || path === "/api/discover/playlists") {
+  if (
+    path.startsWith("/api/search/") || path.startsWith("/api/catalog/") ||
+    path === "/api/discover/playlists" || path === "/api/discover/youtube-home"
+  ) {
     return 60_000;
   }
   return 30_000;

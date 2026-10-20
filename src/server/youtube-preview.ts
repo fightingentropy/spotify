@@ -41,6 +41,9 @@ export type YouTubePreviewConfig = {
   ytDlpPath: string;
   ffmpegLocation?: string; // dir containing ffmpeg, passed to yt-dlp --ffmpeg-location
   cookiesFile?: string; // optional; anonymous if unset (caps at ~131k opus)
+  // Which signed-in account in the jar playlists are read as (YouTube's authuser
+  // index). Personal mixes differ per account, so this must match Home's account.
+  authUser?: string;
   searchCount: number;
   minConfidence: number;
   // Prefer Premium Opus (774) or AAC (141), then the best available audio.
@@ -145,7 +148,7 @@ function playlistIdFromSearchEntry(entry: YouTubePlaylistSearchRawEntry): string
   return null;
 }
 
-function trustedYouTubeThumbnail(value: unknown): string | null {
+export function trustedYouTubeThumbnail(value: unknown): string | null {
   const raw = stringValue(value);
   if (!raw) return null;
   try {
@@ -525,7 +528,8 @@ export async function fetchYouTubeMusicPlaylist(
   listId: string,
   config: YouTubePreviewConfig = DEFAULT_YOUTUBE_PREVIEW_CONFIG,
 ): Promise<YouTubeMusicPlaylist> {
-  const url = `https://music.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
+  const account = config.cookiesFile && config.authUser && config.authUser !== "0" ? `&authuser=${config.authUser}` : "";
+  const url = `https://music.youtube.com/playlist?list=${encodeURIComponent(listId)}${account}`;
   // NOTE: deliberately NOT YTDLP_BASE_ARGS — that sets --no-playlist, which would
   // collapse the mix to a single track. We want the whole flat list.
   const args = ["--no-warnings", "--flat-playlist", "--dump-single-json", "--socket-timeout", "15", "--retries", "2"];

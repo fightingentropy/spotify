@@ -39,6 +39,31 @@ pub struct MusicSong {
     pub link: Option<String>,
 }
 
+/// A shelf of the owner's YouTube Music Home, as /api/discover/youtube-home sends it.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MusicHomeShelf {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    pub eyebrow: Option<String>,
+    #[serde(default)]
+    pub playlists: Vec<MusicHomeCard>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MusicHomeCard {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub subtitle: String,
+    pub image_url: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct MusicPlaylist {

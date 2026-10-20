@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::models::{PlayHistory, Playlist, Track};
+use crate::api::models::{HomeShelf, PlayHistory, Playlist, Track};
 
 const VERSION: u32 = 1;
 
@@ -17,6 +17,9 @@ pub struct HomeSnapshot {
     pub account_id: String,
     pub playlists: Option<Vec<Playlist>>,
     pub discover: Option<Vec<Playlist>>,
+    /// Absent from snapshots saved before YouTube Music shelves existed.
+    #[serde(default)]
+    pub youtube_shelves: Option<Vec<HomeShelf>>,
     pub top_tracks: Option<Vec<Track>>,
     pub recently_played: Option<Vec<PlayHistory>>,
     pub liked_total: Option<u32>,

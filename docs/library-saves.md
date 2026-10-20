@@ -80,6 +80,20 @@ Deno on its subprocess PATH. If authenticated extraction fails, the downloader
 retries anonymously. A Premium subscription alone does not guarantee every
 extraction yields a Premium format; inspect the saved file when verifying quality.
 
+## YouTube Music Home
+
+For the library owner, Home also shows the playlist shelves from their YouTube
+Music Home ("Listen again", "Mixed for you", "From the community", …) in
+YouTube's order. The private server reads them from the same cookie file and
+drops songs, albums, artists and podcasts. Each card opens the existing
+`yt-mix-<listId>` playlist, whose tracks stage on demand like the Discover Mix.
+
+A cookie file can hold several signed-in Google accounts. Set
+`YOUTUBE_MUSIC_AUTH_USER` to the index of the account whose Home to mirror; it
+defaults to `0`. This is YouTube's `authuser` number, the one in
+`music.youtube.com/?authuser=1`. Playlists opened from Home are read as that
+account too, so personal mixes match. Downloads keep using the default account.
+
 ## Durable likes
 
 The web heart stays pending while the permanent copy is prepared and its like

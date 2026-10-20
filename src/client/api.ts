@@ -325,6 +325,13 @@ export type DiscoverPlaylistsPayload = {
   playlists: PlaylistEntry[];
 };
 
+// The owner's YouTube Music Home, reduced to its playlist shelves in YouTube's
+// order. Each card id is "yt-mix-<listId>" and opens /api/playlist/:id. Other
+// accounts receive no shelves.
+export type YouTubeHomePlaylist = { id: string; name: string; subtitle: string; imageUrl: string | null };
+export type YouTubeHomeShelf = { id: string; title: string; eyebrow?: string; playlists: YouTubeHomePlaylist[] };
+export type YouTubeHomePayload = { shelves: YouTubeHomeShelf[] };
+
 export type SearchIndexPayload = {
   songs: PlayerSong[];
   nextCursor?: string | null;

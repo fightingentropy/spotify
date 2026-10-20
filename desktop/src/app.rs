@@ -1762,6 +1762,14 @@ impl App {
                     .get()
                     .and_then(|playlists| playlists.iter().find(|playlist| playlist.id == id))
             })
+            .or_else(|| {
+                self.home.youtube_shelves.get().and_then(|shelves| {
+                    shelves
+                        .iter()
+                        .flat_map(|shelf| &shelf.playlists)
+                        .find(|playlist| playlist.id == id)
+                })
+            })
     }
 
     pub fn known_album(&self, id: &str) -> Option<&Album> {
@@ -3921,6 +3929,10 @@ impl App {
             term: "Top 50".into(),
             generation,
         });
+        if self.home.youtube_shelves.get().is_none() {
+            self.home.youtube_shelves = Loadable::Loading;
+        }
+        self.backend.api(ApiRequest::YouTubeHome { generation });
     }
 
     /// Asks for the newest episodes of the most recently saved podcasts,
@@ -5270,6 +5282,12 @@ impl App {
                         .collect::<Vec<_>>()
                 });
                 self.home.discover.refresh(filtered);
+            }
+            ApiResponse::YouTubeHome { generation, result } => {
+                if generation != self.home.generation {
+                    return;
+                }
+                self.home.youtube_shelves.refresh(result);
             }
             // A reload reads the playlists from the top again under a new
             // generation, so a page any earlier load asked for no longer
@@ -10153,6 +10171,7 @@ impl App {
         let mut shown = HomeSnapshot::new(&crate::music_backend::api_origin(), account_id);
         shown.playlists = self.library.playlists.get().cloned();
         shown.discover = self.home.discover.get().cloned();
+        shown.youtube_shelves = self.home.youtube_shelves.get().cloned();
         shown.top_tracks = self.home.top_tracks.get().cloned();
         shown.recently_played = self.home.recently_played.get().cloned();
         shown.liked_total = self.library.liked.total;
@@ -10166,6 +10185,9 @@ impl App {
         }
         if let Some(discover) = &snapshot.discover {
             self.home.discover = Loadable::Loaded(discover.clone());
+        }
+        if let Some(shelves) = &snapshot.youtube_shelves {
+            self.home.youtube_shelves = Loadable::Loaded(shelves.clone());
         }
         if let Some(tracks) = &snapshot.top_tracks {
             self.home.top_tracks = Loadable::Loaded(tracks.clone());
@@ -10199,6 +10221,9 @@ impl App {
         {
             snapshot.playlists = snapshot.playlists.or_else(|| last.playlists.clone());
             snapshot.discover = snapshot.discover.or_else(|| last.discover.clone());
+            snapshot.youtube_shelves = snapshot
+                .youtube_shelves
+                .or_else(|| last.youtube_shelves.clone());
             snapshot.top_tracks = snapshot.top_tracks.or_else(|| last.top_tracks.clone());
             snapshot.recently_played = snapshot
                 .recently_played

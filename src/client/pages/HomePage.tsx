@@ -12,6 +12,7 @@ import {
   type DiscoverPlaylistsPayload,
   type HomePayload,
   type StatsHomePayload,
+  type YouTubeHomePayload,
 } from "@/client/api";
 import { useAuth } from "@/client/auth";
 import { warmPlaybackSong } from "@/client/playback-warm";
@@ -125,6 +126,16 @@ export default function HomePage() {
     },
   );
   const discoverPlaylists = discoverData.playlists;
+  // The owner's YouTube Music Home shelves, in YouTube's order. Empty for other
+  // accounts and when the mini can't reach YouTube, so failures stay quiet.
+  const { data: youtubeHome } = useApiData<YouTubeHomePayload>(
+    withAccountScope("/api/discover/youtube-home", user?.id ?? status),
+    { shelves: [] },
+    {
+      enabled: status === "authenticated",
+      keepPreviousData: true,
+    },
+  );
 
   const setQueue = usePlayerStore((state) => state.setQueue);
   const play = usePlayerStore((state) => state.play);
@@ -226,7 +237,7 @@ export default function HomePage() {
     );
   };
 
-  const renderDiscoverPlaylistTile = (playlist: DiscoverPlaylistsPayload["playlists"][number]) => (
+  const renderPlaylistTile = (playlist: { id: string; name: string; imageUrl?: string | null }, subtitle: string) => (
     <Link
       key={playlist.id}
       to={`/playlist/${playlist.id}`}
@@ -248,7 +259,7 @@ export default function HomePage() {
           {playlist.name}
         </div>
         <div className="home-card-artist">
-          {playlist.songsCount > 0 ? `Playlist • ${playlist.songsCount} songs` : "Playlist"}
+          {subtitle}
         </div>
       </div>
     </Link>
@@ -293,9 +304,18 @@ export default function HomePage() {
 
         {statsError ? <div className="mb-6"><PageError compact message={statsError} onRetry={retryStats} retryLabel="Retry listening history" /></div> : null}
 
+        {youtubeHome.shelves.map((shelf) => (
+          <HomeRow key={shelf.id} title={shelf.title} eyebrow={shelf.eyebrow}>
+            {shelf.playlists.map((playlist) => renderPlaylistTile(playlist, playlist.subtitle || "Playlist"))}
+          </HomeRow>
+        ))}
+
         {discoverPlaylists.length > 0 ? (
           <HomeRow title="Discover">
-            {discoverPlaylists.map((playlist) => renderDiscoverPlaylistTile(playlist))}
+            {discoverPlaylists.map((playlist) => renderPlaylistTile(
+              playlist,
+              playlist.songsCount > 0 ? `Playlist • ${playlist.songsCount} songs` : "Playlist",
+            ))}
           </HomeRow>
         ) : discoverPending && !historyPending ? <HomeLoadingRow /> : null}
 
@@ -303,7 +323,7 @@ export default function HomePage() {
 
         {error ? <div className="mb-6"><PageError compact message={error} onRetry={retry} retryLabel="Retry library sync" /></div> : null}
 
-        {!historyPending && !discoverPending && !statsError && !discoverError && !hasHistory && discoverPlaylists.length === 0 ? (
+        {!historyPending && !discoverPending && !statsError && !discoverError && !hasHistory && discoverPlaylists.length === 0 && youtubeHome.shelves.length === 0 ? (
           <div className="wf-empty-state">
             <div className="mb-4 flex justify-center"><Music2 size={24} /></div>
             <h2 className="wf-section-title">No listening history yet</h2>

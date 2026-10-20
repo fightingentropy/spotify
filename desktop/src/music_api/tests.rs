@@ -960,6 +960,49 @@ async fn home_collections_keep_chart_and_mix_identity_and_play_through_our_api()
 }
 
 #[tokio::test]
+async fn youtube_home_shelves_keep_their_order_covers_and_playlist_routes() {
+    let server = Server::new(|request| match request.path.as_str() {
+        "/api/discover/youtube-home" => reply(json!({"shelves":[
+            {"id":"listen-again","title":"Listen again","playlists":[
+                {"id":"yt-mix-PLabc123","name":"2000s hit","subtitle":"A B • 85K views",
+                 "imageUrl":"https://yt3.googleusercontent.com/cover=s576"},
+                {"id":"not-a-mix","name":"Ignored","subtitle":"","imageUrl":null}
+            ]},
+            {"id":"timbaland","title":"Timbaland","eyebrow":"SIMILAR TO","playlists":[
+                {"id":"yt-mix-RDCLAK5uy_mix","name":"Hip-Hop Classics","subtitle":"","imageUrl":null}
+            ]},
+            {"id":"empty","title":"Empty","playlists":[]}
+        ]})),
+        _ => error(404),
+    });
+    let responses = server
+        .api()
+        .handle(ApiRequest::YouTubeHome { generation: 7 })
+        .await;
+    let ApiResponse::YouTubeHome {
+        generation,
+        result: Ok(shelves),
+    } = &responses[0]
+    else {
+        panic!("missing YouTube Music shelves")
+    };
+    assert_eq!(*generation, 7);
+    assert_eq!(
+        shelves.iter().map(|shelf| shelf.title.as_str()).collect::<Vec<_>>(),
+        ["Listen again", "Timbaland"]
+    );
+    let first = &shelves[0].playlists;
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].uri, "spotify:playlist:yt-mix-PLabc123");
+    assert_eq!(first[0].description.as_deref(), Some("A B • 85K views"));
+    // Home's own cover, not the generic mix artwork a detail read falls back to.
+    assert_eq!(first[0].images[0].url, "https://yt3.googleusercontent.com/cover=s576");
+    assert_eq!(first[0].owner_name(), "YouTube Music");
+    assert_eq!(shelves[1].eyebrow.as_deref(), Some("SIMILAR TO"));
+    assert!(shelves[1].playlists[0].images.is_empty());
+}
+
+#[tokio::test]
 async fn personal_home_collections_are_read_only_ordered_and_share_the_home_read() {
     let server = Server::new(|request| {
         assert_eq!(request.path, "/api/stats/home");

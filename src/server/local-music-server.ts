@@ -100,6 +100,7 @@ import {
   handleDiscoverStageNow,
   handleDiscoverStagingStatus,
   handleDiscoverSync,
+  handleYouTubeMusicHome,
   handleYouTubeMusicPlaylist,
   handleYouTubePlaylistSearch,
   signedDiscoverStagedSongs,
@@ -1814,6 +1815,10 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/youtube/search/playlists" && request.method === "GET") {
     return handleYouTubePlaylistSearch(request, url);
+  }
+
+  if (pathname === "/api/youtube/home" && request.method === "GET") {
+    return handleYouTubeMusicHome(request);
   }
 
   if (pathname.startsWith("/api/youtube/playlists/") && request.method === "GET") {

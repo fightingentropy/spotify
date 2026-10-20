@@ -6,6 +6,8 @@ const mobileStack = await Bun.file(new URL("../mobile/src/app/_layout.tsx", impo
 const mobileTabs = await Bun.file(new URL("../mobile/src/app/(tabs)/_layout.tsx", import.meta.url)).text();
 const webStats = await Bun.file(new URL("../src/client/pages/ListeningStatsPage.tsx", import.meta.url)).text();
 const mobileStats = await Bun.file(new URL("../mobile/src/app/listening-stats.tsx", import.meta.url)).text();
+const webHome = await Bun.file(new URL("../src/client/pages/HomePage.tsx", import.meta.url)).text();
+const mobileHome = await Bun.file(new URL("../mobile/src/app/(tabs)/index.tsx", import.meta.url)).text();
 
 describe("web/mobile navigation parity", () => {
   test("keeps every shared client workflow reachable on both platforms", () => {
@@ -25,5 +27,10 @@ describe("web/mobile navigation parity", () => {
     expect(mobileStats).toContain('withAccountScope("/api/stats/listening"');
     expect(webStats).toContain("minutesListened");
     expect(mobileStats).toContain("minutesListened");
+  });
+
+  test("shows the YouTube Music Home shelves on web and mobile Home", () => {
+    expect(webHome).toContain('withAccountScope("/api/discover/youtube-home"');
+    expect(mobileHome).toContain('withAccountScope("/api/discover/youtube-home"');
   });
 });

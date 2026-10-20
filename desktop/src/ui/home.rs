@@ -13,6 +13,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     theme::text(ui, greeting.as_ref(), theme::semibold(26.0), palette.text);
     ui.add_space(14.0);
     collections(app, ui);
+    youtube_shelves(app, ui);
     library_playlists(app, ui);
     recently_played(app, ui);
 }
@@ -171,6 +172,35 @@ fn collection_card(app: &mut App, ui: &mut egui::Ui, playlist: &Playlist, menu: 
                     owned.then_some(playlist),
                 );
             });
+    }
+}
+
+/// The owner's YouTube Music Home shelves, in YouTube's order. They are made
+/// for the listener, so they follow the Made for you setting.
+fn youtube_shelves(app: &mut App, ui: &mut egui::Ui) {
+    if !app.settings.home.made_for_you.visible {
+        return;
+    }
+    let Some(shelves) = app.home.youtube_shelves.get().cloned() else {
+        return;
+    };
+    let palette = app.palette;
+    for shelf in &shelves {
+        widgets::labeled_shelf(
+            ui,
+            &palette,
+            &format!("home-youtube-{}", shelf.id),
+            shelf.eyebrow.as_deref(),
+            &shelf.title,
+            |ui| {
+                for playlist in &shelf.playlists {
+                    collection_card(app, ui, playlist, false);
+                }
+            },
+        );
+    }
+    if !shelves.is_empty() {
+        ui.add_space(6.0);
     }
 }
 

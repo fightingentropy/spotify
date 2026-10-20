@@ -373,6 +373,30 @@ app.get("/api/discover/playlists", async (c) => {
   });
 });
 
+// The owner's YouTube Music Home as playlist shelves. Unlike the Discover cards it
+// is called as the real viewer: the mini answers only for library owners, so any
+// other account gets an empty section instead of the owner's listening history.
+app.get("/api/discover/youtube-home", async (c) => {
+  const user = c.get("user");
+  const empty = (maxAge: number) => jsonCached(c, { shelves: [] }, { cacheControl: `private, max-age=${maxAge}` });
+  if (!user || !isMacMiniMusicConfigured(c.env)) return empty(300);
+  const res = await fetchMacMini({
+    env: c.env,
+    target: "/api/youtube/home",
+    method: "GET",
+    user,
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+  }).catch(() => null);
+  if (!res?.ok) {
+    await res?.body?.cancel().catch(() => {});
+    return empty(res?.status === 403 ? 300 : 30);
+  }
+  return new Response(await res.text(), {
+    headers: { "content-type": "application/json", "cache-control": "private, max-age=300, stale-while-revalidate=3600" },
+  });
+});
+
 // Tap a not-yet-staged Discover track: resolve + materialize ONE track into the
 // staging cache (blocking, like a normal import) and return a playable song. The
 // song is NOT in the library until a "keep" action promotes it.

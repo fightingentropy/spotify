@@ -43,6 +43,8 @@ The route-level parity contract and intentional platform differences are in
   cached search fields, and deferred filtering.
 - Discover cards return cached metadata or fallback cards immediately while
   provider metadata refreshes in the background.
+- The library owner's Home mirrors the playlist shelves of their YouTube Music
+  Home on web, Expo and desktop. See [library saves](docs/library-saves.md#youtube-music-home).
 - Playback warms upcoming media only while playing and stops on pause or queue
   changes.
 - The Now Playing sidebar previews live lyrics. The player microphone opens a

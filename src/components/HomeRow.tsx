@@ -3,10 +3,13 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 export function HomeRow({
   title,
+  eyebrow,
   description,
   children,
 }: {
   title: string;
+  // A small label above the title, like YouTube Music's "Similar to".
+  eyebrow?: string;
   description?: string;
   children: ReactNode;
 }) {
@@ -48,6 +51,7 @@ export function HomeRow({
     <section aria-labelledby={`${rowId}-heading`} className="home-row">
       <div className="home-row-heading">
         <div className="min-w-0">
+          {eyebrow ? <p className="mb-0.5 text-[11px] font-semibold uppercase leading-4 tracking-[0.08em] text-white/45">{eyebrow}</p> : null}
           <h2 id={`${rowId}-heading`} className="wf-section-title">{title}</h2>
           {description ? <p className="mt-1 text-[13px] leading-5 text-white/45">{description}</p> : null}
         </div>

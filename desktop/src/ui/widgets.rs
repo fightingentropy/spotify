@@ -2586,7 +2586,27 @@ pub fn shelf(
     title: &str,
     add_contents: impl FnOnce(&mut Ui),
 ) {
+    labeled_shelf(ui, palette, id, None, title, add_contents);
+}
+
+/// A shelf whose title may carry a small label above it, like "Similar to".
+pub fn labeled_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    eyebrow: Option<&str>,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
     ui.add_space(8.0);
+    if let Some(eyebrow) = eyebrow {
+        theme::text(
+            ui,
+            &eyebrow.to_uppercase(),
+            theme::semibold(11.0),
+            palette.secondary,
+        );
+    }
     theme::section_title(ui, palette, title);
     ui.add_space(4.0);
     crate::autoscroll::show(

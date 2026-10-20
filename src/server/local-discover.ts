@@ -44,6 +44,7 @@ import {
   type YouTubePlaylistSearchResult,
   type YouTubePreviewConfig,
 } from "./youtube-preview";
+import { fetchYouTubeMusicHome, type YouTubeMusicHomePlaylist, type YouTubeMusicHomeShelf } from "./youtube-music-home";
 
 export type DiscoverDeps = {
   librarySourceForRequest: (request: Request) => LibrarySource | null;
@@ -281,12 +282,20 @@ function youtubeCookiesFile(): string | undefined {
   return existsSync(standard) ? standard : undefined;
 }
 
+// The jar can hold several signed-in Google accounts. Home and its playlists are
+// read as this one (YouTube's authuser index); downloads keep the default account.
+function youtubeMusicAuthUser(): string {
+  const fromEnv = process.env.YOUTUBE_MUSIC_AUTH_USER?.trim() || "";
+  return /^\d{1,2}$/.test(fromEnv) ? fromEnv : "0";
+}
+
 export function youtubePreviewConfig(): YouTubePreviewConfig {
   return {
     ...DEFAULT_YOUTUBE_PREVIEW_CONFIG,
     ytDlpPath: ytDlpPath(),
     ffmpegLocation: dirname(ffmpegPath()),
     cookiesFile: youtubeCookiesFile(),
+    authUser: youtubeMusicAuthUser(),
     // yt-dlp shells out to deno (Homebrew) to solve YouTube's n-challenge; under
     // launchd the server PATH omits it, so add the likely bin dirs explicitly.
     extraPath: [dirname(ytDlpPath()), dirname(ffmpegPath()), "/opt/homebrew/bin", `${homedir()}/.local/bin`],
@@ -704,6 +713,62 @@ async function fetchYouTubeMusicPlaylistCached(
   return mix;
 }
 
+// Home is ~3 s of sequential innertube pages, so serve the last read and refresh
+// it in the background once it is a few minutes old. YouTube reshuffles Home on
+// every load; a short staleness is invisible.
+const YT_HOME_FRESH_MS = 15 * 60 * 1000;
+const YT_HOME_RETAIN_MS = 24 * 60 * 60 * 1000;
+let ytHome: { at: number; shelves: YouTubeMusicHomeShelf[] } | null = null;
+let ytHomeRefresh: Promise<YouTubeMusicHomeShelf[]> | null = null;
+
+function refreshYouTubeMusicHome(cookiesFile: string): Promise<YouTubeMusicHomeShelf[]> {
+  ytHomeRefresh ??= fetchYouTubeMusicHome({ cookiesFile, authUser: youtubeMusicAuthUser() })
+    .then((shelves) => {
+      // An empty read (expired session, YouTube hiccup) keeps the last good Home.
+      if (shelves.length) ytHome = { at: Date.now(), shelves };
+      return shelves.length ? shelves : ytHome?.shelves ?? [];
+    })
+    .finally(() => {
+      ytHomeRefresh = null;
+    });
+  return ytHomeRefresh;
+}
+
+async function youtubeMusicHomeShelves(cookiesFile: string): Promise<YouTubeMusicHomeShelf[]> {
+  const age = ytHome ? Date.now() - ytHome.at : Infinity;
+  if (ytHome && age < YT_HOME_FRESH_MS) return ytHome.shelves;
+  if (ytHome && age < YT_HOME_RETAIN_MS) {
+    void refreshYouTubeMusicHome(cookiesFile).catch(() => {});
+    return ytHome.shelves;
+  }
+  return refreshYouTubeMusicHome(cookiesFile);
+}
+
+function youtubeMusicHomeCard(listId: string): YouTubeMusicHomePlaylist | undefined {
+  const id = `yt-mix-${listId}`;
+  for (const shelf of ytHome?.shelves ?? []) {
+    const card = shelf.playlists.find((playlist) => playlist.id === id);
+    if (card) return card;
+  }
+  return undefined;
+}
+
+// The owner's YouTube Music Home as playlist shelves. It exposes their listening
+// history, so it is answered only for the shared (owner) library.
+export async function handleYouTubeMusicHome(request: Request): Promise<Response> {
+  if (!currentUserIdForRequest(request)) return json({ error: "Unauthorized" }, { status: 401 });
+  const source = librarySourceForRequest(request);
+  if (!source || !source.shared) return forbiddenLibraryResponse();
+  const cookiesFile = youtubeCookiesFile();
+  if (!cookiesFile) return json({ shelves: [] });
+  try {
+    const shelves = await youtubeMusicHomeShelves(cookiesFile);
+    return jsonCached(request, { shelves }, { cacheControl: "private, max-age=300, stale-while-revalidate=3600" });
+  } catch {
+    return json({ error: "Couldn't load YouTube Music Home" }, { status: 502 });
+  }
+}
+
 const YT_PLAYLIST_SEARCH_LIMIT = 8;
 const YT_PLAYLIST_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const YT_PLAYLIST_SEARCH_CACHE_MAX_ENTRIES = 64;
@@ -834,7 +899,8 @@ export async function handleYouTubeMusicPlaylist(request: Request, listId: strin
         // the playlist-level s_p thumbnail, which yt-dlp sometimes reports at a size
         // that 404s (e.g. maxresdefault for a mix that only has mq/sd) → a broken
         // cover. The first track's art is a fine, reliable mix cover.
-        imageUrl: songs.find((song) => song.imageUrl)?.imageUrl || mix.imageUrl || null,
+        // A playlist opened from Home keeps its Home cover.
+        imageUrl: youtubeMusicHomeCard(listId)?.imageUrl || songs.find((song) => song.imageUrl)?.imageUrl || mix.imageUrl || null,
         userId,
         createdAt: new Date().toISOString(),
       },

@@ -1220,6 +1220,20 @@ impl MusicApi {
                     result,
                 }
             }
+            Q::YouTubeHome { generation } => {
+                let result = async {
+                    let value = self.get("/api/discover/youtube-home").await?;
+                    let shelves: Vec<MusicHomeShelf> =
+                        decode(value.get("shelves").cloned().unwrap_or_else(|| json!([])))?;
+                    Ok(shelves
+                        .into_iter()
+                        .map(mapping::home_shelf)
+                        .filter(|shelf| !shelf.title.is_empty() && !shelf.playlists.is_empty())
+                        .collect())
+                }
+                .await;
+                R::YouTubeHome { generation, result }
+            }
             Q::Discover { term, generation } => {
                 let result = async {
                     let value = self.get("/api/discover/playlists").await?;

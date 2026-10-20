@@ -28,6 +28,8 @@ export function apiReadTimeoutMs(url: string): number {
   if (path === "/api/search/catalog") return CATALOG_SEARCH_TIMEOUT_MS;
   if (path.startsWith("/api/catalog/")) return SPOTIFY_CATALOG_TIMEOUT_MS;
   if (path.startsWith("/api/playlist/yt-mix-")) return YOUTUBE_PLAYLIST_TIMEOUT_MS;
+  // A cold mini reads YouTube Music Home page by page before it can answer.
+  if (path === "/api/discover/youtube-home") return YOUTUBE_PLAYLIST_TIMEOUT_MS;
   if (path === "/api/playlist/discover-top50") return SPOTIFY_CATALOG_TIMEOUT_MS;
   return DEFAULT_READ_TIMEOUT_MS;
 }

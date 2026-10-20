@@ -593,6 +593,8 @@ pub struct HomeData {
     pub recommendations: Loadable<Vec<Track>>,
     /// Curated playlists returned by our music API, including charts and mixes.
     pub discover: Loadable<Vec<Playlist>>,
+    /// The account owner's YouTube Music Home, reduced to playlist shelves.
+    pub youtube_shelves: Loadable<Vec<HomeShelf>>,
     /// Saved podcasts with their newest episodes, in library order, for the
     /// podcast shelf. A refresh replaces them only once it answers.
     pub podcasts: Vec<(Show, Vec<Episode>)>,

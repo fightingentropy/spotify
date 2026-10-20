@@ -108,6 +108,10 @@ pub enum ApiRequest {
         term: String,
         generation: u64,
     },
+    /// The owner's YouTube Music Home shelves, from our music API only.
+    YouTubeHome {
+        generation: u64,
+    },
     MyPlaylists {
         offset: u32,
         generation: u64,
@@ -297,6 +301,7 @@ impl ApiRequest {
                 | Self::TopArtists { .. }
                 | Self::Recommendations { .. }
                 | Self::Discover { .. }
+                | Self::YouTubeHome { .. }
                 | Self::MyPlaylists { .. }
                 | Self::PlaylistSample { .. }
                 | Self::Contains { .. }
@@ -340,6 +345,10 @@ pub enum ApiResponse {
         term: String,
         generation: u64,
         result: ApiResult<Vec<Playlist>>,
+    },
+    YouTubeHome {
+        generation: u64,
+        result: ApiResult<Vec<HomeShelf>>,
     },
     MyPlaylists {
         offset: u32,
@@ -3374,9 +3383,9 @@ mod upstream_regressions {
             }
             ApiRequest::MyPlaylists { .. } => Operation::PlaylistLibrary,
             ApiRequest::CreatePlaylist { .. } => Operation::PlaylistCreation,
-            ApiRequest::Discover { .. } | ApiRequest::SearchPlaylists { .. } => {
-                Operation::PlaylistSearch
-            }
+            ApiRequest::Discover { .. }
+            | ApiRequest::YouTubeHome { .. }
+            | ApiRequest::SearchPlaylists { .. } => Operation::PlaylistSearch,
             ApiRequest::SearchCatalogue { .. } => Operation::CatalogSearch,
             ApiRequest::Search { .. } => Operation::PlaylistSearch,
             ApiRequest::Playlist { id, .. } => Operation::PlaylistMetadata(api.playlist_access(id)),
@@ -3417,6 +3426,14 @@ mod upstream_regressions {
                 result: Ok(playlists),
                 ..
             } => api.observe_playlists(playlists),
+            ApiResponse::YouTubeHome {
+                result: Ok(shelves),
+                ..
+            } => {
+                for shelf in shelves {
+                    api.observe_playlists(&shelf.playlists);
+                }
+            }
             ApiResponse::MyPlaylists {
                 result: Ok(page), ..
             } => api.observe_playlists(&page.items),
@@ -3547,6 +3564,11 @@ mod upstream_regressions {
             } => ApiResponse::Recommendations {
                 generation,
                 result: routed!(recommendations(&seed_tracks, &seed_artists, 20)),
+            },
+            // YouTube Music Home is our music server's; Spotify has no equivalent.
+            ApiRequest::YouTubeHome { generation } => ApiResponse::YouTubeHome {
+                generation,
+                result: Ok(Vec::new()),
             },
             ApiRequest::Discover { term, generation } => {
                 let result = routed!(search(&term, &["playlist"]))

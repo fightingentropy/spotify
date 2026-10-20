@@ -16,6 +16,7 @@ import {
   type HomePayload,
   type StatsHomePayload,
   type LibraryPayload,
+  type YouTubeHomePayload,
   useApiData,
   withAccountScope,
 } from "@/lib/api";
@@ -37,9 +38,23 @@ function greetingForNow(): string {
   return "Good evening";
 }
 
-function SectionTitle({ title }: { title: string }) {
+function SectionTitle({ title, eyebrow }: { title: string; eyebrow?: string }) {
   return (
     <View style={{ marginBottom: 14 }}>
+      {eyebrow ? (
+        <Text
+          style={{
+            marginBottom: 2,
+            color: colors.muted,
+            fontSize: 11,
+            fontWeight: "600",
+            letterSpacing: 0.9,
+            textTransform: "uppercase",
+          }}
+        >
+          {eyebrow}
+        </Text>
+      ) : null}
       <Text
         style={{
           color: colors.foreground,
@@ -131,6 +146,13 @@ export default function HomeScreen() {
     { enabled: status !== "loading", keepPreviousData: true },
   );
   const discoverPlaylists = discoverData.playlists;
+  // The owner's YouTube Music Home shelves, in YouTube's order. Empty for other
+  // accounts and when the mini can't reach YouTube.
+  const { data: youtubeHome } = useApiData<YouTubeHomePayload>(
+    withAccountScope("/api/discover/youtube-home", scope),
+    { shelves: [] },
+    { enabled: status === "authenticated", keepPreviousData: true },
+  );
 
   if (status === "loading") {
     return (
@@ -236,6 +258,23 @@ export default function HomeScreen() {
             ))}
           </HScroller>
         </View>
+
+        {youtubeHome.shelves.map((shelf) => (
+          <View key={shelf.id} style={{ marginBottom: 34 }}>
+            <SectionTitle title={shelf.title} eyebrow={shelf.eyebrow} />
+            <HScroller>
+              {shelf.playlists.map((pl) => (
+                <PlaylistScrollerTile
+                  key={pl.id}
+                  name={pl.name}
+                  subtitle={pl.subtitle || "Playlist"}
+                  imageUrl={pl.imageUrl}
+                  onPress={() => router.push(`/playlist/${pl.id}`)}
+                />
+              ))}
+            </HScroller>
+          </View>
+        ))}
 
         {discoverPlaylists.length > 0 ? (
           <View style={{ marginBottom: 34 }}>
