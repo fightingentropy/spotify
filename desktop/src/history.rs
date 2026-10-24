@@ -1,9 +1,8 @@
 //! Local play history.
 //!
-//! Spotify does not record playback from librespot clients. Spotifast stores
-//! local plays and merges them with `/me/player/recently-played`, which covers
-//! other devices. A track counts only after enough listening time, so skips do
-//! not fill the history.
+//! The app stores local plays and merges them with the music server's
+//! recently played songs, which cover other devices. A track counts only
+//! after enough listening time, so skips do not fill the history.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -87,14 +86,6 @@ impl History {
             },
         );
         self.plays.truncate(KEPT);
-        self.dirty = true;
-    }
-
-    pub fn clear(&mut self) {
-        if self.plays.is_empty() {
-            return;
-        }
-        self.plays.clear();
         self.dirty = true;
     }
 }

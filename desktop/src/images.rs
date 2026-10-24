@@ -251,18 +251,6 @@ impl ArtLoader {
             *retained = jpeg + decoded_and_texture_bytes(width, height);
         }
     }
-
-    pub fn clear_disk_cache(&self) -> std::io::Result<u64> {
-        let mut removed = 0;
-        for entry in std::fs::read_dir(&self.inner.cache_dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() {
-                removed += entry.metadata().map(|m| m.len()).unwrap_or(0);
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-        Ok(removed)
-    }
 }
 
 /// Which artwork to let go of so that what is kept fits `budget`,

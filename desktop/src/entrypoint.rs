@@ -1,4 +1,5 @@
-// Native StreamArena desktop entry point.
+//! The desktop app's entry point: the command line, the single-instance
+//! guard, logging, and the window loop.
 
 use spotifast::{app, backend, paths, settings, single_instance, util};
 
@@ -29,10 +30,6 @@ struct Cli {
 
     #[cfg(feature = "demo")]
     #[arg(long, requires = "demo")]
-    demo_update_feed: Option<String>,
-
-    #[cfg(feature = "demo")]
-    #[arg(long, requires = "demo")]
     demo_data: Option<std::path::PathBuf>,
 
     /// Page to open in demo mode, e.g. `home`, `playlist:pl1`, `artist:art0`.
@@ -41,7 +38,7 @@ struct Cli {
     demo_page: Option<String>,
 
     /// Extra demo surfaces: a comma-separated list of `queue`, `playing-next`,
-    /// `devices`, `shortcuts`, `create`, `light`, `focus`, `update`, `personal-app`,
+    /// `devices`, `shortcuts`, `create`, `light`, `focus`,
     /// `windows-taskbar`, `german`, `lyrics`, `lyrics-fullscreen`, `collection-loading`,
     /// `shuffle-selected`, `shuffle-started`, `undated-mix`, `signed-out`, `connecting`, `library-list`,
     /// `library-list-narrow`, `library-list-wide`, `library-grid`, `library-grid-narrow`,
@@ -259,10 +256,10 @@ fn missing_pulseaudio_properties(
         .filter(move |(key, _)| !is_set(key))
 }
 
-/// Gives the librespot PulseAudio backend useful stream metadata.
+/// Gives the player's PulseAudio stream useful metadata.
 ///
-/// That backend leaves both names empty unless its caller provides them. An
-/// unnamed stream cannot be identified reliably by mixers and audio processors.
+/// The names stay empty unless the process provides them. An unnamed stream
+/// cannot be identified reliably by mixers and audio processors.
 #[cfg(target_os = "linux")]
 fn configure_pulseaudio_properties() {
     for (key, value) in missing_pulseaudio_properties(|key| std::env::var_os(key).is_some()) {
@@ -396,7 +393,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         None
     };
     let default_filter = if cli.verbose {
-        "info,librespot=info,spotifast=debug"
+        "info,spotifast=debug"
     } else {
         // Which system face draws each script the interface font lacks,
         // one line per script at startup, for reports of odd-looking text.
@@ -454,11 +451,6 @@ pub(crate) fn run() -> eframe::Result<()> {
     spotifast::emoji::install(demo);
     #[cfg(not(feature = "demo"))]
     spotifast::emoji::install(false);
-    // macOS delivers links as Apple Events; install before the event loop.
-    #[cfg(target_os = "macos")]
-    if let Some(guard) = &instance {
-        spotifast::mac_links::install(guard.commands(), waker.clone());
-    }
 
     // A capture run is a throwaway process next to the real one: no tray
     // icon of its own, and no second MPRIS service to fight over media keys.
@@ -500,22 +492,6 @@ pub(crate) fn run() -> eframe::Result<()> {
     if demo {
         spotifast::demo::populate(&mut app);
         spotifast::demo::apply_flags(&mut app, cli.demo_page.as_deref(), cli.demo_show.as_deref());
-        if let Some(feed) = &cli.demo_update_feed {
-            match fastframe_update::Source::local(feed) {
-                Ok(source) => app.update_source = source,
-                Err(error) => {
-                    eprintln!("{error:#}");
-                    std::process::exit(2);
-                }
-            }
-            app.update_restart_arguments =
-                vec!["--demo".into(), "--demo-page".into(), "settings".into()];
-            if let Some(base) = &cli.demo_data {
-                app.update_restart_arguments
-                    .extend(["--demo-data".into(), base.to_string_lossy().into_owned()]);
-            }
-            app.actions.push(spotifast::model::Action::CheckForUpdates);
-        }
         if let Some(locale) = cli.demo_language {
             app.settings.language = spotifast::settings::LanguageChoice::Locale(locale);
             app.locale = locale;
@@ -1222,7 +1198,6 @@ impl eframe::App for Shell {
                 MenuCommand::Sidebar => Action::ToggleSidebar,
                 MenuCommand::Queue => Action::ToggleQueuePanel,
                 MenuCommand::Settings => Action::Open(Page::Settings),
-                MenuCommand::CheckForUpdates => Action::CheckForUpdates,
                 MenuCommand::Shortcuts => Action::ShowDialog(Dialog::Shortcuts),
                 MenuCommand::Back => Action::Back,
                 MenuCommand::Forward => Action::Forward,
@@ -1278,13 +1253,6 @@ impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let app = &mut *self.app;
         app.frame_ui(ui);
-        if let Some(receipt) = app.update_receipt.take() {
-            std::thread::spawn(move || {
-                if let Err(error) = receipt.acknowledge() {
-                    log::error!("Could not confirm the update: {error:#}");
-                }
-            });
-        }
         #[cfg(windows)]
         self.thumbbar
             .sync(app.thumb_state(ui.ctx().system_theme() != Some(egui::Theme::Light)));

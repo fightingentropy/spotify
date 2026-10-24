@@ -24,8 +24,12 @@ use crate::backend::{Event, Waker};
 use crate::music_api::{MusicApi, MusicSong};
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
 
-const RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
+/// Reported when the system has no audio output at all. The interface
+/// recognises it and shows it in the user's language.
+pub const NO_DEVICE: &str =
+    "No audio output device was found. Connect or enable one, then press play again.";
+pub(crate) const RATE: u32 = 44_100;
+pub(crate) const CHANNELS: u16 = 2;
 const BLOCK_SAMPLES: usize = 2048;
 const BUFFER_BLOCKS: usize = 8;
 
@@ -880,7 +884,7 @@ fn audio_thread(
                         })
                         .or_else(|| host.default_output_device());
                     let opened = device
-                        .ok_or_else(|| crate::sink::NO_DEVICE.to_string())
+                        .ok_or_else(|| NO_DEVICE.to_string())
                         .and_then(|device| {
                             rodio::OutputStreamBuilder::from_device(device)
                                 .and_then(|builder| builder.open_stream_or_fallback())
@@ -1587,20 +1591,11 @@ mod tests {
     fn config() -> EngineConfig {
         EngineConfig {
             device_name: "Audio test".into(),
-            bitrate_kbps: 320,
-            normalisation: false,
             autoplay: false,
-            gapless: false,
-            backend: None,
             audio_device: None,
             initial_volume: u16::MAX,
-            volume_dir: PathBuf::new(),
-            audio_cache_dir: None,
-            audio_cache_limit: None,
-            buffer_ms: 100,
             tap: crate::vis::AudioTap::new(),
             eq: crate::eq::shared(),
-            proxy: crate::settings::ProxyConfig::Off,
         }
     }
 

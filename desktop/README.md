@@ -34,8 +34,8 @@ passwords are not saved. Each native app has a separate profile from Spotifast.
 
 The first launch after switching from an ad-hoc build may ask for access to the
 existing Keychain item once more. Choose **Always Allow** in that macOS prompt.
-Later updates signed with the same Developer ID team and bundle identity should
-retain that approval. Complete password prompts locally on the Mac.
+Later builds signed with the same Developer ID team and bundle identity should
+retain that approval; the app does not update itself. Complete password prompts locally on the Mac.
 
 ## Similar songs
 
@@ -179,7 +179,8 @@ verification flow independently of the old app bundle.
   platforms retain the Winamp mini player.
 - Native themes and keyboard shortcuts.
 
-The website and mobile app remain separate clients of the same service. Spotify
-Connect, Spotify account authorization, upstream self-updates, and unsupported
-Spotify-only library shelves are not exposed. MilkDrop is an optional upstream
-build feature and is not included in the standard desktop build.
+The website and mobile app remain separate clients of the same service. The
+Spotify client code the app was forked from (Spotify sign-in, Spotify Connect,
+self-updates, and the Spotify-only library shelves) has been removed. MilkDrop
+is an optional upstream build feature and is not included in the standard
+desktop build.

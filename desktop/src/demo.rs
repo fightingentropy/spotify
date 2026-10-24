@@ -12,8 +12,7 @@ use jiff::{SignedDuration, Timestamp};
 use crate::api::models::{
     Album, Artist, ArtistRef, Context, Copyright, Device, Episode, Followers, Image, Owner,
     Page as ApiPage, PlayHistory, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue,
-    ResumePoint, SavedAlbum, SavedEpisode, SavedShow, SavedTrack, SearchResults, Show, Track,
-    TrackCount, User,
+    ResumePoint, SavedShow, SavedTrack, SearchResults, Show, Track, TrackCount, User,
 };
 use crate::app::{App, RemoteSnapshot};
 use crate::backend::AuthStatus;
@@ -363,17 +362,11 @@ pub fn populate(app: &mut App) {
     app.saved.insert("spotify:album:alb0".into(), true);
 
     // Artist page.
-    let mut artist_page = ArtistPage {
+    let artist_page = ArtistPage {
         artist: Loadable::Loaded(artist(0)),
         top_tracks: Loadable::Loaded(tracks.iter().take(10).cloned().collect()),
-        related: Loadable::Loaded((1..8).map(artist).collect()),
         ..ArtistPage::default()
     };
-    let mut albums = PagedList::default();
-    albums.absorb(0, page((0..8).map(album).collect()));
-    artist_page
-        .albums
-        .insert(DiscographyFilter::All.groups().to_string(), albums);
     app.artist_pages.insert("art0".into(), artist_page);
     app.saved.insert("spotify:artist:art0".into(), true);
 
@@ -386,17 +379,6 @@ pub fn populate(app: &mut App) {
         .episodes
         .absorb(0, page((0..15).map(|index| episode(index, 0)).collect()));
     app.show_pages.insert("sh0".into(), show_page);
-
-    // Radio pages, for a song and for a playlist.
-    for (seed, first) in [("spotify:track:trk0", 1), ("spotify:playlist:pl1", 8)] {
-        app.radio_pages.insert(
-            seed.into(),
-            RadioPage {
-                songs: Loadable::Loaded(tracks.iter().skip(first).take(30).cloned().collect()),
-                ..RadioPage::default()
-            },
-        );
-    }
 
     // Library.
     app.library.liked.absorb(
@@ -412,20 +394,6 @@ pub fn populate(app: &mut App) {
                 .collect(),
         ),
     );
-    app.library.albums.absorb(
-        0,
-        page(
-            (0..8)
-                .map(|index| SavedAlbum {
-                    added_at: None,
-                    album: album(index),
-                })
-                .collect(),
-        ),
-    );
-    app.library.artists.items = (0..8).map(artist).collect();
-    app.library.artists.loaded_once = true;
-    app.library.artists.complete = true;
     app.library.shows.absorb(
         0,
         page(
@@ -433,17 +401,6 @@ pub fn populate(app: &mut App) {
                 .map(|index| SavedShow {
                     added_at: None,
                     show: show(index),
-                })
-                .collect(),
-        ),
-    );
-    app.library.episodes.absorb(
-        0,
-        page(
-            (0..6)
-                .map(|index| SavedEpisode {
-                    added_at: None,
-                    episode: episode(index, index % 4),
                 })
                 .collect(),
         ),
@@ -486,42 +443,9 @@ pub fn populate(app: &mut App) {
     let millis = oldest.as_second() * 1000 + i64::from(oldest.subsec_nanosecond() / 1_000_000);
     app.recents.after = Some(millis.to_string());
     app.recents.complete = false;
-    // Podcast shelf: episodes to continue and new ones, dated from today so
-    // the new ones stay new.
-    let today = jiff::Zoned::now().date();
-    app.home.podcasts = (0..4)
-        .map(|show_index| {
-            let episodes = (0..3)
-                .map(|position| {
-                    let mut episode = episode(show_index * 3 + position, show_index);
-                    let age = (show_index * 4 + position * 7) as i64;
-                    episode.release_date = today
-                        .checked_sub(jiff::Span::new().days(age))
-                        .ok()
-                        .map(|date| date.to_string());
-                    let started = match (show_index, position) {
-                        (0, 0) => Some(1_200_000),
-                        (1, 1) | (3, 1) => Some(900_000),
-                        (1, 0) | (2, 0) => Some(0),
-                        _ => None,
-                    };
-                    episode.resume_point = Some(ResumePoint {
-                        fully_played: started.is_none(),
-                        resume_position_ms: started.unwrap_or(0),
-                    });
-                    episode.show = None;
-                    episode
-                })
-                .collect();
-            (show(show_index), episodes)
-        })
-        .collect();
-    app.home.podcasts_generation = app.home.generation;
-    app.home.top_artists = Loadable::Loaded((0..8).map(artist).collect());
     app.home.top_tracks = Loadable::Loaded(tracks.iter().skip(10).take(10).cloned().collect());
     app.home.top_songs = Loadable::Loaded(tracks.iter().skip(10).cloned().collect());
     app.home.top_songs_complete = true;
-    app.home.recommendations = Loadable::Loaded(tracks.iter().skip(20).take(10).cloned().collect());
     app.home.discover = Loadable::Loaded(playlists.iter().take(2).cloned().collect());
 
     // Search.
@@ -577,14 +501,6 @@ pub fn populate(app: &mut App) {
             kind: "smartphone".into(),
         },
     ];
-    // Include an unsigned ZeroConf receiver in the device picker.
-    app.receivers = vec![crate::zeroconf::Receiver {
-        name: "House Spotify".into(),
-        device_id: Some("house-speaker".into()),
-        address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 42)),
-        port: 5555,
-        path: "/zc".into(),
-    }];
     app.remote = Some(RemoteSnapshot {
         state: PlaybackState {
             device: Some(app.devices[1].clone()),
@@ -820,13 +736,6 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     crate::settings::LanguageChoice::Locale(crate::i18n::Locale::German);
                 app.locale = crate::i18n::Locale::German;
             }
-            "update" => {
-                app.update = Some(crate::updates::Release {
-                    version: "0.7.1".into(),
-                    url: "https://spotifast.rocks/download/".into(),
-                });
-            }
-            "personal-app" => app.dialog = Some(Dialog::PersonalAppIntro),
             "many-devices" => {
                 app.show_devices = true;
                 app.devices.extend((0..40).map(|index| Device {
@@ -837,14 +746,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                 }));
             }
             "shortcuts" => app.dialog = Some(Dialog::Shortcuts),
-            "premium" => app.dialog = Some(Dialog::PremiumNeeded),
             "edit" => {
                 app.dialog = Some(Dialog::EditPlaylist {
                     id: "pl1".into(),
                     name: "Long Way Home".into(),
                     description: "Songs for the road".into(),
                     public: Some(false),
-                    cover: Default::default(),
                 });
             }
             "create" => {
@@ -933,28 +840,6 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             }
             "presets" => app.winamp.open_presets = true,
             "art" => app.settings.art_expanded = true,
-            "folders" => {
-                use crate::player::RootlistEntry;
-                let uri = |index: usize| format!("spotify:playlist:pl{index}");
-                app.rootlist = vec![
-                    RootlistEntry::FolderStart {
-                        id: "f1".into(),
-                        name: "Focus".into(),
-                    },
-                    RootlistEntry::Playlist(uri(1)),
-                    RootlistEntry::Playlist(uri(2)),
-                    RootlistEntry::FolderEnd,
-                    RootlistEntry::FolderStart {
-                        id: "f2".into(),
-                        name: "Weekend".into(),
-                    },
-                    RootlistEntry::Playlist(uri(3)),
-                    RootlistEntry::FolderEnd,
-                    RootlistEntry::Playlist(uri(4)),
-                    RootlistEntry::Playlist(uri(5)),
-                ];
-                app.collapsed_folders = vec!["f2".into()];
-            }
             "small" => app.settings.skin_scale = Some(1),
             "windows-taskbar" => app.demo_windows_controls = true,
             "compact" => {
@@ -1127,12 +1012,6 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     }
                 }
             }
-            // A Spotify app of one's own, in use.
-            "faster" => {
-                let id = "8f2c1d0e4a6b4c3d9e7f5a1b2c3d4e5f".to_string();
-                app.settings.web_client_id = Some(id.clone());
-                app.web_app = Some(id);
-            }
             _ => {}
         }
     }
@@ -1250,24 +1129,20 @@ mod tests {
     }
 
     #[test]
-    fn cover_editing_fits_large_and_narrow_windows_in_both_themes() {
+    fn editing_details_fits_large_and_narrow_windows_in_both_themes() {
         for (width, height) in [(1240.0, 800.0), (760.0, 520.0)] {
             for light in [false, true] {
-                let (ctx, mut app) = accessible_app("cover-dialog");
+                let (ctx, mut app) = accessible_app("edit-dialog");
                 app.open(Page::Playlist("pl1".into()));
                 app.dialog = Some(Dialog::EditPlaylist {
                     id: "pl1".into(),
                     name: "Test".into(),
                     description: String::new(),
                     public: Some(false),
-                    cover: Default::default(),
                 });
                 if light {
                     app.settings.theme = crate::settings::ThemeChoice::Light;
                     app.actions.push(Action::SettingsChanged);
-                }
-                if let Some(Dialog::EditPlaylist { cover, .. }) = &mut app.dialog {
-                    cover.error = Some("Spotify refused this cover. Check that you own the playlist, then sign in again to grant image upload permission.".into());
                 }
                 for _ in 0..3 {
                     let mut output = ctx.run_ui(
@@ -1904,7 +1779,7 @@ mod tests {
 
     #[test]
     fn library_sort_menu_preserves_saved_order_and_keyboard_activation() {
-        use crate::settings::{LibraryShelf, LibrarySort};
+        use crate::settings::LibrarySort;
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("library-sort");
         app.settings.sidebar_order =
@@ -1912,12 +1787,6 @@ mod tests {
         let saved = app.settings.sidebar_order.clone();
         accessible_frame(&ctx, &mut app, vec![]);
         let tree = open_library_options(&ctx, &mut app);
-        assert!(
-            !tree
-                .nodes
-                .iter()
-                .any(|(_, node)| node.label() == Some("Recently added"))
-        );
         let name = accessible_node(&tree, "Name", Role::Button);
         accessible_frame(
             &ctx,
@@ -1929,10 +1798,7 @@ mod tests {
             &mut app,
             vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
         );
-        assert_eq!(
-            app.settings.library_sort.get(&LibraryShelf::Playlists),
-            Some(&LibrarySort::Name)
-        );
+        assert_eq!(app.settings.library_sort, Some(LibrarySort::Name));
         assert_eq!(app.settings.sidebar_order, saved);
         let tree = open_library_options(&ctx, &mut app);
         let local = accessible_node(&tree, "Local custom order", Role::Button);
@@ -1941,10 +1807,7 @@ mod tests {
             &mut app,
             vec![accessible_action(local, AccessibleAction::Click, None)],
         );
-        assert_eq!(
-            app.settings.library_sort.get(&LibraryShelf::Playlists),
-            Some(&LibrarySort::Local)
-        );
+        assert_eq!(app.settings.library_sort, Some(LibrarySort::Local));
         assert_eq!(app.settings.sidebar_order, saved);
         let restored: Settings =
             serde_json::from_str(&serde_json::to_string(&app.settings).unwrap()).unwrap();
@@ -1977,34 +1840,6 @@ mod tests {
             vec![accessible_action(list, AccessibleAction::Click, None)],
         );
         assert!(!app.settings.sidebar_grid);
-        app.backend.shutdown();
-    }
-
-    #[test]
-    fn library_folder_accessibility_labels_follow_the_locale() {
-        use crate::i18n::Locale;
-        use crate::player::RootlistEntry::{FolderEnd, FolderStart};
-        use egui::accesskit::Role;
-        let (ctx, mut app) = accessible_app("library-folder-labels");
-        app.locale = Locale::German;
-        app.settings.sidebar_grid = true;
-        app.rootlist = vec![
-            FolderStart {
-                id: "focus".into(),
-                name: "Focus".into(),
-            },
-            FolderEnd,
-            FolderStart {
-                id: "weekend".into(),
-                name: "Weekend".into(),
-            },
-            FolderEnd,
-        ];
-        app.collapsed_folders = vec!["weekend".into()];
-
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, "Focus, Ordner, ausgeklappt", Role::Button);
-        accessible_node(&tree, "Weekend, Ordner, eingeklappt", Role::Button);
         app.backend.shutdown();
     }
 
@@ -2369,64 +2204,6 @@ mod tests {
     }
 
     #[test]
-    fn update_window_keeps_downloads_running_and_waits_for_restart() {
-        use crate::updates::{DownloadState, Installation, Kind, Prepared};
-        use egui::accesskit::{Action as AccessibleAction, Role};
-        let (ctx, mut app) = accessible_app("update-window");
-        app.update = Some(crate::updates::Release {
-            version: "9.9.9".into(),
-            url: "https://example.invalid/release".into(),
-        });
-        let installation = Installation {
-            executable: std::path::PathBuf::from("/test/fastpotify"),
-            kind: Kind::Portable,
-        };
-        app.update_support = Some(Ok(installation.clone()));
-        assert!(!app.show_update);
-        app.actions.push(Action::ShowUpdate);
-        accessible_frame(&ctx, &mut app, vec![]);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let download = accessible_node(&tree, "Download update", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(download, AccessibleAction::Click, None)],
-        );
-        assert!(matches!(
-            app.update_download,
-            DownloadState::Downloading { .. }
-        ));
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let close = accessible_node(&tree, "Close update", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(close, AccessibleAction::Click, None)],
-        );
-        assert!(!app.show_update);
-        assert!(matches!(
-            app.update_download,
-            DownloadState::Downloading { .. }
-        ));
-        app.update_download =
-            DownloadState::Ready(Box::new(Prepared::sample(installation, "9.9.9")));
-        accessible_frame(&ctx, &mut app, vec![]);
-        assert!(!app.show_update);
-        assert!(matches!(app.update_download, DownloadState::Ready(_)));
-        app.actions.push(Action::ShowUpdate);
-        accessible_frame(&ctx, &mut app, vec![]);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let restart = accessible_node(&tree, "Restart to update", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(restart, AccessibleAction::Click, None)],
-        );
-        assert!(matches!(app.update_download, DownloadState::Installing));
-        app.backend.shutdown();
-    }
-
-    #[test]
     fn the_cross_on_a_recent_search_forgets_only_that_query() {
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("search-history");
@@ -2579,8 +2356,6 @@ mod tests {
             ("Switch to it", Role::Button),
             ("MilkDrop window", Role::CheckBox),
             ("Equalizer", Role::CheckBox),
-            ("Clear artwork", Role::Button),
-            ("Check for updates", Role::Button),
         ] {
             assert!(
                 tree.nodes
@@ -3208,7 +2983,6 @@ mod tests {
         app.backend.set_offline(true);
         app.show_devices = true;
         app.local_ready = true;
-        app.receivers.clear();
         app.devices = (0..40)
             .map(|index| Device {
                 id: Some(format!("speaker-{index}")),
@@ -4042,8 +3816,6 @@ mod tests {
         app.artist_pages.remove("art0");
         app.show_pages.remove("sh0");
         app.library.playlists = Loadable::Loaded(Vec::new());
-        app.library.albums.items.clear();
-        app.library.artists.items.clear();
         app.library.shows.items.clear();
         app.search.results.get_mut().unwrap().albums = None;
         for (title, detail, view) in [
@@ -4686,26 +4458,22 @@ mod tests {
     fn home_json_hides_only_the_chosen_recommendation_shelves() {
         let (ctx, mut app) = accessible_app("home-json-visibility");
         let view = crate::ui::home::show;
-        for (made_for_you, recommendations) in
-            [(true, true), (false, true), (true, false), (false, false)]
-        {
-            app.settings.home = serde_json::from_str(&format!(
-                r#"{{"made_for_you":{{"visible":{made_for_you}}},"recommendations":{{"visible":{recommendations}}}}}"#
-            )).unwrap();
+        for discover in [true, false] {
+            app.settings.home =
+                serde_json::from_str(&format!(r#"{{"discover":{{"visible":{discover}}}}}"#))
+                    .unwrap();
             view_frame(&ctx, &mut app, vec![], view);
             let text = view_frame(&ctx, &mut app, vec![], view);
             for (label, expected) in [
                 ("Playlists & mixes", true),
-                ("Recommended for you", false),
                 ("Liked Songs", true),
                 ("Recently played", true),
-                ("Your top artists", false),
                 ("Your top songs", false),
             ] {
                 assert_eq!(
                     text.iter().any(|(text, _)| text == label),
                     expected,
-                    "{label}, made_for_you={made_for_you}, recommendations={recommendations}"
+                    "{label}, discover={discover}"
                 );
             }
         }
@@ -4766,7 +4534,7 @@ mod tests {
             track: song.clone(),
             ..Default::default()
         }]);
-        app.settings.home.made_for_you.visible = false;
+        app.settings.home.discover.visible = false;
         app.remote = None;
         app.local_ready = true;
         app.local.connected = true;
@@ -5311,15 +5079,6 @@ mod tests {
         // The demo plays the second playlist.
         beside(&drawn(&mut app), "Late night focus");
 
-        // A song radio is named after its song.
-        if let Some(remote) = app.remote.as_mut() {
-            remote.state.context = Some(Context {
-                uri: "spotify:station:track:trk0".into(),
-                kind: "station".into(),
-            });
-        }
-        beside(&drawn(&mut app), "Rosewood Radio");
-
         // Nothing reported, nothing named.
         if let Some(remote) = app.remote.as_mut() {
             remote.state.context = None;
@@ -5631,10 +5390,7 @@ mod tests {
             Page::TopSongs,
             Page::Search,
             Page::LikedSongs,
-            Page::Albums,
-            Page::Artists,
             Page::Podcasts,
-            Page::Episodes,
             Page::Playlist("pl1".into()),
             Page::Playlist("missing".into()),
             Page::Album("alb0".into()),
@@ -5680,7 +5436,6 @@ mod tests {
                 add_uris: vec![],
             },
             Dialog::EditPlaylist {
-                cover: Default::default(),
                 id: "pl1".into(),
                 name: "x".into(),
                 description: String::new(),
@@ -5755,15 +5510,15 @@ mod tests {
         for _ in 0..3 {
             frame(&ctx, &mut app);
         }
-        app.library.albums.items = (0..80)
-            .map(|index| SavedAlbum {
+        app.library.shows.items = (0..80)
+            .map(|index| SavedShow {
                 added_at: None,
-                album: album(index % 8),
+                show: show(index % 4),
             })
             .collect();
-        app.library.albums.next_offset = Some(80);
-        app.library.albums.loaded_once = true;
-        app.open(Page::Albums);
+        app.library.shows.next_offset = Some(80);
+        app.library.shows.loaded_once = true;
+        app.open(Page::Podcasts);
         app.actions.clear();
         for _ in 0..3 {
             frame(&ctx, &mut app);
@@ -6113,31 +5868,6 @@ mod tests {
         view_frame(&ctx, &mut app, first, view);
         view_frame(&ctx, &mut app, second, view);
         assert_eq!(played_contexts(&app), ["spotify:user:demo:collection"]);
-        app.backend.shutdown();
-    }
-
-    #[test]
-    fn double_clicking_a_sidebar_folder_plays_nothing() {
-        use crate::player::RootlistEntry;
-        let (ctx, mut app) = accessible_app("sidebar-double-click-folder");
-        app.rootlist = vec![
-            RootlistEntry::FolderStart {
-                id: "f1".into(),
-                name: "Focus".into(),
-            },
-            RootlistEntry::Playlist("spotify:playlist:pl1".into()),
-            RootlistEntry::Playlist("spotify:playlist:pl2".into()),
-            RootlistEntry::FolderEnd,
-        ];
-        let view = crate::ui::sidebar::show;
-        view_frame(&ctx, &mut app, vec![], view);
-        let painted = view_frame(&ctx, &mut app, vec![], view);
-        let name = sidebar_text(&painted, "Focus").center();
-        app.actions.clear();
-        let [first, second] = double_click(name);
-        view_frame(&ctx, &mut app, first, view);
-        view_frame(&ctx, &mut app, second, view);
-        assert!(played_contexts(&app).is_empty(), "folders must not play");
         app.backend.shutdown();
     }
 
@@ -7283,7 +7013,6 @@ mod tests {
         for compact in [false, true] {
             let (ctx, mut app) = accessible_app(&format!("liked-drag-{compact}"));
             app.settings.sidebar_compact = compact;
-            app.rootlist.clear();
             app.settings.pinned_contexts = vec!["spotify:playlist:pl2".into()];
             app.settings.sidebar_order = (0..PLAYLISTS.len())
                 .filter(|index| *index != 2)
@@ -7903,7 +7632,6 @@ mod tests {
         for compact in [false, true] {
             let (ctx, mut app) = accessible_app(&format!("sidebar-drag-scroll-{compact}"));
             app.settings.sidebar_compact = compact;
-            app.rootlist.clear();
             app.settings.pinned_contexts.clear();
             let playlists: Vec<_> = (0..60)
                 .map(|index| {
@@ -8349,128 +8077,67 @@ mod tests {
     /// that it never does.
     #[test]
     fn the_top_bar_badges_never_cover_the_search_field() {
-        use crate::updates::{DownloadState, Installation, Kind, Prepared};
-        use egui::accesskit::{Action as AccessibleAction, Role};
+        use egui::accesskit::Role;
         let (ctx, mut app) = accessible_app("topbar-badges");
         app.open(Page::Playlist("pl1".into()));
         for panel in [None, Some("queue"), Some("lyrics")] {
             app.show_queue_panel = panel == Some("queue");
             app.show_lyrics_panel = panel == Some("lyrics");
-            for (label, state) in [
-                (None, DownloadState::Idle),
-                (Some("Update to 9.9.9"), DownloadState::Idle),
-                (
-                    Some("Downloading update…"),
-                    DownloadState::Downloading {
-                        received: 1,
-                        total: 2,
-                    },
-                ),
-                (
-                    Some("Update ready"),
-                    DownloadState::Ready(Box::new(Prepared::sample(
-                        Installation {
-                            executable: "/test/fastpotify".into(),
-                            kind: Kind::Portable,
+            // Keep the original 760-point coverage without a right panel,
+            // and the reported 1080-point size with one. Full-height panel
+            // placement at 760 points is checked independently below.
+            let widths: &[f32] = if panel.is_some() {
+                &[1080.0, 1120.0, 1200.0, 1280.0, 1440.0, 1600.0, 1920.0]
+            } else {
+                &[
+                    760.0, 800.0, 860.0, 900.0, 1000.0, 1080.0, 1200.0, 1280.0, 1440.0, 1600.0,
+                    1920.0,
+                ]
+            };
+            for &width in widths {
+                let mut draw = || {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 620.0),
+                            )),
+                            ..Default::default()
                         },
-                        "9.9.9",
-                    ))),
-                ),
-            ] {
-                app.update_download = state;
-                app.update = label.map(|_| crate::updates::Release {
-                    version: "9.9.9".into(),
-                    url: "https://example.invalid/releases".into(),
-                });
-                // Keep the original 760-point coverage without a right panel,
-                // and the reported 1080-point size with one. Full-height panel
-                // placement at 760 points is checked independently below.
-                let widths: &[f32] = if panel.is_some() {
-                    &[1080.0, 1120.0, 1200.0, 1280.0, 1440.0, 1600.0, 1920.0]
-                } else {
-                    &[
-                        760.0, 800.0, 860.0, 900.0, 1000.0, 1080.0, 1200.0, 1280.0, 1440.0, 1600.0,
-                        1920.0,
-                    ]
-                };
-                for &width in widths {
-                    let narrowest = width == widths[0];
-                    let mut draw = || {
-                        let mut output = ctx.run_ui(
-                            egui::RawInput {
-                                screen_rect: Some(egui::Rect::from_min_size(
-                                    egui::Pos2::ZERO,
-                                    egui::vec2(width, 620.0),
-                                )),
-                                ..Default::default()
-                            },
-                            |ui| app.frame_ui(ui),
-                        );
-                        output.textures_delta.clear();
-                        output
-                            .platform_output
-                            .accesskit_update
-                            .expect("screen-reader tree")
-                    };
-                    // The first frame settles the new window size.
-                    draw();
-                    let tree = draw();
-                    let badge = |label: &str| {
-                        tree.nodes
-                            .iter()
-                            .find(|(_, node)| {
-                                node.role() == Role::Button
-                                    && node.label().is_some_and(|name| name.starts_with(label))
-                            })
-                            .and_then(|(_, node)| node.bounds())
-                            .map(|bounds| bounds.x0 as f32)
-                    };
-                    let field = ctx
-                        .read_response(egui::Id::new("global-search").with("surface"))
-                        .expect("the search field")
-                        .rect
-                        .right();
-                    // Collapsed to an icon a badge keeps its label for a screen
-                    // reader, so it is found at every width.
-                    let device = badge("Playing on").expect("the device badge");
-                    assert!(
-                        device >= field,
-                        "the device badge covers {} px of the search field at {width} px",
-                        field - device
+                        |ui| app.frame_ui(ui),
                     );
-                    if let Some(label) = label {
-                        let release = badge(label).expect("the update badge");
-                        assert!(
-                            release >= field,
-                            "the update badge covers {} px of the search field at {width} px",
-                            field - release
-                        );
-                        if narrowest {
-                            let button = accessible_node(&tree, label, Role::Button);
-                            let mut output = ctx.run_ui(
-                                egui::RawInput {
-                                    screen_rect: Some(egui::Rect::from_min_size(
-                                        egui::Pos2::ZERO,
-                                        egui::vec2(width, 620.0),
-                                    )),
-                                    events: vec![accessible_action(
-                                        button,
-                                        AccessibleAction::Click,
-                                        None,
-                                    )],
-                                    ..Default::default()
-                                },
-                                |ui| app.frame_ui(ui),
-                            );
-                            output.textures_delta.clear();
-                            assert!(
-                                app.show_update,
-                                "the collapsed {label} badge must open the updater"
-                            );
-                            app.show_update = false;
-                        }
-                    }
-                }
+                    output.textures_delta.clear();
+                    output
+                        .platform_output
+                        .accesskit_update
+                        .expect("screen-reader tree")
+                };
+                // The first frame settles the new window size.
+                draw();
+                let tree = draw();
+                let badge = |label: &str| {
+                    tree.nodes
+                        .iter()
+                        .find(|(_, node)| {
+                            node.role() == Role::Button
+                                && node.label().is_some_and(|name| name.starts_with(label))
+                        })
+                        .and_then(|(_, node)| node.bounds())
+                        .map(|bounds| bounds.x0 as f32)
+                };
+                let field = ctx
+                    .read_response(egui::Id::new("global-search").with("surface"))
+                    .expect("the search field")
+                    .rect
+                    .right();
+                // Collapsed to an icon a badge keeps its label for a screen
+                // reader, so it is found at every width.
+                let device = badge("Playing on").expect("the device badge");
+                assert!(
+                    device >= field,
+                    "the device badge covers {} px of the search field at {width} px",
+                    field - device
+                );
             }
         }
         app.backend.shutdown();

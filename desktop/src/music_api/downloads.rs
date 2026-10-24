@@ -516,11 +516,6 @@ impl MusicApi {
         })
     }
 
-    pub async fn download_lyrics(&self, track: &DownloadTrack) -> Result<Option<String>, String> {
-        self.download_lyrics_with_options(track, &LyricsOptions::default())
-            .await
-    }
-
     pub async fn download_lyrics_with_options(
         &self,
         track: &DownloadTrack,

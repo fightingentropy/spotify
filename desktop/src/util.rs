@@ -175,21 +175,6 @@ pub fn uri_kind(uri: &str) -> Option<&str> {
     parts.next()
 }
 
-/// Spotify's radio station seeded by a song, playlist, album, or artist.
-pub fn station_uri(seed: &str) -> Option<String> {
-    let kind = uri_kind(seed)?;
-    let id = uri_id(seed)?;
-    (seed == format!("spotify:{kind}:{id}")
-        && matches!(kind, "track" | "playlist" | "album" | "artist"))
-    .then(|| format!("spotify:station:{kind}:{id}"))
-}
-
-/// The song, playlist, album, or artist a radio station is seeded by.
-pub fn station_seed(station: &str) -> Option<String> {
-    let seed = format!("spotify:{}", station.strip_prefix("spotify:station:")?);
-    station_uri(&seed).is_some().then_some(seed)
-}
-
 pub fn open_spotify_url(uri: &str) -> Option<String> {
     let kind = uri_kind(uri)?;
     let id = uri_id(uri)?;
@@ -425,29 +410,6 @@ mod tests {
             let solid_runs = centre.windows(2).filter(|pair| !pair[0] && pair[1]).count();
             assert_eq!(solid_runs, 4, "three sound waves at {size}px");
         }
-    }
-
-    #[test]
-    fn radio_stations_map_to_their_seeds_and_back() {
-        for kind in ["track", "playlist", "album", "artist"] {
-            let seed = format!("spotify:{kind}:4uLU6hMCjMI75M1A2tKUQC");
-            let station = station_uri(&seed).expect("a station");
-            assert_eq!(
-                station,
-                format!("spotify:station:{kind}:4uLU6hMCjMI75M1A2tKUQC")
-            );
-            assert_eq!(station_seed(&station).as_deref(), Some(seed.as_str()));
-        }
-        for seed in [
-            "spotify:show:abc",
-            "spotify:episode:abc",
-            "spotify:user:me:collection",
-            "spotify:track:",
-            "track:abc",
-        ] {
-            assert_eq!(station_uri(seed), None, "{seed}");
-        }
-        assert_eq!(station_seed("spotify:playlist:abc"), None);
     }
 
     #[test]

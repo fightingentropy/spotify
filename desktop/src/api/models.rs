@@ -259,10 +259,6 @@ impl Album {
             _ => gettext(locale, "Album"),
         }
     }
-
-    pub(crate) fn is_single_release(&self) -> bool {
-        self.album_group.as_deref().or(self.album_type.as_deref()) == Some("single")
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -826,23 +822,6 @@ pub struct Recommendations {
 pub struct SnapshotId {
     #[serde(default)]
     pub snapshot_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct ApiErrorBody {
-    #[serde(default)]
-    pub error: ApiErrorDetail,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct ApiErrorDetail {
-    #[serde(default)]
-    pub status: u16,
-    #[serde(default)]
-    #[serde(deserialize_with = "null_default")]
-    pub message: String,
-    #[serde(default)]
-    pub reason: Option<String>,
 }
 
 #[cfg(test)]

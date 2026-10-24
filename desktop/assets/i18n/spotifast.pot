@@ -42,10 +42,6 @@ msgstr ""
 msgid "Liked Songs"
 msgstr ""
 
-#: src/ui/sidebar.rs:339
-msgid "Library order"
-msgstr ""
-
 #: src/ui/sidebar.rs:342 src/ui/home.rs:276 src/ui/home.rs:286
 #: src/ui/home.rs:313
 msgid "Recently played"
@@ -55,20 +51,8 @@ msgstr ""
 msgid "Name"
 msgstr ""
 
-#: src/ui/sidebar.rs:347
-msgid "Recently added"
-msgstr ""
-
 #: src/ui/sidebar.rs:349
 msgid "Local custom order"
-msgstr ""
-
-#: src/ui/sidebar.rs:352
-msgid "Spotify custom order"
-msgstr ""
-
-#: src/ui/sidebar.rs:646
-msgid "Folder"
 msgstr ""
 
 #. Translators: {owner} is the name of the playlist's owner.
@@ -201,28 +185,6 @@ msgid_plural "{count} playlists"
 msgstr[0] ""
 msgstr[1] ""
 
-#. Translators: Keep {count} exactly as written. It becomes the number of playlists a folder holds.
-#: src/i18n.rs:205
-#, rust-format
-msgid "Folder • {count} playlist"
-msgid_plural "Folder • {count} playlists"
-msgstr[0] ""
-msgstr[1] ""
-
-#: src/i18n.rs:215
-#, rust-format
-msgid "{name}, folder, collapsed"
-msgstr ""
-
-#: src/i18n.rs:217
-#, rust-format
-msgid "{name}, folder, expanded"
-msgstr ""
-
-#: src/ui/player_bar.rs:80
-msgid "Click to change the visualizer"
-msgstr ""
-
 #: src/ui/player_bar.rs:400 src/ui/lyrics.rs:122 src/ui/lyrics.rs:591
 msgid "Nothing playing"
 msgstr ""
@@ -283,10 +245,6 @@ msgstr ""
 
 #: src/ui/player_bar.rs:853
 msgid "Mute"
-msgstr ""
-
-#: src/ui/player_bar.rs:869
-msgid "This device's volume can't be changed from Spotifast"
 msgstr ""
 
 #: src/ui/player_bar.rs:884 src/ui/devices.rs:193
@@ -358,10 +316,6 @@ msgstr ""
 
 #: src/ui/queue.rs:556 src/ui/artist.rs:179
 msgid "Load more"
-msgstr ""
-
-#: src/ui/lyrics.rs:83
-msgid "Full screen lyrics"
 msgstr ""
 
 #: src/ui/lyrics.rs:95 src/ui/lyrics.rs:537
@@ -449,10 +403,6 @@ msgstr ""
 msgid "Move down"
 msgstr ""
 
-#: src/ui/widgets.rs:865
-msgid "Go to song radio"
-msgstr ""
-
 #: src/ui/widgets.rs:879 src/ui/widgets.rs:886
 msgid "Go to artist"
 msgstr ""
@@ -465,26 +415,8 @@ msgstr ""
 msgid "Go to podcast"
 msgstr ""
 
-#: src/ui/widgets.rs:929 src/ui/widgets.rs:1041
-msgid "Copy link"
-msgstr ""
-
-#: src/ui/widgets.rs:937 src/ui/widgets.rs:1049
-msgid "Open in Spotify"
-msgstr ""
-
 #: src/ui/widgets.rs:968
 msgid "Shuffle play"
-msgstr ""
-
-#: src/ui/widgets.rs:988
-msgctxt "artist"
-msgid "Unfollow"
-msgstr ""
-
-#: src/ui/widgets.rs:989 src/ui/artist.rs:345
-msgctxt "artist"
-msgid "Follow"
 msgstr ""
 
 #: src/ui/widgets.rs:990 src/ui/collection.rs:1743 src/ui/collection.rs:1765
@@ -502,18 +434,6 @@ msgstr ""
 
 #: src/ui/widgets.rs:1015 src/ui/dialogs.rs:94
 msgid "Delete"
-msgstr ""
-
-#: src/ui/widgets.rs:1026
-msgid "Go to playlist radio"
-msgstr ""
-
-#: src/ui/widgets.rs:1027
-msgid "Go to album radio"
-msgstr ""
-
-#: src/ui/widgets.rs:1028
-msgid "Go to artist radio"
 msgstr ""
 
 #. Translators: {title} is a song or episode name, {subtitle} its artists or podcast.
@@ -615,64 +535,10 @@ msgstr ""
 msgid "Password"
 msgstr ""
 
-#: src/ui/widgets.rs:3032
-msgid ""
-"Proxy login applies to Web requests. Local playback uses this proxy only "
-"without a login."
-msgstr ""
-
-#: src/ui/widgets.rs:3036
-msgid ""
-"Spotify hostnames are resolved by the proxy. Local playback connects "
-"directly."
-msgstr ""
-
-#: src/app.rs:715
-msgid "Restoring proxy settings"
-msgstr ""
-
-#. Translators: {name} is the name of a speaker or other playback device.
-#: src/app.rs:1866
-#, rust-format
-msgid "{name} is ready"
-msgstr ""
-
-#. Translators: {error} is a sentence saying why the proxy password could not be stored.
-#: src/app.rs:1892
-#, rust-format
-msgid ""
-"{error} The original settings file is kept intact; changed preferences are "
-"not saved yet."
-msgstr ""
-
-#. Translators: {version} is a version number such as 1.4.0.
-#: src/app.rs:2016
-#, rust-format
-msgid "Spotifast {version} is available"
-msgstr ""
-
-#: src/app.rs:2033
-msgid "Spotifast is up to date"
-msgstr ""
-
-#. Translators: {error} is an error message.
-#: src/app.rs:2041
-#, rust-format
-msgid "Couldn't check for updates: {error}"
-msgstr ""
-
 #. Translators: {error} is an error message from the playback engine.
 #: src/app.rs:2114
 #, rust-format
 msgid "Local playback: {error}"
-msgstr ""
-
-#: src/app.rs:2288
-msgid "Spotify audio disconnected. Reconnecting local playback"
-msgstr ""
-
-#: src/app.rs:2395 src/app/radio.rs:169 src/ui/radio.rs:35 src/ui/radio.rs:77
-msgid "Radio"
 msgstr ""
 
 #: src/app.rs:2429 src/api/models.rs:259
@@ -709,22 +575,6 @@ msgstr ""
 msgid "Added {skin} skin"
 msgstr ""
 
-#: src/app.rs:3121
-msgid "Proxy applied. Restarting local playback."
-msgstr ""
-
-#: src/app.rs:3123
-msgid "Proxy settings applied"
-msgstr ""
-
-#. Translators: {error} is an error message.
-#: src/app.rs:3130
-#, rust-format
-msgid ""
-"Proxy could not be applied: {error}. Previous connection settings are still "
-"in use."
-msgstr ""
-
 #: src/app.rs:4377
 msgid "Queue cleared"
 msgstr ""
@@ -733,10 +583,6 @@ msgstr ""
 #: src/app.rs:4407 src/app.rs:16288
 #, rust-format
 msgid "Queue {date}"
-msgstr ""
-
-#: src/app.rs:4847
-msgid "Your Spotify sign-in expired. Please sign in again."
 msgstr ""
 
 #. Translators: {error} is an error message.
@@ -772,10 +618,6 @@ msgstr ""
 #: src/app.rs:5480
 #, rust-format
 msgid "Couldn't create the playlist: {error}"
-msgstr ""
-
-#: src/app.rs:5534
-msgid "Playlist cover updated"
 msgstr ""
 
 #: src/app.rs:5543
@@ -820,12 +662,6 @@ msgstr ""
 
 #: src/app.rs:5846
 msgid "Saved to Your Library"
-msgstr ""
-
-#. Translators: {error} is an error message.
-#: src/app.rs:5861
-#, rust-format
-msgid "Couldn't update your library: {error}"
 msgstr ""
 
 #. Translators: {error} is an error message.
@@ -954,40 +790,6 @@ msgid_plural "{count} links copied"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/app.rs:9035
-msgid ""
-"Spotify doesn't let apps reorder your playlists, so this order is saved on "
-"this computer"
-msgstr ""
-
-#: src/app.rs:9095
-msgid "Restarting local playback"
-msgstr ""
-
-#: src/app.rs:9124
-msgid "Local playback needs Spotify Premium"
-msgstr ""
-
-#: src/app.rs:9136
-msgid "Opening your browser to set up local playback"
-msgstr ""
-
-#: src/app.rs:9153
-msgid "Play history cleared"
-msgstr ""
-
-#. Translators: {size} is a size in megabytes, such as 12.5.
-#: src/app.rs:9164
-#, rust-format
-msgid "Cleared {size} MB of artwork"
-msgstr ""
-
-#. Translators: {error} is an error message.
-#: src/app.rs:9170
-#, rust-format
-msgid "Couldn't clear artwork: {error}"
-msgstr ""
-
 #: src/app.rs:9350
 msgid "Downloading MilkDrop preset packs"
 msgstr ""
@@ -1041,34 +843,6 @@ msgid ""
 "Spotify doesn't make this playlist's songs available to third-party apps."
 msgstr ""
 
-#: src/app.rs:10485
-msgid "Spotify sign-in expired. Sign in again, then retry the cover upload."
-msgstr ""
-
-#: src/app.rs:10490
-msgid ""
-"Spotify refused this cover. Check that you own the playlist, then sign in "
-"again to grant image upload permission. If using a personal app, reconnect "
-"it in Settings too."
-msgstr ""
-
-#: src/app.rs:10494
-msgid "Spotify rejected the image size. Choose a smaller image."
-msgstr ""
-
-#. Translators: {error} is an error message.
-#: src/app.rs:10497
-#, rust-format
-msgid "Couldn't upload the cover: {error}. Try again."
-msgstr ""
-
-#. Translators: Keep {track} unchanged. It is the name of the song,
-#. playlist, album, or artist the radio is based on, not translated.
-#: src/app.rs:16308 src/app/radio.rs:38
-#, rust-format
-msgid "{track} Radio"
-msgstr ""
-
 #: src/ui/settings.rs:202 src/ui/keys.rs:290 src/ui/topbar.rs:409
 #: src/ui/topbar.rs:439
 msgid "Settings"
@@ -1090,255 +864,12 @@ msgstr ""
 msgid "Sign out"
 msgstr ""
 
-#: src/ui/settings.rs:248
-msgid "Personal Spotify app"
-msgstr ""
-
-#: src/ui/settings.rs:251
-msgid ""
-"Use a personal Development Mode app for a separate API quota. The shared app "
-"stays active."
-msgstr ""
-
-#: src/ui/settings.rs:255
-msgid "Create an app"
-msgstr ""
-
-#: src/ui/settings.rs:258
-msgid "Create one for free in Spotify's developer dashboard."
-msgstr ""
-
-#: src/ui/settings.rs:263
-msgid "Personal app ready"
-msgstr ""
-
-#: src/ui/settings.rs:266
-msgid "Supported requests use your app. Other requests use the shared app."
-msgstr ""
-
-#: src/ui/settings.rs:271
-msgid "Authorize your personal app"
-msgstr ""
-
-#: src/ui/settings.rs:274
-msgid "Spotify opens in your browser to verify the account."
-msgstr ""
-
-#: src/ui/settings.rs:279
-msgid "Remove personal app"
-msgstr ""
-
-#: src/ui/settings.rs:280
-msgid "Shared access remains signed in."
-msgstr ""
-
-#: src/ui/settings.rs:310
-msgid "Spotify Free, local playback needs Premium"
-msgstr ""
-
-#. Translators: {username} is the Spotify account's user name.
-#: src/ui/settings.rs:324
-#, rust-format
-msgid "Connected as {username}"
-msgstr ""
-
-#: src/ui/settings.rs:352
-msgid "Client ID"
-msgstr ""
-
-#: src/ui/settings.rs:375
-msgid "Setup guide"
-msgstr ""
-
 #: src/ui/settings.rs:385 src/ui/settings.rs:401 src/ui/dialogs.rs:96
 msgid "Remove"
 msgstr ""
 
-#: src/ui/settings.rs:393
-msgid "Authorize"
-msgstr ""
-
-#: src/ui/settings.rs:412
-msgctxt "playback status"
-msgid "Ready"
-msgstr ""
-
-#: src/ui/settings.rs:413
-msgid "This computer is a Spotify Connect device."
-msgstr ""
-
-#: src/ui/settings.rs:417
-msgctxt "playback status"
-msgid "Setting up"
-msgstr ""
-
-#: src/ui/settings.rs:418
-msgid "Finish authorizing in your browser."
-msgstr ""
-
-#: src/ui/settings.rs:422
-msgctxt "playback status"
-msgid "Connecting"
-msgstr ""
-
-#: src/ui/settings.rs:423 src/ui/login.rs:97
-msgid "Connecting to Spotify…"
-msgstr ""
-
-#: src/ui/settings.rs:427
-msgctxt "playback status"
-msgid "Unavailable"
-msgstr ""
-
-#: src/ui/settings.rs:432
-msgctxt "playback status"
-msgid "Not set up"
-msgstr ""
-
-#: src/ui/settings.rs:435
-msgid "Requires Spotify Premium and a one-time browser sign-in."
-msgstr ""
-
-#: src/ui/settings.rs:437
-msgid "Enable playback here"
-msgstr ""
-
-#: src/ui/settings.rs:440
-msgid "Playback on this computer"
-msgstr ""
-
-#: src/ui/settings.rs:441
-msgid "Normalize volume"
-msgstr ""
-
-#: src/ui/settings.rs:442
-msgid "Autoplay"
-msgstr ""
-
-#: src/ui/settings.rs:443
-msgid "Gapless playback"
-msgstr ""
-
 #: src/ui/settings.rs:444
 msgid "Keep music playing when the window closes"
-msgstr ""
-
-#: src/ui/settings.rs:445
-msgid "Automatic update checks"
-msgstr ""
-
-#: src/ui/settings.rs:446
-msgid "Audio cache"
-msgstr ""
-
-#: src/ui/settings.rs:447
-msgid "Apply and restart playback"
-msgstr ""
-
-#: src/ui/settings.rs:448
-msgid "Restart local playback to apply these settings."
-msgstr ""
-
-#: src/ui/settings.rs:449
-msgid "Download updates automatically"
-msgstr ""
-
-#. Translators: {status} is a playback state such as Ready or Not set up.
-#: src/ui/settings.rs:453
-#, rust-format
-msgid "Status: {status}"
-msgstr ""
-
-#: src/ui/settings.rs:457
-msgid "Device name"
-msgstr ""
-
-#: src/ui/settings.rs:458
-msgid "How this computer appears in Spotify Connect."
-msgstr ""
-
-#: src/ui/settings.rs:461
-msgid "Audio quality"
-msgstr ""
-
-#: src/ui/settings.rs:462
-msgid "Higher bitrates use more data and cache space."
-msgstr ""
-
-#: src/ui/settings.rs:466
-msgid "Keep loud and quiet tracks at a similar level."
-msgstr ""
-
-#: src/ui/settings.rs:470
-msgid "Keep playing similar songs when your music ends."
-msgstr ""
-
-#: src/ui/settings.rs:474
-msgid "Play tracks without silence between them."
-msgstr ""
-
-#: src/ui/settings.rs:481
-msgid ""
-"Spotifast hides to the system tray. Quit from the tray menu or with Ctrl+Q."
-msgstr ""
-
-#: src/ui/settings.rs:485
-msgid ""
-"Spotifast hides to the system tray. Quit from the tray menu or with Cmd+Q."
-msgstr ""
-
-#: src/ui/settings.rs:492
-msgid "Checks GitHub once a day. No personal data is sent."
-msgstr ""
-
-#: src/ui/settings.rs:495
-msgid "Audio output"
-msgstr ""
-
-#: src/ui/settings.rs:498
-msgid "PulseAudio also covers PipeWire. Rodio talks to ALSA directly."
-msgstr ""
-
-#: src/ui/settings.rs:503
-msgid "Output buffer"
-msgstr ""
-
-#: src/ui/settings.rs:506
-msgid ""
-"More buffering can prevent clicks on busy computers. Less buffering makes "
-"controls respond sooner."
-msgstr ""
-
-#: src/ui/settings.rs:512
-msgid "Save downloaded audio for later playback."
-msgstr ""
-
-#: src/ui/settings.rs:515
-msgid "Playback settings applied"
-msgstr ""
-
-#: src/ui/settings.rs:520
-msgid "Downloads in the background. You choose when to restart."
-msgstr ""
-
-#: src/ui/settings.rs:537
-msgid "Reconnect"
-msgstr ""
-
-#: src/ui/settings.rs:569
-msgid "Normal · 96 kbps"
-msgstr ""
-
-#: src/ui/settings.rs:570
-msgid "High · 160 kbps"
-msgstr ""
-
-#: src/ui/settings.rs:571
-msgid "Very high · 320 kbps"
-msgstr ""
-
-#: src/ui/settings.rs:770
-msgid "Playback settings applied."
 msgstr ""
 
 #: src/ui/settings.rs:777
@@ -1414,59 +945,6 @@ msgstr ""
 msgid ""
 "Middle-click a list, then move the pointer to scroll it. Off by default, "
 "because a middle click usually pastes on Linux."
-msgstr ""
-
-#: src/ui/settings.rs:853
-msgid ""
-"Draw Spotifast's own title bar and window buttons instead of the standard "
-"Windows ones."
-msgstr ""
-
-#: src/ui/settings.rs:996
-msgid "Off"
-msgstr ""
-
-#: src/ui/settings.rs:997
-msgid "Spectrum"
-msgstr ""
-
-#: src/ui/settings.rs:998
-msgid "Waveform"
-msgstr ""
-
-#: src/ui/settings.rs:1155
-msgid "Proxy"
-msgstr ""
-
-#: src/ui/settings.rs:1157
-msgid "Mode, host, port, username and password"
-msgstr ""
-
-#: src/ui/settings.rs:1160
-msgid "Off, System, HTTP or SOCKS5 proxy for network requests."
-msgstr ""
-
-#: src/ui/settings.rs:1170
-msgctxt "proxy"
-msgid "Mode"
-msgstr ""
-
-#: src/ui/settings.rs:1173
-msgid ""
-"Off ignores environment variables. System uses them, and the OS proxy on "
-"macOS and Windows."
-msgstr ""
-
-#: src/ui/settings.rs:1225 src/ui/login.rs:249
-msgid "Apply settings"
-msgstr ""
-
-#: src/ui/settings.rs:1237
-msgid "Not using a proxy."
-msgstr ""
-
-#: src/ui/settings.rs:1238
-msgid "Using the system proxy."
 msgstr ""
 
 #: src/ui/settings.rs:1249
@@ -1667,12 +1145,6 @@ msgstr ""
 msgid "Equalizer"
 msgstr ""
 
-#: src/ui/settings.rs:1684
-msgid ""
-"A ten-band equalizer for playback on this computer. It does not affect other "
-"devices."
-msgstr ""
-
 #. Translators: a search keyword for the equalizer's preamplifier slider.
 #: src/ui/settings.rs:1692
 msgid "Preamp"
@@ -1689,69 +1161,13 @@ msgctxt "equalizer"
 msgid "Pre"
 msgstr ""
 
-#: src/ui/settings.rs:1761
-msgid "Storage"
-msgstr ""
-
-#: src/ui/settings.rs:1764
-msgid "Artwork cache"
-msgstr ""
-
-#. Translators: {folder} is the path of a cache folder.
-#: src/ui/settings.rs:1766 src/ui/settings.rs:1772
-#, rust-format
-msgid "Stored in {folder}"
-msgstr ""
-
-#: src/ui/settings.rs:1778
-msgid "Play history"
-msgstr ""
-
-#. Translators: {file} is the path of the play history file.
-#: src/ui/settings.rs:1782
-#, rust-format
-msgid "Tracks played here are stored in {file}. This file is never uploaded."
-msgstr ""
-
-#: src/ui/settings.rs:1787
-msgid "Sign-in"
-msgstr ""
-
-#: src/ui/settings.rs:1790
-msgid "Sign-ins are saved in the system credential store when available."
-msgstr ""
-
-#: src/ui/settings.rs:1802
-msgid "Clear artwork"
-msgstr ""
-
-#: src/ui/settings.rs:1816
-msgid "Clear history"
-msgstr ""
-
 #: src/ui/settings.rs:1828 src/ui/show.rs:34
 msgid "About"
-msgstr ""
-
-#: src/ui/settings.rs:1831
-msgid "Built with Rust, egui, and librespot. Not affiliated with Spotify."
-msgstr ""
-
-#: src/ui/settings.rs:1833
-msgid "Check for updates"
-msgstr ""
-
-#: src/ui/settings.rs:1834
-msgid "Checking…"
 msgstr ""
 
 #: src/ui/settings.rs:1835 src/ui/dialogs.rs:153 src/ui/keys.rs:300
 #: src/ui/topbar.rs:417
 msgid "Keyboard shortcuts"
-msgstr ""
-
-#: src/ui/settings.rs:1836
-msgid "Source code"
 msgstr ""
 
 #. Translators: {query} is the text typed into the settings search field.
@@ -1804,10 +1220,6 @@ msgstr ""
 msgid "Episodes"
 msgstr ""
 
-#: src/model.rs:750
-msgid "Singles & EPs"
-msgstr ""
-
 #: src/settings.rs:160
 msgctxt "theme"
 msgid "Dark"
@@ -1820,16 +1232,6 @@ msgstr ""
 
 #: src/settings.rs:162
 msgid "Follow system"
-msgstr ""
-
-#: src/settings.rs:188
-msgctxt "proxy"
-msgid "Off"
-msgstr ""
-
-#: src/settings.rs:189
-msgctxt "proxy"
-msgid "System"
 msgstr ""
 
 #: src/theme.rs:175
@@ -1864,11 +1266,6 @@ msgid ""
 "See the log for details."
 msgstr ""
 
-#: src/theme.rs:198
-msgid ""
-"Custom themes could not be loaded. Run spotifast reload-themes to try again."
-msgstr ""
-
 #: src/ui/artist.rs:32
 msgid "Popular"
 msgstr ""
@@ -1885,18 +1282,6 @@ msgstr ""
 msgid "No popular songs to show."
 msgstr ""
 
-#: src/ui/artist.rs:100
-msgid "Discography"
-msgstr ""
-
-#: src/ui/artist.rs:172
-msgid "Nothing in this category."
-msgstr ""
-
-#: src/ui/artist.rs:198
-msgid "Fans also like"
-msgstr ""
-
 #. Translators: {count} is the number of people who follow an artist.
 #: src/ui/artist.rs:268
 #, rust-format
@@ -1910,21 +1295,12 @@ msgstr[1] ""
 msgid "Starting…"
 msgstr ""
 
-#: src/ui/artist.rs:343
-msgctxt "artist"
-msgid "Following"
-msgstr ""
-
 #: src/ui/collection.rs:219
 msgid "No playable songs in this view"
 msgstr ""
 
 #: src/ui/collection.rs:258
 msgid "Shuffle off"
-msgstr ""
-
-#: src/ui/collection.rs:293 src/ui/collection.rs:319
-msgid "Save as playlist"
 msgstr ""
 
 #: src/ui/collection.rs:341
@@ -2006,20 +1382,8 @@ msgstr[1] ""
 msgid "{name} (this computer)"
 msgstr ""
 
-#: src/ui/devices.rs:80
-msgid "Setting up…"
-msgstr ""
-
 #: src/ui/devices.rs:82
 msgid "Set up playback here"
-msgstr ""
-
-#: src/ui/devices.rs:142
-msgid "Connecting…"
-msgstr ""
-
-#: src/ui/devices.rs:144
-msgid "On your network, click to connect"
 msgstr ""
 
 #: src/ui/devices.rs:278
@@ -2038,50 +1402,12 @@ msgstr ""
 msgid "Play here"
 msgstr ""
 
-#: src/ui/dialogs.rs:38
-msgid "Spend less time waiting for Spotify"
-msgstr ""
-
-#: src/ui/dialogs.rs:41
-msgid ""
-"Spotifast's default connection shares Spotify's request limit with other "
-"listeners. When it gets busy, loading music and using playback controls can "
-"take longer."
-msgstr ""
-
-#: src/ui/dialogs.rs:42
-msgid ""
-"Your Premium account lets you create a free personal Spotify app. Connect it "
-"here to give supported requests your own allowance. Some pages still use the "
-"shared connection."
-msgstr ""
-
-#: src/ui/dialogs.rs:43
-msgid ""
-"Setup takes a few minutes. You can also find it later in Settings under "
-"Personal Spotify app."
-msgstr ""
-
-#: src/ui/dialogs.rs:50
-msgid "Set up personal app"
-msgstr ""
-
-#: src/ui/dialogs.rs:53
-msgid "Keep shared app"
-msgstr ""
-
 #: src/ui/dialogs.rs:64
 msgid "Delete playlist?"
 msgstr ""
 
 #: src/ui/dialogs.rs:66
 msgid "Remove from Your Library?"
-msgstr ""
-
-#. Translators: {name} is a playlist name.
-#: src/ui/dialogs.rs:74
-#, rust-format
-msgid "Delete “{name}”? You can recover it from Spotify for 90 days."
 msgstr ""
 
 #. Translators: {name} is a playlist name.
@@ -2109,20 +1435,6 @@ msgstr ""
 
 #: src/ui/dialogs.rs:196
 msgid "Done"
-msgstr ""
-
-#: src/ui/dialogs.rs:204
-msgid "This account cannot play music here"
-msgstr ""
-
-#: src/ui/dialogs.rs:213
-msgid ""
-"Playback needs Spotify Premium. Free accounts can browse and search, but "
-"cannot play music through Spotifast."
-msgstr ""
-
-#: src/ui/dialogs.rs:222
-msgid "OK"
 msgstr ""
 
 #: src/ui/dialogs.rs:254
@@ -2167,11 +1479,6 @@ msgstr[1] ""
 msgid "My playlist"
 msgstr ""
 
-#: src/ui/dialogs.rs:372 src/ui/dialogs.rs:375 src/ui/dialogs.rs:560
-#: src/ui/dialogs.rs:569
-msgid "Public playlist"
-msgstr ""
-
 #. Translators: {count} is the number of songs.
 #: src/ui/dialogs.rs:388
 #, rust-format
@@ -2184,86 +1491,18 @@ msgstr[1] ""
 msgid "Create"
 msgstr ""
 
-#: src/ui/dialogs.rs:464
-msgid "Selected playlist cover"
-msgstr ""
-
-#: src/ui/dialogs.rs:470
-msgid "Current playlist cover"
-msgstr ""
-
-#: src/ui/dialogs.rs:479
-msgid "Uploading cover…"
-msgstr ""
-
-#: src/ui/dialogs.rs:481
-msgid "Choosing cover…"
-msgstr ""
-
-#: src/ui/dialogs.rs:487
-msgid "Change cover"
-msgstr ""
-
-#: src/ui/dialogs.rs:496
-msgid "Upload cover"
-msgstr ""
-
 #: src/ui/dialogs.rs:522
 msgid "Playlist name"
-msgstr ""
-
-#: src/ui/dialogs.rs:528
-msgid "Description"
-msgstr ""
-
-#: src/ui/dialogs.rs:543
-msgid "Optional description"
 msgstr ""
 
 #: src/ui/dialogs.rs:585
 msgid "Save"
 msgstr ""
 
-#: src/ui/home.rs:211
-msgid "Made for you"
-msgstr ""
-
-#: src/ui/home.rs:216
-msgid "Couldn't load this shelf"
-msgstr ""
-
 #. Translators: {owner} is the name of the playlist's owner.
 #: src/ui/home.rs:227 src/ui/search.rs:590
 #, rust-format
 msgid "By {owner}"
-msgstr ""
-
-#: src/ui/home.rs:450
-msgid "Your podcasts"
-msgstr ""
-
-#. Translators: {time} is the time left in an episode, such as 12 min; {show} is the podcast's name.
-#: src/ui/home.rs:456
-#, rust-format
-msgid "{time} left • {show}"
-msgstr ""
-
-#. Translators: {show} is the podcast's name.
-#: src/ui/home.rs:465
-#, rust-format
-msgid "New • {show}"
-msgstr ""
-
-#: src/ui/home.rs:512 src/ui/home.rs:522 src/ui/home.rs:537
-msgid "Your top artists"
-msgstr ""
-
-#: src/ui/home.rs:654
-msgid "Show more top songs"
-msgstr ""
-
-#: src/ui/home.rs:668
-msgid "Recommended for you"
 msgstr ""
 
 #: src/ui/keys.rs:191
@@ -2309,10 +1548,6 @@ msgstr ""
 
 #: src/ui/keys.rs:214
 msgid "Show the lyrics"
-msgstr ""
-
-#: src/ui/keys.rs:215
-msgid "Lyrics: leave full screen"
 msgstr ""
 
 #: src/ui/keys.rs:218
@@ -2412,72 +1647,12 @@ msgstr ""
 msgid "Quit"
 msgstr ""
 
-#: src/ui/library.rs:18
-msgid "No saved albums"
-msgstr ""
-
-#: src/ui/library.rs:19
-msgid "Saved albums appear here."
-msgstr ""
-
-#: src/ui/library.rs:23
-msgid "No followed artists"
-msgstr ""
-
-#: src/ui/library.rs:24
-msgid "Followed artists appear here."
-msgstr ""
-
 #: src/ui/library.rs:28
 msgid "No podcasts yet"
 msgstr ""
 
 #: src/ui/library.rs:29
 msgid "Followed podcasts appear here."
-msgstr ""
-
-#: src/ui/library.rs:33
-msgid "No saved episodes"
-msgstr ""
-
-#: src/ui/library.rs:34
-msgid "Saved episodes appear here."
-msgstr ""
-
-#: src/ui/login.rs:74
-msgid "A native Spotify client."
-msgstr ""
-
-#: src/ui/login.rs:82
-msgid "Waiting for Spotify in your browser…"
-msgstr ""
-
-#: src/ui/login.rs:85
-msgid "Didn't open? Open the sign-in page again"
-msgstr ""
-
-#: src/ui/login.rs:114 src/ui/login.rs:149
-msgid "Use the shared Spotify app instead"
-msgstr ""
-
-#: src/ui/login.rs:128
-msgid "Sign in with Spotify"
-msgstr ""
-
-#: src/ui/login.rs:134
-msgid ""
-"Sign in through your browser. Spotifast never sees your password. Local "
-"playback needs Spotify Premium."
-msgstr ""
-
-#: src/ui/login.rs:167
-msgid "Proxy Settings"
-msgstr ""
-
-#. Translators: {version} is the app's version number, such as 1.2.0.
-#: src/ui/login.rs:188
-#, rust-format
-msgid "Spotifast {version} • not affiliated with Spotify"
 msgstr ""
 
 #: src/ui/mod.rs:375
@@ -2492,50 +1667,6 @@ msgstr ""
 msgid "Maximize"
 msgstr ""
 
-#: src/ui/radio.rs:105
-msgid "Radio comes from playback on this computer. Turn it on in Settings."
-msgstr ""
-
-#: src/ui/radio.rs:202
-msgid "Based on this playlist"
-msgstr ""
-
-#: src/ui/radio.rs:203
-msgid "Based on this album"
-msgstr ""
-
-#: src/ui/radio.rs:204
-msgid "Based on this artist"
-msgstr ""
-
-#: src/ui/radio.rs:205
-msgid "Based on this song"
-msgstr ""
-
-#. Translators: {first} is an artist name.
-#: src/ui/radio.rs:224
-#, rust-format
-msgid "With {first}"
-msgstr ""
-
-#. Translators: {first} and {second} are artist names.
-#: src/ui/radio.rs:227
-#, rust-format
-msgid "With {first} and {second}"
-msgstr ""
-
-#. Translators: {first}, {second} and {third} are artist names.
-#: src/ui/radio.rs:233
-#, rust-format
-msgid "With {first}, {second} and {third}"
-msgstr ""
-
-#. Translators: {first}, {second} and {third} are artist names; more follow.
-#: src/ui/radio.rs:240
-#, rust-format
-msgid "With {first}, {second}, {third} and more"
-msgstr ""
-
 #. Translators: {query} is the text the user searched for.
 #: src/ui/search.rs:66
 #, rust-format
@@ -2544,14 +1675,6 @@ msgstr ""
 
 #: src/ui/search.rs:68
 msgid "Check the spelling, or try fewer words."
-msgstr ""
-
-#: src/ui/search.rs:91 src/ui/winamp/playlist.rs:647
-msgid "Search Spotify"
-msgstr ""
-
-#: src/ui/search.rs:94
-msgid "Find songs, artists, albums, playlists, and podcasts."
 msgstr ""
 
 #: src/ui/search.rs:99
@@ -2629,20 +1752,6 @@ msgstr ""
 msgid "Playing on another device"
 msgstr ""
 
-#: src/ui/topbar.rs:259
-msgid "Update ready"
-msgstr ""
-
-#: src/ui/topbar.rs:262 src/ui/update.rs:74
-msgid "Downloading update…"
-msgstr ""
-
-#. Translators: {version} is a version number such as 1.2.0.
-#: src/ui/topbar.rs:266
-#, rust-format
-msgid "Update to {version}"
-msgstr ""
-
 #: src/ui/topbar.rs:300
 msgid "What do you want to play?"
 msgstr ""
@@ -2653,74 +1762,6 @@ msgstr ""
 
 #: src/ui/topbar.rs:457
 msgid "MilkDrop visualiser (Cmd+Shift+K)"
-msgstr ""
-
-#: src/ui/topbar.rs:471
-msgid "Winamp mini player (Ctrl+M)"
-msgstr ""
-
-#: src/ui/topbar.rs:472
-msgid "Winamp mini player (Cmd+Shift+M)"
-msgstr ""
-
-#: src/ui/topbar.rs:483
-msgid "Waiting for Spotify…"
-msgstr ""
-
-#. Translators: {version} is a version number such as 1.2.0.
-#: src/ui/topbar.rs:520
-#, rust-format
-msgid "Version {version} is available."
-msgstr ""
-
-#: src/ui/update.rs:19
-msgid "Update Spotifast"
-msgstr ""
-
-#: src/ui/update.rs:51
-msgid "Close update"
-msgstr ""
-
-#: src/ui/update.rs:65
-msgid "Release notes"
-msgstr ""
-
-#: src/ui/update.rs:72
-msgid "Checking download…"
-msgstr ""
-
-#. Translators: {received} and {total} are sizes in megabytes, such as 12.5.
-#: src/ui/update.rs:90
-#, rust-format
-msgid "{received} of {total} MB"
-msgstr ""
-
-#: src/ui/update.rs:106
-msgid "Ready to install"
-msgstr ""
-
-#: src/ui/update.rs:115
-msgid "Music playing on this computer will stop when Spotifast restarts."
-msgstr ""
-
-#: src/ui/update.rs:122
-msgid "Restart to update"
-msgstr ""
-
-#: src/ui/update.rs:129
-msgid "Preparing to restart…"
-msgstr ""
-
-#: src/ui/update.rs:160
-msgid "Download from GitHub"
-msgstr ""
-
-#: src/ui/update.rs:165
-msgid "Retry download"
-msgstr ""
-
-#: src/ui/update.rs:167
-msgid "Download update"
 msgstr ""
 
 #: src/ui/winamp/equalizer.rs:59
@@ -2824,10 +1865,6 @@ msgstr ""
 
 #: src/ui/winamp/playlist.rs:663
 msgid "Remove selected"
-msgstr ""
-
-#: src/ui/winamp/playlist.rs:666
-msgid "Spotify does not let apps remove one queued song."
 msgstr ""
 
 #: src/ui/winamp/playlist.rs:671

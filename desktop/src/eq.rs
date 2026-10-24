@@ -4,12 +4,12 @@
 //! from -12 to +12 dB. The UI writes settings behind a mutex; the player reads
 //! them once per packet and rebuilds filters only after changes.
 //!
-//! This stage does not clip boosted samples. `vis::Tapped` limits the signal
-//! later, after accounting for output volume.
+//! This stage does not clip boosted samples. The music player's limiter
+//! holds the signal under full scale after the visualiser's tap.
 
 use std::sync::{Arc, Mutex};
 
-use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::music_player::{CHANNELS as NUM_CHANNELS, RATE as SAMPLE_RATE};
 
 /// The centre frequencies, Winamp's, in hertz.
 pub const BANDS: [f32; 10] = [
@@ -464,10 +464,9 @@ impl Processor {
             }
             for (sample, gain) in frame.iter_mut().zip(gains) {
                 // No ceiling here. These are floats with room to spare, and
-                // the one ceiling in the chain sits at the end, past the
-                // volume: a boost that would clip at full volume is fine
-                // three notches down, and holding it back here would take
-                // that away for good. See `vis::Tapped`.
+                // the one ceiling in the chain is the music player's limiter,
+                // after the visualiser's tap. See `AudioSource` in
+                // `music_player.rs`.
                 *sample *= gain;
             }
         }

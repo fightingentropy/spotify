@@ -727,8 +727,3 @@ fn episodes(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: us
         super::show::episode_row(app, ui, episode, None);
     }
 }
-
-#[allow(dead_code)]
-fn align_right(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    ui.with_layout(Layout::right_to_left(Align::Center), add);
-}

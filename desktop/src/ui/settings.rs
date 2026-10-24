@@ -10,7 +10,6 @@ use crate::theme::{self, Icon, Palette};
 
 use super::widgets;
 
-pub(crate) const PERSONAL_APP_FOCUS_ID: &str = "focus-personal-app-setup";
 const SETTINGS_FILTER_ID: &str = "settings-filter";
 
 /// Whether a settings row matches the filter query (case-insensitive).
@@ -159,8 +158,8 @@ fn setting_slider<N: egui::emath::Numeric>(
     .inner
 }
 
-/// Forget the search text, so a flow that lands on a specific row (like
-/// the Personal App setup) always finds that row visible and focusable.
+/// Forget the search text, so every row is visible again.
+#[cfg(test)]
 pub(crate) fn clear_search(ctx: &egui::Context) {
     ctx.data_mut(|data| data.remove::<String>(egui::Id::new(SETTINGS_FILTER_ID)));
 }

@@ -952,7 +952,6 @@ impl MusicApi {
         decode(
             value
                 .get("likedSongIds")
-                .or_else(|| value.get("likes"))
                 .cloned()
                 .unwrap_or_else(|| json!([])),
         )
@@ -1586,18 +1585,6 @@ impl MusicApi {
                     result,
                 }
             }
-            Q::UploadPlaylistCover {
-                id,
-                request,
-                previous_urls,
-                cover,
-            } => R::PlaylistCoverUploaded {
-                id,
-                request,
-                previous_urls,
-                cover,
-                result: Err(unsupported()),
-            },
             Q::Devices => R::Devices(Err(unsupported())),
             Q::PlaybackState { seq } => R::PlaybackState {
                 seq,
@@ -1607,39 +1594,9 @@ impl MusicApi {
                 seq,
                 result: Err(unsupported()),
             },
-            Q::TopArtists { generation } => R::TopArtists {
-                generation,
-                result: Err(unsupported()),
-            },
-            Q::Recommendations { generation, .. } => R::Recommendations {
-                generation,
-                result: Err(unsupported()),
-            },
-            Q::SavedAlbums { offset } => R::SavedAlbums {
-                offset,
-                result: Err(unsupported()),
-            },
-            Q::FollowedArtists { after } => R::FollowedArtists {
-                after,
-                result: Err(unsupported()),
-            },
             Q::SavedShows { offset } => R::SavedShows {
                 result: self.podcast_shows(offset).await,
                 offset,
-            },
-            Q::SavedEpisodes { offset } => R::SavedEpisodes {
-                offset,
-                result: Err(unsupported()),
-            },
-            Q::ArtistAlbums { id, groups, offset } => R::ArtistAlbums {
-                id,
-                groups,
-                offset,
-                result: Err(unsupported()),
-            },
-            Q::RelatedArtists { id } => R::RelatedArtists {
-                id,
-                result: Err(unsupported()),
             },
             Q::Show { id } => R::Show {
                 result: self.podcast_show(&id).await,
@@ -1649,10 +1606,6 @@ impl MusicApi {
                 result: self.podcast_episodes(&id, offset).await,
                 id,
                 offset,
-            },
-            Q::HomeEpisodes { generation, .. } => R::HomeEpisodes {
-                generation,
-                result: Err(unsupported()),
             },
             Q::Episode { id } => R::Episode {
                 result: self.podcast_episode(&id).await,

@@ -33,7 +33,6 @@ fn waits_for_session(command: &Command) -> bool {
             | Command::Lyrics(_)
             | Command::Downloads(_)
             | Command::Player(_)
-            | Command::Rootlist
             | Command::LoadLikedSongsCache { .. }
             | Command::StoreLikedSongsCache(_)
             | Command::LoadPlaylistCache { .. }
@@ -274,23 +273,6 @@ pub async fn run(
                             Err(error) => { emit(&events, &waker, Event::Auth(AuthStatus::Failed(error))); continue; }
                         };
                     }
-                    Command::CancelSignIn => {
-                        downloads.cancel_all();
-                        tasks.abort_all();
-                        restoring = false;
-                        held.clear();
-                        while tasks.join_next().await.is_some() {}
-                        player = None;
-                        history.finish();
-                        account.clear();
-                        let _ = tokio::fs::create_dir_all(&dirs.state).await;
-                        let _ = tokio::fs::write(&revoked, b"sign in cancelled").await;
-                        let _deletion = sessions.request_delete();
-                        if let Ok(fresh) = MusicApi::new(&origin, http.clone()) { api = fresh; http.replace(api.client()); }
-                        emit(&events, &waker, Event::Playback(LocalPlayback::Unavailable));
-                        emit(&events, &waker, Event::Local(Box::default()));
-                        emit(&events, &waker, Event::Auth(AuthStatus::SignedOut));
-                    }
                     Command::SignOut => {
                         downloads.cancel_all();
                         tasks.abort_all();
@@ -367,12 +349,7 @@ pub async fn run(
                     Command::LoadPlaylistCache { id, generation } => emit(&events, &waker, Event::PlaylistCache { account_id: account.clone(), id, generation, cache: None }),
                     Command::StorePlaylistCache { id, generation, snapshot, .. } => emit(&events, &waker, Event::PlaylistCacheStored { account_id: account.clone(), id, generation, snapshot, success: false }),
                     Command::OpenThemesFolder => { let _ = open::that(dirs.config.join("themes")); }
-                    Command::Rootlist => emit(&events, &waker, Event::Rootlist { result: Ok(Default::default()) }),
                     Command::UserNames(ids) => { for id in ids { emit(&events, &waker, Event::UserName { id, name: None }); } }
-                    Command::AlbumTypes(_) | Command::AudiobookShows(_) => {},
-                    // Spotify auth, network discovery, self-updates and remote control are
-                    // intentionally unreachable: this application talks only to our service.
-                    _ => {},
                 }
             }
         }
@@ -423,9 +400,10 @@ mod tests {
     #[test]
     fn account_work_waits_for_a_restoring_session() {
         assert!(waits_for_session(&Command::Api(ApiRequest::Devices)));
-        assert!(waits_for_session(&Command::Rootlist));
+        assert!(waits_for_session(&Command::LoadLikedSongsCache {
+            generation: 1
+        }));
         assert!(!waits_for_session(&Command::SignOut));
-        assert!(!waits_for_session(&Command::CancelSignIn));
         assert!(!waits_for_session(&Command::Shutdown));
     }
     #[test]
@@ -435,7 +413,10 @@ mod tests {
             .unwrap();
         runtime.block_on(async {
             let (sender, mut commands) = mpsc::unbounded_channel();
-            let mut held = VecDeque::from([Command::Rootlist, Command::UserNames(Vec::new())]);
+            let mut held = VecDeque::from([
+                Command::LoadLikedSongsCache { generation: 1 },
+                Command::UserNames(Vec::new()),
+            ]);
             sender.send(Command::OpenThemesFolder).unwrap();
             let next = next_command(&mut commands, &mut held, true).await;
             assert!(matches!(next, Some(Command::OpenThemesFolder)));
@@ -443,7 +424,7 @@ mod tests {
 
             sender.send(Command::SignOut).unwrap();
             let next = next_command(&mut commands, &mut held, false).await;
-            assert!(matches!(next, Some(Command::Rootlist)));
+            assert!(matches!(next, Some(Command::LoadLikedSongsCache { .. })));
             let next = next_command(&mut commands, &mut held, false).await;
             assert!(matches!(next, Some(Command::UserNames(_))));
             let next = next_command(&mut commands, &mut held, false).await;

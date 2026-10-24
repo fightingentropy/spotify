@@ -1,6 +1,6 @@
 //! Audio tap and Winamp-style spectrum and oscilloscope data.
 //!
-//! The tap wraps the active sink and stores half a second of post-EQ,
+//! The tap stores half a second of the music player's post-EQ,
 //! pre-volume audio. The analyser uses Winamp's constants and behavior from
 //! `classic_vis.cpp`, with FFT details cross-checked against Webamp's
 //! `VisPainter.ts` and `FFTNullsoft.ts`. MilkDrop receives stereo samples;
@@ -10,11 +10,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use librespot_playback::audio_backend::{Sink, SinkResult};
-use librespot_playback::convert::Converter;
-use librespot_playback::decoder::AudioPacket;
-use librespot_playback::mixer::VolumeGetter;
-use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::music_player::{CHANNELS as NUM_CHANNELS, RATE as SAMPLE_RATE};
 
 /// Half a second of audio.
 const KEPT: usize = SAMPLE_RATE as usize / 2;
@@ -137,103 +133,6 @@ impl AudioTap {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
-    }
-}
-
-/// Runs the equalizer and taps the signal before passing it to the real sink.
-pub struct Tapped {
-    inner: Box<dyn Sink>,
-    tap: Arc<AudioTap>,
-    eq: crate::eq::Processor,
-    /// Player volume, used to calculate the limiter ceiling.
-    volume: Box<dyn VolumeGetter + Send>,
-    /// Whether this wrapper applies volume after the tap. Otherwise the inner
-    /// sink applies it, still after the tap and to already queued audio.
-    applies_volume: bool,
-    /// Final limiter, placed here because this stage knows the output volume.
-    limiter: crate::limiter::Limiter,
-    /// Track normalization factor. The tap removes it so visualizers show the
-    /// source dynamics, as Winamp's analyser did.
-    normalisation: Arc<std::sync::atomic::AtomicU64>,
-}
-
-impl Tapped {
-    pub fn new(
-        inner: Box<dyn Sink>,
-        tap: Arc<AudioTap>,
-        volume: Box<dyn VolumeGetter + Send>,
-        applies_volume: bool,
-        eq: crate::eq::SharedEq,
-        normalisation: Arc<std::sync::atomic::AtomicU64>,
-    ) -> Self {
-        Self {
-            inner,
-            tap,
-            eq: crate::eq::Processor::new(eq),
-            volume,
-            applies_volume,
-            limiter: crate::limiter::Limiter::new(f64::from(SAMPLE_RATE)),
-            normalisation,
-        }
-    }
-}
-
-/// Full-scale level for samples leaving `Tapped`.
-///
-/// This is 1.0 after volume is applied. Before volume, it is the level that
-/// becomes 1.0 after the inner sink applies volume.
-fn full_scale(volume: f64, applied: bool) -> Option<f64> {
-    if applied {
-        Some(1.0)
-    } else if volume > f64::EPSILON {
-        Some(1.0 / volume)
-    } else {
-        // At zero volume, no finite pre-volume ceiling is needed.
-        None
-    }
-}
-
-impl Sink for Tapped {
-    fn start(&mut self) -> SinkResult<()> {
-        self.inner.start()
-    }
-
-    fn stop(&mut self) -> SinkResult<()> {
-        self.tap.clear();
-        self.inner.stop()
-    }
-
-    fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
-        let packet = match packet {
-            AudioPacket::Samples(mut samples) => {
-                self.eq.process(&mut samples);
-                // Post-EQ, pre-volume, pre-normalisation: the equalizer
-                // shapes what the bars show; the volume knob and the
-                // loudness housekeeping never move them.
-                let factor = f64::from_bits(
-                    self.normalisation
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                );
-                let restore = if factor > 0.05 && factor < 20.0 {
-                    (1.0 / factor).clamp(0.125, 8.0) as f32
-                } else {
-                    1.0
-                };
-                self.tap.push(&samples, restore);
-                let attenuation = self.volume.attenuation_factor();
-                if self.applies_volume {
-                    for sample in &mut samples {
-                        *sample *= attenuation;
-                    }
-                }
-                if let Some(full_scale) = full_scale(attenuation, self.applies_volume) {
-                    self.limiter.process(&mut samples, full_scale);
-                }
-                AudioPacket::Samples(samples)
-            }
-            raw => raw,
-        };
-        self.inner.write(packet, converter)
     }
 }
 
@@ -674,12 +573,5 @@ mod tests {
             reused_empty.spectrum, fresh_empty.spectrum,
             "an empty frame left the previous spectrum in the scratch buffer"
         );
-    }
-    #[test]
-    fn full_scale_follows_the_volume_still_to_come() {
-        assert_eq!(full_scale(0.5, true), Some(1.0), "already applied: one");
-        assert_eq!(full_scale(0.25, false), Some(4.0), "a quarter to come");
-        assert_eq!(full_scale(1.0, false), Some(1.0), "full volume to come");
-        assert_eq!(full_scale(0.0, false), None, "silence has no ceiling");
     }
 }
