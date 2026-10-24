@@ -9,9 +9,6 @@
   X-Robots-Tag: noindex, nofollow, noarchive, nosnippet
 
 # https://developers.cloudflare.com/workers/static-assets/headers
-/sw.js
-  Cache-Control: no-cache
-
 /
   Cache-Control: no-store
 

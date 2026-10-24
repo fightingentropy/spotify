@@ -1,8 +1,8 @@
 import type { PlayerSong } from "@/types/player";
 import { catalogLikeId } from "@spotify/shared/catalog-like";
 
-// Player-queue support for the Discover playlists (Top 50 / the YouTube Music
-// Discover Mix). Their tracks play read-through like Discover — nothing is
+// Player-queue support for read-through playlists (the Top 50 charts and YouTube
+// Music playlists). Their tracks play read-through like Discover — nothing is
 // written to the library. The server already shapes them as PlayerSongs: a
 // track that's staged arrives fully playable; one that isn't arrives as a
 // PLACEHOLDER (empty audioUrl) carrying the metadata the stager needs to
@@ -23,8 +23,8 @@ export function prepareHistorySongForPlayback<T extends PlayerSong>(song: T): T 
     : song;
 }
 
-// Materialize an un-staged discover track into a playable song via the same
-// on-demand endpoint the Discover row uses. The response carries a real
+// Materialize an un-staged discover track into a playable song via the
+// on-demand /api/discover/stage endpoint. The response carries a real
 // audioUrl + stable id; we re-attach `discoverTrackId` so the now-playing
 // highlight survives the swap even if the server response omits it. Throws on
 // failure.

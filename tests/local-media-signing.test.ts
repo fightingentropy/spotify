@@ -4,7 +4,7 @@ import {
   LOCAL_MEDIA_SIGNATURE_TTL_SECONDS,
   canonicalizeLocalMediaUrl,
   coarseLocalMediaExpiry,
-  signLocalMediaUrl,
+  createLocalMediaUrlSigner,
 } from "../src/lib/local-media-signing";
 
 describe("canonicalizeLocalMediaUrl", () => {
@@ -46,17 +46,15 @@ describe("coarseLocalMediaExpiry", () => {
   });
 });
 
-describe("signLocalMediaUrl", () => {
+describe("createLocalMediaUrlSigner", () => {
   test("matches an independent Node HMAC and replaces stale auth without decoding the path", async () => {
     const secret = "test-proxy-secret";
     const userId = "user-123";
     const scope = "shared";
     const expiresAt = 1_900_000_000;
     const pathname = "/api/artwork/local/local-server%3Aabc%23%25%2B%3F%26";
-    const signed = await signLocalMediaUrl(
-      `${pathname}?spotify_user=old&spotify_scope=user&spotify_sig=legacy`,
-      { secret, userId, scope, expiresAt },
-    );
+    const sign = await createLocalMediaUrlSigner({ secret, userId, scope, expiresAt });
+    const signed = await sign(`${pathname}?spotify_user=old&spotify_scope=user&spotify_sig=legacy`);
     const parsed = new URL(signed, "https://music.example");
     const expected = createHmac("sha256", secret)
       .update(userId)
@@ -90,8 +88,9 @@ describe("signLocalMediaUrl", () => {
       "/apple-icon.png",
     ];
 
+    const sign = await createLocalMediaUrlSigner(options);
     for (const value of values) {
-      expect(await signLocalMediaUrl(value, options)).toBe(value);
+      expect(await sign(value)).toBe(value);
     }
   });
 });

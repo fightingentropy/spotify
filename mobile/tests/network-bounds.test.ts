@@ -47,16 +47,19 @@ describe("API read timeout policy", () => {
     const spotifyPlaylist = "/api/catalog/spotify/playlists/37i9dQZF1DXcBWIGoYBM5M";
     const youtubePlaylist = "/api/playlist/yt-mix-PL123456789";
     const topFifty = "/api/playlist/discover-top50";
+    const topFiftyUk = "/api/playlist/discover-top50-uk";
 
     expect(apiReadTimeoutMs(search)).toBe(9_000);
     expect(apiReadTimeoutMs(playlistSearch)).toBe(9_000);
     expect(apiReadTimeoutMs(spotifyPlaylist)).toBe(15_000);
     expect(apiReadTimeoutMs(youtubePlaylist)).toBe(22_000);
     expect(apiReadTimeoutMs(topFifty)).toBe(15_000);
+    expect(apiReadTimeoutMs(topFiftyUk)).toBe(15_000);
     expect(isProviderReadThroughRequest(search)).toBe(true);
     expect(isProviderReadThroughRequest(spotifyPlaylist)).toBe(true);
     expect(isProviderReadThroughRequest(youtubePlaylist)).toBe(true);
     expect(isProviderReadThroughRequest(topFifty)).toBe(true);
+    expect(isProviderReadThroughRequest(topFiftyUk)).toBe(true);
   });
 
   test("keeps ordinary API reads on the fast connectivity budget", () => {

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   isSpotifyCatalogId,
-  parseSpotifyArtistCatalogPayload,
   parseSpotifyArtistEmbedPayload,
   parseSpotifyPathfinderSearchEntities,
   parseSpotifyWebApiSearchEntities,
@@ -200,62 +199,6 @@ describe("Spotify artist profile parsing", () => {
         durationMs: 238_640,
       },
     ]);
-  });
-
-  test("keeps authoritative profile fields and only artist-scoped top tracks", () => {
-    const result = parseSpotifyArtistCatalogPayload(
-      {
-        id: ARTIST_ID,
-        name: "Radiohead",
-        genres: ["alternative rock", "art rock"],
-        followers: { total: 1234 },
-        images: [{ url: "https://i.scdn.co/radiohead.jpg", width: 640 }],
-      },
-      {
-        tracks: [
-          {
-            id: TRACK_ID,
-            name: "Everything In Its Right Place",
-            artists: [{ id: ARTIST_ID, name: "Radiohead" }],
-            album: {
-              name: "Kid A",
-              images: [{ url: "https://i.scdn.co/kida.jpg", width: 640 }],
-            },
-            duration_ms: 251_000,
-          },
-          {
-            id: "0VjIjW4GlUZAMYd2vXMi3b",
-            name: "Wrong artist response",
-            artists: [{ id: OTHER_ARTIST_ID, name: "Someone Else" }],
-          },
-        ],
-      },
-      ARTIST_ID,
-    );
-
-    expect(result?.artist).toMatchObject({
-      id: ARTIST_ID,
-      name: "Radiohead",
-      genres: ["alternative rock", "art rock"],
-      followers: 1234,
-    });
-    expect(result?.tracks.map((track) => track.id)).toEqual([TRACK_ID]);
-    expect(result?.tracks[0]).toMatchObject({
-      name: "Everything In Its Right Place",
-      artists: ["Radiohead"],
-      album: "Kid A",
-      durationMs: 251_000,
-    });
-  });
-
-  test("rejects a profile whose ID does not match the requested route", () => {
-    expect(
-      parseSpotifyArtistCatalogPayload(
-        { id: OTHER_ARTIST_ID, name: "Someone Else" },
-        { tracks: [] },
-        ARTIST_ID,
-      ),
-    ).toBeNull();
   });
 });
 

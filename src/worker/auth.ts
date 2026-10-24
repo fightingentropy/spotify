@@ -1,7 +1,6 @@
 import { compare } from "bcryptjs";
 import { deleteCookie, setCookie } from "hono/cookie";
 import type { Hono } from "hono";
-import type { Context } from "hono";
 import {
   exclusiveManagedStorageKeys,
   type AccountMediaRow,
@@ -21,7 +20,6 @@ import {
   sha256Hex,
 } from "./request";
 import { MAX_IMAGE_BYTES, putBuffer, sanitizePathSegment } from "./r2-put";
-import { IMAGE_MIME_TYPES } from "./r2-media";
 import { toApiFileUrl } from "./storage-urls";
 import { envString, toStringValue } from "./values";
 
@@ -129,50 +127,13 @@ export async function getCurrentUser(req: Request, db: SqlTag): Promise<AuthUser
 }
 
 export function publicUser(user: AuthUser) {
-  const defaultImage = defaultUserImage(user.email, user.name);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
-    image: user.image || defaultImage || null,
+    image: user.image || null,
     emailVerified: Boolean(user.emailVerified),
   };
-}
-
-export async function ensureDefaultProfileImageStored(c: Context<AppEnv>, user: AuthUser): Promise<AuthUser> {
-  const defaultImage = defaultUserImage(user.email, user.name);
-  if (!defaultImage || user.id === LOCAL_MAC_MINI_AUTH_USER.id) return user;
-  if (user.image && user.image !== defaultImage) return user;
-
-  const response = await c.env.ASSETS.fetch(new Request(new URL(defaultImage, c.req.url)));
-  if (!response.ok) return user;
-  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
-  if (!IMAGE_MIME_TYPES.has(contentType)) return user;
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_IMAGE_BYTES) return user;
-  const ext =
-    contentType === "image/png"
-      ? ".png"
-      : contentType === "image/gif"
-        ? ".gif"
-        : contentType === "image/webp"
-          ? ".webp"
-          : ".jpg";
-  const key = `users/${sanitizePathSegment(user.id)}/profile/default${ext}`;
-  const imageUrl = toApiFileUrl(key);
-  const existing = await c.env.MEDIA.head(key);
-  if (!existing) await putBuffer(c.env, key, buffer, contentType);
-  await c.get("db")`
-    UPDATE "User"
-    SET "image" = ${imageUrl}, "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${user.id}
-      AND ("image" IS NULL OR "image" = ${defaultImage})
-  `;
-  return { ...user, image: imageUrl };
-}
-
-export async function publicUserForResponse(c: Context<AppEnv>, user: AuthUser) {
-  return publicUser(await ensureDefaultProfileImageStored(c, user));
 }
 
 export async function listAccountMediaRows(db: SqlTag, userId: string): Promise<AccountMediaRow[]> {
@@ -314,17 +275,10 @@ export async function deleteAccountMedia(env: CloudflareEnv, userId: string, key
   }
 }
 
-export function defaultUserImage(_email: string, _name: string | null): string | null {
-  // Name-based identity heuristics have been dropped; everyone gets the same
-  // generic default avatar (resolved by the normal fallback paths).
-  return null;
-}
-
-
 export function registerAuthRoutes(app: Hono<AppEnv>): void {
 app.get("/api/auth/session", async (c) => {
   const user = c.get("user");
-  return c.json({ user: user ? await publicUserForResponse(c, user) : null });
+  return c.json({ user: user ? publicUser(user) : null });
 });
 
 app.get("/api/auth/page-gate", (c) => {
@@ -382,7 +336,7 @@ app.post("/api/auth/signin", async (c) => {
     maxAge: SESSION_MAX_AGE_SECONDS,
     expires,
   });
-  return c.json({ user: await publicUserForResponse(c, user) });
+  return c.json({ user: publicUser(user) });
 });
 
 app.post("/api/auth/signout", async (c) => {

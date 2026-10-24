@@ -7,6 +7,7 @@ import {
   stripPrivateProxyHeaders,
   type PrivateProxyIdentity,
 } from "@/lib/private-proxy-contract";
+import { bytesToHex } from "@/lib/local-media-signing";
 
 export type MacMiniProxyEnv = {
   MAC_MINI_ORIGIN?: string;
@@ -116,10 +117,6 @@ export function shouldForwardMacMiniUserForPathname(pathname: string): boolean {
   if (pathname.startsWith("/api/artwork/local/")) return true;
   if (pathname.startsWith("/api/playlist/")) return true;
   return pathname.startsWith("/api/songs/") && !pathname.startsWith("/api/songs/spotify");
-}
-
-function bytesToHex(bytes: ArrayBuffer): string {
-  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function createPrivateProxySignatureHeaders(options: {

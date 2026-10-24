@@ -3,10 +3,6 @@ export function normalizeLibrarySearchQuery(value: string): string {
     .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-export function escapeLikePattern(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
-}
-
 export function songMatchesLibraryQuery(
   song: { title: string; artist: string },
   query: string,

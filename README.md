@@ -149,6 +149,7 @@ bun run mini:check
 bun run mini:install-server
 bun run mini:install-caddy
 bun run mini:install-dns-watch
+bun run mini:install-yt-dlp
 bun run mini:sync-music
 ```
 
@@ -158,9 +159,8 @@ SpotiFLAC's official browser verification flow before the provider request is
 retried. There is no scheduled watcher; if the provider presents a CAPTCHA,
 the user must complete that browser challenge on the Mac mini.
 The server stores the session privately at
-`~/.streamarena-music/provider-session.json`. It migrates a legacy
-`~/.spotiflac/community_session.json` once, and uses the protocol version tracked
-in our source. An installed SpotiFLAC app is not needed for downloads or renewal.
+`~/.streamarena-music/provider-session.json` and uses the protocol version
+tracked in our source. An installed SpotiFLAC app is not needed for downloads or renewal.
 
 A private host environment file should be owner-readable only and may contain:
 
@@ -207,18 +207,7 @@ The owner-id binding is secret-managed so a public configuration file does not
 publish an account identifier. Owner emails, when used, should be managed the
 same way.
 
-For an existing bearer-token deployment, roll over without a trust gap:
-
-1. Install the private-host build with both new secrets, the old
-   `SPOTIFY_PROXY_TOKEN`, and `SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN=1`.
-2. Install the updated Caddy route. It stops injecting the bearer, strips
-   caller-supplied proxy headers on direct media traffic, and temporarily routes
-   both signed envelopes and explicit legacy headers to the Bun verifier.
-3. Add both Worker secrets and deploy the signed-request Worker.
-4. Set `SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN=0`, remove the old token, and restart
-   the private service. Legacy mode is opt-in and exists only for this rollover.
-
-Use `bun run upload` for a Wrangler dry run. Use `bun run cf-typegen` whenever
+Use `bun run upload` for a deploy dry run. Use `bun run cf-typegen` whenever
 bindings change and review the generated type diff.
 
 ## API surface
@@ -231,7 +220,7 @@ Representative authenticated routes include:
 - `POST /api/songs/spotify` and related bounded import routes
 - `GET /api/files/*` and `/api/artwork/*`
 - `GET`, `POST`, and `DELETE /api/likes`
-- `GET /api/auth/session`, `GET /api/auth/me`
+- `GET /api/auth/session`
 - `POST /api/auth/signin` and `POST /api/auth/signout`
 
 Consult the route definitions and tests for the authoritative contract.

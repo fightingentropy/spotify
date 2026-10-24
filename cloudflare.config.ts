@@ -33,8 +33,6 @@ export default defineConfig({
       }),
     ],
     env: {
-      PLAYLISTS_EDITABLE: bindings.text("1"),
-      AUTH_TRUST_HOST: bindings.text("true"),
       EMAIL_FROM: bindings.text("noreply@streamarena.xyz"),
       APP_ORIGIN: bindings.text("https://music.streamarena.xyz"),
       MAC_MINI_ORIGIN: bindings.text("https://music.streamarena.xyz"),

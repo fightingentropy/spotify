@@ -8,6 +8,7 @@ import {
   type PlaybackStateSnapshot,
 } from "@/lib/playback-state";
 import { isPersistablePlayerSong } from "@/lib/player-persistence";
+import { toNumberValue, toObject, toStringValue } from "@/lib/provider-http";
 import type { PlayerSong } from "@/types/player";
 import { discoverIdentity } from "@spotify/shared/playback-source";
 
@@ -15,22 +16,6 @@ type PlaybackStateResponse = {
   state?: unknown;
 };
 
-function toObject(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function toStringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function toNumberValue(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
 
 function coercePlayerSong(value: unknown): PlayerSong | null {
   const payload = toObject(value);

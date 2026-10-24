@@ -274,7 +274,8 @@ function ytDlpPath(): string {
 
 // Premium cookies (YouTube Music subscriber session) unlock itag 774 (~257k opus).
 // Prefer an explicit env path; otherwise use the standard mini location if present.
-// Absent → anonymous (~131k opus). install-mini-yt-dlp.sh refreshes this file.
+// Absent → anonymous (~131k opus). Nothing refreshes this file automatically;
+// re-export it from a signed-in browser when the session expires.
 function youtubeCookiesFile(): string | undefined {
   const fromEnv = process.env.YOUTUBE_COOKIES_FILE?.trim();
   if (fromEnv) return fromEnv;

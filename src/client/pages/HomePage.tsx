@@ -76,10 +76,7 @@ export default function HomePage() {
   const { user, status } = useAuth();
   const { data: homeData, loading, error, retry } = useApiData<HomePayload>(
     withAccountScope("/api/home", user?.id ?? status),
-    {
-      songs: [],
-      likedSongIds: [],
-    },
+    { likedSongIds: [] },
     {
       enabled: status !== "loading",
       keepPreviousData: true,
@@ -108,10 +105,8 @@ export default function HomePage() {
       keepPreviousData: true,
     },
   );
-  // The Discover row: auto-updating PLAYLIST cards (Top 50 + the YouTube Music
-  // Discover Mix), not individual tracks — same as the iOS app. Each card opens
-  // its playlist detail page. Scoped by account: the mix card is only returned
-  // for signed-in callers.
+  // The Discover row: the Spotify Top 50 charts as playlist cards. Each card
+  // opens its playlist detail page.
   const {
     data: discoverData,
     loading: discoverLoading,

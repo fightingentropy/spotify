@@ -92,7 +92,7 @@ export function coarseLocalMediaExpiry(
   return Math.floor(nowSeconds / bucketSeconds) * bucketSeconds + ttlSeconds;
 }
 
-function bytesToHex(bytes: ArrayBuffer): string {
+export function bytesToHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -151,15 +151,4 @@ export async function createLocalMediaUrlSigner(
     });
     return `${canonical}${separator}${auth.toString()}`;
   };
-}
-
-/**
- * Signs only local Mac-mini media paths. The HMAC input exactly matches the
- * mini's verifier: userId, scope, encoded pathname, and expiry separated by NUL.
- */
-export async function signLocalMediaUrl(
-  value: string,
-  options: LocalMediaSigningOptions,
-): Promise<string> {
-  return (await createLocalMediaUrlSigner(options))(value);
 }

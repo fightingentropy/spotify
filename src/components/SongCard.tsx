@@ -19,8 +19,6 @@ type SongCardProps = {
   canLike?: boolean;
   hideIfUnliked?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
-  showLike?: boolean;
-  showQueue?: boolean;
   priority?: boolean;
 };
 
@@ -33,8 +31,6 @@ const SongCardComponent = function SongCard({
   canLike = false,
   hideIfUnliked = false,
   onToggleLike,
-  showLike = true,
-  showQueue = true,
   priority = false,
 }: SongCardProps) {
   // Optimized selector - only subscribes to necessary state changes
@@ -118,8 +114,6 @@ const SongCardComponent = function SongCard({
         likePending={likePending}
         canLike={canLike}
         onToggleLike={onToggleLike}
-        showLike={showLike}
-        showQueue={showQueue}
         className="absolute right-2 top-2 z-30 h-9 w-9 text-white/90 bg-black/50 backdrop-blur hover:bg-black/70 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
       />
     </div>
@@ -136,8 +130,6 @@ export const SongCard = memo(SongCardComponent, (prevProps, nextProps) => {
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
     prevProps.hideIfUnliked === nextProps.hideIfUnliked &&
-    prevProps.showLike === nextProps.showLike &&
-    prevProps.showQueue === nextProps.showQueue &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&
     prevProps.onToggleLike === nextProps.onToggleLike

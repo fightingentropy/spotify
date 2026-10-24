@@ -94,7 +94,7 @@ export function isIosLikePlatform(
 // <audio> element must fetch them with credentials when routed through the Web
 // Audio API (otherwise the credentialed-CORS response isn't sent and the source
 // node outputs silence). Third-party hosts (radio) use anonymous CORS instead;
-// same-origin / blob / capacitor sources need no crossOrigin at all.
+// same-origin / blob sources need no crossOrigin at all.
 const CREDENTIALED_AUDIO_ORIGINS = new Set<string>([
   "https://music.streamarena.xyz",
 ]);
@@ -106,7 +106,7 @@ export function crossOriginForAudioSrc(
   src: string,
   pageOrigin = typeof location !== "undefined" ? location.origin : undefined,
 ): "anonymous" | "use-credentials" | null {
-  if (/^(blob:|data:|file:|capacitor:)/i.test(src)) return null;
+  if (/^(blob:|data:|file:)/i.test(src)) return null;
   try {
     const url = new URL(src, pageOrigin);
     if (pageOrigin && url.origin === pageOrigin) return null;

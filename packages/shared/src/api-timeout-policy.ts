@@ -18,7 +18,7 @@ export function isProviderReadThroughRequest(url: string): boolean {
     path === "/api/search/albums" ||
     path.startsWith("/api/catalog/") ||
     path.startsWith("/api/playlist/yt-mix-") ||
-    path === "/api/playlist/discover-top50"
+    path.startsWith("/api/playlist/discover-")
   );
 }
 
@@ -30,6 +30,7 @@ export function apiReadTimeoutMs(url: string): number {
   if (path.startsWith("/api/playlist/yt-mix-")) return YOUTUBE_PLAYLIST_TIMEOUT_MS;
   // A cold mini reads YouTube Music Home page by page before it can answer.
   if (path === "/api/discover/youtube-home") return YOUTUBE_PLAYLIST_TIMEOUT_MS;
-  if (path === "/api/playlist/discover-top50") return SPOTIFY_CATALOG_TIMEOUT_MS;
+  // Every Spotify chart: Top 50 Global and Top 50 United Kingdom.
+  if (path.startsWith("/api/playlist/discover-")) return SPOTIFY_CATALOG_TIMEOUT_MS;
   return DEFAULT_READ_TIMEOUT_MS;
 }

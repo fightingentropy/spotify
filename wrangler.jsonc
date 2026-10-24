@@ -57,8 +57,6 @@
 		}
 	},
 	"vars": {
-		"PLAYLISTS_EDITABLE": "1",
-		"AUTH_TRUST_HOST": "true",
 		"EMAIL_FROM": "noreply@streamarena.xyz",
 		"APP_ORIGIN": "https://music.streamarena.xyz",
 		"MAC_MINI_ORIGIN": "https://music.streamarena.xyz",

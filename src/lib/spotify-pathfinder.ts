@@ -1,4 +1,5 @@
 import { looksNonCanonicalTrack, normalizeSongPart } from "@/lib/song-dedupe";
+import { toObject, toStringValue } from "@/lib/provider-http";
 import type { CatalogAlbum } from "@spotify/shared/catalog-albums";
 
 const SPOTIFY_TOKEN_URL = "https://open.spotify.com/api/token";
@@ -111,14 +112,6 @@ type SpotifyAccessTokenCache = {
 
 let tokenCache: SpotifyAccessTokenCache | null = null;
 
-function toObject(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function toStringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function toFiniteNumber(value: unknown): number | null {
   const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
@@ -1082,52 +1075,6 @@ export async function searchSpotifyCatalog(
   };
 }
 
-export function parseSpotifyArtistCatalogPayload(
-  profilePayload: unknown,
-  topTracksPayload: unknown,
-  expectedArtistId: string,
-): SpotifyArtistCatalog | null {
-  if (!isSpotifyCatalogId(expectedArtistId)) return null;
-  const profile = toObject(profilePayload);
-  if (!profile) return null;
-  const id = spotifyEntityId(profile, "artist");
-  const name = toStringValue(profile.name);
-  if (id !== expectedArtistId || !name) return null;
-
-  const genres = Array.isArray(profile.genres)
-    ? profile.genres.map(toStringValue).filter(Boolean).slice(0, 20)
-    : [];
-  const followers = toFiniteNumber(toObject(profile.followers)?.total);
-  const trackRows = Array.isArray(toObject(topTracksPayload)?.tracks)
-    ? (toObject(topTracksPayload)?.tracks as unknown[])
-    : [];
-  const tracks = dedupeValuesById(
-    trackRows
-      .filter((row) => {
-        const artists = Array.isArray(toObject(row)?.artists) ? toObject(row)?.artists : [];
-        return (artists as unknown[]).some((artist) => spotifyEntityId(toObject(artist) ?? {}, "artist") === id);
-      })
-      .map(webApiTrackCandidate)
-      .filter((track): track is SearchCandidate => track !== null)
-      .map(candidateToTrack),
-    20,
-  );
-
-  return {
-    artist: {
-      kind: "artist",
-      provider: "spotify",
-      id,
-      name,
-      imageUrl: largestImageUrl(profile.images) || null,
-      externalUrl: `https://open.spotify.com/artist/${id}`,
-      ...(genres.length > 0 ? { genres } : {}),
-      ...(followers !== null && followers >= 0 ? { followers } : {}),
-    },
-    tracks,
-  };
-}
-
 export function parseSpotifyArtistEmbedPayload(
   payload: unknown,
   expectedArtistId: string,
@@ -1187,11 +1134,7 @@ export function parseSpotifyArtistEmbedHtml(
   }
 }
 
-export async function fetchSpotifyArtistCatalog(
-  artistId: string,
-  _spotifyCookie?: string,
-  _market = "US",
-): Promise<SpotifyArtistCatalog> {
+export async function fetchSpotifyArtistCatalog(artistId: string): Promise<SpotifyArtistCatalog> {
   if (!isSpotifyCatalogId(artistId)) {
     throw new SpotifyPathfinderError("Invalid Spotify artist ID", 400);
   }

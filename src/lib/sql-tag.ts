@@ -6,7 +6,6 @@ export type SqlTag = {
     strings: TemplateStringsArray,
     ...values: TemplateValue[]
   ): Promise<T[]>;
-  end: (_opts?: { timeout?: number }) => Promise<void>;
 };
 
 export function buildSql(

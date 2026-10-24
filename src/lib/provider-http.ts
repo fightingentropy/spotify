@@ -1,12 +1,21 @@
-// Shared helpers for the licensed-source download providers (qobuz/tidal/amazon).
-// These were copy-pasted across providers; extracted here verbatim so the four
-// providers stay byte-for-byte identical in behavior.
+// Shared helpers for the licensed-source download providers (qobuz/tidal/amazon),
+// plus the small value coercions (toStringValue, toNumberValue, toObject) every
+// part of the app uses for untrusted JSON.
 
 export const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
 export function toStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export function toNumberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 export function toObject(value: unknown): Record<string, unknown> | null {

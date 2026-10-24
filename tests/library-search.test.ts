@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  escapeLikePattern,
   normalizeLibrarySearchQuery,
   songMatchesLibraryQuery,
   rankLibrarySongs,
@@ -43,8 +42,7 @@ describe("library search query matching", () => {
     expect(rankLibrarySongs(songs, "Song 2 Blur")).toEqual([songs[2], songs[0], songs[1]]);
   });
 
-  test("escapes LIKE wildcards in user input", () => {
-    expect(escapeLikePattern("100%_real\\x")).toBe("100\\%\\_real\\\\x");
+  test("trims user input", () => {
     expect(normalizeLibrarySearchQuery("  Helix  ")).toBe("helix");
   });
 });

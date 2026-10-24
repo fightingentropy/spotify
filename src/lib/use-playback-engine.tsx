@@ -139,10 +139,6 @@ export function usePlaybackEngine(): {
 
   const { user, status: authStatus } = useAuth();
 
-  // Offline playback resolution is gone (downloads were removed), so the song we
-  // play is exactly the current store song. Kept as an identity helper because a
-  // few call sites still pass the "playback" song around.
-  const resolvePlaybackSong = useCallback((song: PlayerSong) => song, []);
   const playbackSong = currentSong;
 
   const currentSongId = playbackSong?.id ?? null;
@@ -1300,7 +1296,7 @@ export function usePlaybackEngine(): {
       if (!nextSong?.audioUrl) return null;
       return {
         song: nextSong,
-        playbackSong: resolvePlaybackSong(nextSong),
+        playbackSong: nextSong,
         index: nextIdx,
         fromFuture: shuffle && playFuture.at(-1) === nextIdx,
       };
@@ -1480,7 +1476,7 @@ export function usePlaybackEngine(): {
 
     maybeStartCrossfadeRef.current = startCrossfade;
     forceCommitCrossfadeRef.current = forceCommit;
-  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, ensureWebAudioGraph, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, resolvePlaybackSong, setOutputLevel, shuffle, shuffleRemaining, songRadio]);
+  }, [activeIdx, advanceToIndex, crossfadeEnabled, crossfadeSeconds, currentIndex, currentSongIsPodcast, duration, ensureWebAudioGraph, getActiveAudio, getInactiveAudio, isPlaying, loadAudioSource, playFuture, queue, repeatMode, setOutputLevel, shuffle, shuffleRemaining, songRadio]);
 
   // Cancel any in-flight crossfade ramp (and its timer) when the bar unmounts.
   useEffect(() => {

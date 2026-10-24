@@ -4,7 +4,7 @@ import {
   coarseLocalMediaExpiry,
   createLocalMediaUrlSigner,
 } from "@/lib/local-media-signing";
-import type { PlaylistRow, SongRow } from "@/lib/db-types";
+import type { SongRow } from "@/lib/db-types";
 import type { SqlTag } from "@/lib/sql-tag";
 import type { PlayerSong } from "@/types/player";
 import {
@@ -12,7 +12,7 @@ import {
   encodeOrderIdCursor,
 } from "../../packages/shared/src/cursor-page";
 import { LOCAL_MAC_MINI_AUTH_USER, type AppEnv, type AuthUser } from "./env";
-import { ApiError, jsonCached, jsonError, requireUser } from "./http";
+import { ApiError, jsonError, requireUser } from "./http";
 import {
   canUseMacMiniProxy,
   fetchMacMini,
@@ -63,34 +63,6 @@ export async function playlistCoverImageUrlsById(db: SqlTag, userId: string): Pr
   }
   return result;
 }
-
-export async function listPlaylists(db: SqlTag, userId: string | null) {
-  if (!userId) return [];
-  const rows = await db<PlaylistRow & { songsCount: number; source: string | null }>`
-    SELECT p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source", COUNT(ps."id") AS "songsCount"
-    FROM "Playlist" p
-    LEFT JOIN "PlaylistSong" ps ON ps."playlistId" = p."id"
-    WHERE p."userId" = ${userId}
-      AND p."deletedAt" IS NULL
-    GROUP BY p."id", p."name", p."imageUrl", p."userId", p."createdAt", p."source"
-    ORDER BY p."createdAt" DESC
-  `;
-  const coversByPlaylistId = await playlistCoverImageUrlsById(db, userId);
-  return rows.map((row) => {
-    const { source, ...playlist } = row;
-    const songCoverImageUrls = coversByPlaylistId.get(row.id) ?? [];
-    const coverImageUrls = row.imageUrl && source !== "local-folder" ? [] : songCoverImageUrls;
-    return {
-      ...playlist,
-      imageUrl: row.imageUrl ?? songCoverImageUrls[0] ?? null,
-      coverImageUrls,
-      songsCount: Number(row.songsCount ?? 0),
-      editable: true,
-      deletable: true,
-    };
-  });
-}
-
 
 export async function listPlaylistSongsPage(
   db: SqlTag,
@@ -166,11 +138,6 @@ export async function listPlaylistSongs(db: SqlTag, playlistId: string) {
   return rows;
 }
 
-
-export function playlistsEditableEnabled(env: CloudflareEnv): boolean {
-  const value = (env as unknown as Record<string, unknown>).PLAYLISTS_EDITABLE;
-  return value === "1" || value === "true" || value === true;
-}
 
 // Mirror the mini's isLocalLibraryOwner (local-music-server.ts:1206) so the
 // worker resolves "is this the library owner" identically: the local-preview
@@ -283,7 +250,6 @@ export async function convertedFolderIds(env: CloudflareEnv): Promise<Set<string
 }
 
 export async function folderServesFromD1(env: CloudflareEnv, playlistId: string): Promise<boolean> {
-  if (!playlistsEditableEnabled(env)) return false;
   return (await convertedFolderIds(env)).has(playlistId);
 }
 
@@ -338,8 +304,7 @@ export async function upsertSongRef(db: SqlTag, userId: string, song: PlayerSong
   `;
 }
 
-// /api/library merge — when PLAYLISTS_EDITABLE is on, the existing /api/library
-// route delegates here instead of returning D1-only (or proxying to the mini).
+// /api/library: the Worker answers it instead of proxying to the mini.
 // Merge: D1 playlists (native + fully-converted folders) win; the owner's
 // still-unconverted mini folders fill in. A half-written folder row (convertedAt
 // NULL) is EXCLUDED so it can't shadow the mini's full copy with an empty tile.
@@ -435,24 +400,7 @@ export async function handleLibraryMerge(c: Context<AppEnv>): Promise<Response> 
 
 
 export function registerPlaylistRoutes(app: Hono<AppEnv>): void {
-app.get("/api/library", async (c) => {
-  // Editable playlists: merge D1 (native + converted folders) with the owner's
-  // still-unconverted mini folders. The proxy middleware already skipped the
-  // mini proxy for this path when the flag is on, so this is the live handler.
-  if (playlistsEditableEnabled(c.env)) return handleLibraryMerge(c);
-  const user = c.get("user");
-  const playlists = await listPlaylists(c.get("db"), user?.id ?? null);
-  let signedPlaylists = playlists;
-  if (user) {
-    const signMediaUrl = await localMediaUrlSignerFor(c, user);
-    signedPlaylists = await Promise.all(
-      playlists.map((playlist) => signPlaylistArtwork(signMediaUrl, playlist)),
-    );
-  }
-  return jsonCached(c, { playlists: signedPlaylists, userId: user?.id ?? null }, {
-    cacheControl: "private, max-age=300, stale-while-revalidate=600",
-  });
-});
+app.get("/api/library", handleLibraryMerge);
 
 app.post("/api/playlist/:id/reorder", async (c) => {
   const user = requireUser(c.get("user"));

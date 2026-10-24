@@ -10,11 +10,10 @@ import {
 } from "../lib/private-proxy-contract";
 
 export type PrivateProxyAuthResult =
-  | { authenticated: true; identity: PrivateProxyIdentity | null; legacy: boolean }
+  | { authenticated: true; identity: PrivateProxyIdentity | null }
   | {
       authenticated: false;
       identity: null;
-      legacy: false;
       reason:
         | "not-configured"
         | "missing"
@@ -43,14 +42,10 @@ function identityFromHeaders(headers: Headers): PrivateProxyIdentity | null {
 
 export function createPrivateProxyAuthenticator(options: {
   requestSigningSecret: string;
-  legacyToken?: string;
-  allowLegacyToken?: boolean;
   nowSeconds?: () => number;
   maxReplayEntries?: number;
 }) {
   const secret = options.requestSigningSecret.trim();
-  const legacyToken = options.legacyToken?.trim() ?? "";
-  const allowLegacy = options.allowLegacyToken === true && Boolean(legacyToken);
   const nowSeconds = options.nowSeconds ?? (() => Math.floor(Date.now() / 1_000));
   const maxReplayEntries = Math.max(128, options.maxReplayEntries ?? 10_000);
   const verifiedRequests = new WeakMap<Request, PrivateProxyAuthResult>();
@@ -73,25 +68,10 @@ export function createPrivateProxyAuthenticator(options: {
     if (cached) return cached;
 
     const fail = (reason: Extract<PrivateProxyAuthResult, { authenticated: false }>["reason"]) => {
-      const result = { authenticated: false, identity: null, legacy: false, reason } as const;
+      const result = { authenticated: false, identity: null, reason } as const;
       verifiedRequests.set(request, result);
       return result;
     };
-
-    if (allowLegacy) {
-      const supplied = request.headers.get(PRIVATE_PROXY_HEADERS.legacyToken) ?? "";
-      if (supplied && timingSafeEqualText(supplied, legacyToken)) {
-        let identity: PrivateProxyIdentity | null;
-        try {
-          identity = identityFromHeaders(request.headers);
-        } catch {
-          return fail("invalid");
-        }
-        const result = { authenticated: true, identity, legacy: true } as const;
-        verifiedRequests.set(request, result);
-        return result;
-      }
-    }
 
     if (!secret) return fail("not-configured");
     const version = request.headers.get(PRIVATE_PROXY_HEADERS.version) ?? "";
@@ -137,7 +117,7 @@ export function createPrivateProxyAuthenticator(options: {
     if (seenNonces.has(nonce)) return fail("replayed");
     seenNonces.set(nonce, expiresAt);
 
-    const result = { authenticated: true, identity, legacy: false } as const;
+    const result = { authenticated: true, identity } as const;
     verifiedRequests.set(request, result);
     return result;
   };

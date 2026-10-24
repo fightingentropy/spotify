@@ -14,13 +14,12 @@ import { parseSpotifyTrackId, resolveStreamUrl } from "./provider-download";
 import { downloadStagingId, stageDiscoverWithFallback } from "./discover-stage";
 import { downloadPreferences } from "./download-preferences";
 
-// Spotify's editorial "Top 50 - Global" playlist — globally trending tracks right
-// now. Fetched via the pathfinder (works anonymously for public playlists). Each
-// track carries its Spotify id; tapping a track plays it instantly from the
-// Mac-mini's hidden ".discover" staging cache (pre-downloaded in the background)
-// without adding it to the library. See the staging endpoints below + the
+// Spotify's editorial "Top 50 - Global" playlist, fetched anonymously via the
+// pathfinder. Each track carries its Spotify id; tapping one plays it from the
+// Mac-mini's hidden ".discover" staging cache (pre-downloaded by the cron fill)
+// without adding it to the library. See the staging endpoints below and the
 // matching handlers in local-music-server.ts.
-const TOP_50_GLOBAL_PLAYLIST_ID = "37i9dQZEVXbMDoHDwVN2tF";
+const TOP_50_GLOBAL_PLAYLIST_ID = DISCOVER_CHARTS[0].spotifyId;
 // How many not-yet-staged Top-50 tracks to resolve + enqueue per cron tick.
 // Resolution walks many providers and is slow, so this is bounded; the rest
 // fill in over subsequent ticks.
@@ -98,7 +97,7 @@ async function fillDiscoverStaging(
 }
 
 // Fetch + normalize a Spotify playlist's tracks into the Discover shape. Shared
-// by the trending chart, the cron fill, and curated-playlist detail views.
+// by the cron fill and the chart playlist views.
 export async function fetchDiscoverPlaylist(
   env: CloudflareEnv,
   playlistId: string,
@@ -130,8 +129,7 @@ export async function fetchDiscoverPlaylist(
   }
 }
 
-// The current "Top 50 - Global" chart (shared by the trending endpoint and the
-// cron fill).
+// The current "Top 50 - Global" chart, for the cron fill.
 export async function fetchTop50DiscoverTracks(env: CloudflareEnv): Promise<DiscoverTrendingTrack[]> {
   return (await fetchDiscoverPlaylist(env, TOP_50_GLOBAL_PLAYLIST_ID, 50)).tracks;
 }
@@ -178,8 +176,8 @@ export function applyDiscoverStaging(
 // Ask the Mac-mini which of these tracks are already staged (instantly playable
 // from .discover) and fold that status into each track. Best-effort: on any
 // failure (or when staging isn't configured) every track is reported unstaged,
-// which just means a tap materializes it on demand. Shared by the Discover row
-// and curated-playlist detail views.
+// which just means a tap materializes it on demand. Used by the chart playlist
+// views and song recommendations.
 export async function markDiscoverStaged(
   env: CloudflareEnv,
   tracks: DiscoverTrendingTrack[],
@@ -188,16 +186,11 @@ export async function markDiscoverStaged(
   return applyDiscoverStaging(tracks, await readDiscoverStagingStatus(env, timeoutMs));
 }
 
-// The YouTube Music auto-updating "Discover Mix" surfaced as a Home playlist card —
-// personalized to the library owner's Premium account (the mini fetches it with the
-// owner's cookies). Playlist id is "yt-mix-<listId>"; tracks stream as Opus preview.
-const YT_DISCOVER_MIX_LIST_ID = "RDTMAK5uy_n_5IN6hzAOwdCnM8D8rzrs3vDl12UcZpA";
 const readDiscoverCards = createDiscoverCardCache();
 
 // Convert a Discover chart track (with staged status) into a player song — a real,
 // instantly-playable song when staged, else a placeholder the discover-stager
-// materializes on play. Mirrors the mobile discoverTrackToPlayerSong so the Top-50
-// playlist detail renders + plays exactly like the old Discover row (lossless).
+// materializes on play. Mirrors the mobile discoverTrackToPlayerSong.
 export function discoverStagedToPlayerSong(track: DiscoverStagedTrack): PlayerSong {
   const duration = track.durationMs ? track.durationMs / 1000 : undefined;
   if (track.staged && track.audioUrl && track.audioId) {
@@ -259,38 +252,6 @@ export function prepareTopCatalogSong(
   );
 }
 
-// Refresh Home's cached mix metadata from the mini in the background. Keep the
-// provider deadline inside the post-response budget; a miss retains the previous
-// card and the detail route can still retry its live playlist fetch.
-async function youtubeDiscoverMixCard(
-  env: CloudflareEnv,
-): Promise<{ id: string; name: string; imageUrl: string; songsCount: number; resolved: boolean }> {
-  const fallback = { id: `yt-mix-${YT_DISCOVER_MIX_LIST_ID}`, name: "Discover Mix", imageUrl: "", songsCount: 0, resolved: false };
-  try {
-    const res = await macMiniDiscoverFetch(
-      env,
-      `/api/youtube/playlists/${YT_DISCOVER_MIX_LIST_ID}`,
-      "GET",
-      undefined,
-      12_000,
-    );
-    if (!res.ok) return fallback;
-    const body = (await res.json()) as { playlist?: { name?: string; imageUrl?: string | null }; songs?: unknown[] };
-    const songsCount = Array.isArray(body.songs) ? body.songs.length : 0;
-    return {
-      id: fallback.id,
-      name: body.playlist?.name || "Discover Mix",
-      imageUrl: body.playlist?.imageUrl || "",
-      songsCount,
-      // Resolved when we actually got the mix back (tracks present): the card then
-      // has a real cover + count and is safe to cache for longer.
-      resolved: songsCount > 0,
-    };
-  } catch {
-    return fallback;
-  }
-}
-
 // Cron-driven background fill: stage a batch of not-yet-cached Top-50 tracks and
 // hand the Mac-mini the current chart so it refreshes lastSeen + prunes stale
 // entries. Runs on a Cron Trigger because per-track resolution can take tens of
@@ -315,30 +276,10 @@ export async function runDiscoverFill(env: CloudflareEnv): Promise<void> {
 }
 
 export function registerDiscoverRoutes(app: Hono<AppEnv>): void {
-app.get("/api/discover/trending", async (c) => {
-  const discover = await fetchTop50DiscoverTracks(c.env);
-  if (!discover.length) {
-    return jsonCached(c, { tracks: [] }, { cacheControl: "public, max-age=120" });
-  }
-  if (!isMacMiniMusicConfigured(c.env)) {
-    return jsonCached(c, { tracks: discover }, {
-      cacheControl: "public, max-age=1800, stale-while-revalidate=7200",
-    });
-  }
-
-  // Mark which tracks are already staged (instantly playable from .discover).
-  // The actual fill happens on the cron (runDiscoverFill); this endpoint only
-  // reads status, so it stays fast.
-  const tracks = await markDiscoverStaged(c.env, discover);
-
-  // Short cache: a track's staged status changes as the cron fill completes.
-  return jsonCached(c, { tracks }, { cacheControl: "private, max-age=30, stale-while-revalidate=300" });
-});
-
 // Cards resolve artwork in the background; a cold provider never holds up Home.
 app.get("/api/discover/playlists", async (c) => {
   const user = c.get("user");
-  const sources: Array<{ fallback: DiscoverPlaylistCard; authenticatedOnly?: boolean; load: () => Promise<DiscoverPlaylistCard | null> }> = DISCOVER_CHARTS.map((chart) => ({
+  const sources: Array<{ fallback: DiscoverPlaylistCard; load: () => Promise<DiscoverPlaylistCard | null> }> = DISCOVER_CHARTS.map((chart) => ({
     fallback: { id: chart.id, name: chart.name, imageUrl: "", songsCount: 0 },
     load: async () => {
       const { playlist } = await withProviderDeadline(
@@ -348,18 +289,6 @@ app.get("/api/discover/playlists", async (c) => {
       return { id: chart.id, name: chart.name, imageUrl: playlist.imageUrl || "", songsCount: playlist.trackCount ?? 0 };
     },
   }));
-  // The mini's mix is personalized to its owner. It stays behind the same
-  // authentication gate as before and never enters the anonymous card cache.
-  if (isMacMiniMusicConfigured(c.env) && user) {
-    sources.push({
-      authenticatedOnly: true,
-      fallback: { id: `yt-mix-${YT_DISCOVER_MIX_LIST_ID}`, name: "Discover Mix", imageUrl: "", songsCount: 0 },
-      load: async () => {
-        const { resolved, ...card } = await youtubeDiscoverMixCard(c.env);
-        return resolved ? card : null;
-      },
-    });
-  }
   const { playlists, fresh } = await readDiscoverCards({
     requestUrl: c.req.url,
     userId: user?.id ?? null,
@@ -373,8 +302,9 @@ app.get("/api/discover/playlists", async (c) => {
   });
 });
 
-// The owner's YouTube Music Home as playlist shelves. Unlike the Discover cards it
-// is called as the real viewer: the mini answers only for library owners, so any
+// The owner's YouTube Music Home as playlist shelves (its "Your daily discover"
+// shelf carries the Discover Mix). Unlike the Discover cards it is called as the
+// real viewer: the mini answers only for library owners, so any
 // other account gets an empty section instead of the owner's listening history.
 app.get("/api/discover/youtube-home", async (c) => {
   const user = c.get("user");

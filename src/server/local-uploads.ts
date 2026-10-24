@@ -7,7 +7,6 @@ import { sniffUploadFile } from "../lib/upload-media-sniff";
 import {
   LOCAL_AUDIO_EXTENSIONS as AUDIO_EXTENSIONS,
   LOCAL_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS,
-  LOCAL_LYRICS_EXTENSIONS as LYRICS_EXTENSIONS,
 } from "../lib/local-media-path";
 import type { PlayerSong } from "../types/player";
 import { json, readJsonBody } from "./local-http";
@@ -290,7 +289,7 @@ export async function handleRefetchYouTube(source: LibrarySource, id: string, re
   }
 
   try {
-    await replaceLibraryAudioInPlace(source, entry, id, audio, { title, artist });
+    await replaceLibraryAudioInPlace(entry, id, audio, { title, artist });
   } catch (err) {
     console.error("[refetch-youtube] replace failed", err);
     return json(
@@ -329,7 +328,6 @@ async function preserveEmbeddedCover(oldAbs: string, dir: string, stem: string):
 }
 
 async function replaceLibraryAudioInPlace(
-  source: LibrarySource,
   entry: LocalSongEntry,
   pinnedId: string,
   audio: { bytes: Buffer; ext: string },
@@ -538,28 +536,6 @@ export async function handleSongUpload(source: LibrarySource, request: Request):
   }
 }
 
-export async function handlePatchSong(source: LibrarySource, id: string, request: Request): Promise<Response> {
-  const payload = await readJsonBody<{ title?: unknown; artist?: unknown }>(request);
-  const title = typeof payload?.title === "string" ? payload.title.trim() : "";
-  const artist = typeof payload?.artist === "string" ? payload.artist.trim() : "";
-  if (!title || !artist) return json({ error: "Title and artist are required" }, { status: 400 });
-
-  const snapshot = await getLibrary(source);
-  const entry = snapshot.entriesById.get(id);
-  if (!entry) return notFound("Song not found");
-  const currentSidecar = await readSidecar(entry.absolutePath);
-  await writeSidecar(entry.absolutePath, {
-    ...currentSidecar,
-    version: 1,
-    title,
-    artist,
-    updatedAt: new Date().toISOString(),
-  });
-  const nextSnapshot = await getLibrary(source, true);
-  const updated = nextSnapshot.entriesById.get(id);
-  return updated ? json(updated.song) : notFound("Song not found");
-}
-
 // --- Lyrics auto-fetch (LRCLIB) ------------------------------------------
 // LRCLIB (https://lrclib.net) is a free, crowd-sourced synced-lyrics API.
 // We pull the timed .lrc (or plain text) for a track and write it as a sidecar
@@ -685,57 +661,3 @@ export async function handleFetchLyrics(source: LibrarySource, id: string, reque
   return json(songForRequest(updated.song, request));
 }
 
-export async function handleSongAssets(source: LibrarySource, id: string, request: Request): Promise<Response> {
-  const snapshot = await getLibrary(source);
-  const entry = snapshot.entriesById.get(id);
-  if (!entry) return notFound("Song not found");
-
-  const form = await request.formData().catch(() => null);
-  if (!form) return json({ error: "Invalid form body" }, { status: 400 });
-  const sidecar = await readSidecar(entry.absolutePath);
-  const stem = basename(entry.absolutePath, extname(entry.absolutePath));
-  const image = form.get("image");
-  const lyricsFile = form.get("lyricsFile");
-  const lyricsText = typeof form.get("lyricsText") === "string" ? String(form.get("lyricsText")).trim() : "";
-  const sniffedImage = image instanceof File && image.size > 0
-    ? await sniffUploadFile(image, "image")
-    : null;
-  if (image instanceof File && image.size > 0) {
-    const invalidImage = validateUploadFile(image, "Image file", MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, "image/");
-    if (invalidImage) return invalidImage;
-    if (!sniffedImage) return json({ error: "Image file content is not supported" }, { status: 415 });
-  }
-  if (lyricsFile instanceof File && lyricsFile.size > 0) {
-    const invalidLyrics = validateUploadFile(lyricsFile, "Lyrics file", MAX_LYRICS_BYTES, LYRICS_EXTENSIONS, "text/");
-    if (invalidLyrics) return invalidLyrics;
-  }
-  if (byteLength(lyricsText) > MAX_LYRICS_BYTES) {
-    return json({ error: "Lyrics text is too large" }, { status: 413 });
-  }
-
-  if (image instanceof File && image.size > 0) {
-    const imageExt = sniffedImage?.extension || ".jpg";
-    const coverName = `${stem}.cover${imageExt}`;
-    await saveFile(image, resolve(dirname(entry.absolutePath), coverName));
-    sidecar.coverFile = coverName;
-  }
-
-  if (lyricsFile instanceof File && lyricsFile.size > 0) {
-    const lyricsExt = LYRICS_EXTENSIONS.has(extname(lyricsFile.name).toLowerCase())
-      ? extname(lyricsFile.name).toLowerCase()
-      : ".lrc";
-    const lyricsName = `${stem}${lyricsExt}`;
-    await saveFile(lyricsFile, resolve(dirname(entry.absolutePath), lyricsName));
-    sidecar.lyricsFile = lyricsName;
-  } else if (lyricsText) {
-    const lyricsName = `${stem}.lrc`;
-    await writeFile(resolve(dirname(entry.absolutePath), lyricsName), `${lyricsText}\n`, "utf8");
-    sidecar.lyricsFile = lyricsName;
-  }
-
-  sidecar.updatedAt = new Date().toISOString();
-  await writeSidecar(entry.absolutePath, sidecar);
-  const nextSnapshot = await getLibrary(source, true);
-  const updated = nextSnapshot.entriesById.get(id);
-  return updated ? json(updated.song) : notFound("Song not found");
-}

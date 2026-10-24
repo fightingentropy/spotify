@@ -11,7 +11,6 @@ const eslintConfig = [
       "mobile/ios/**",
       "node_modules/**",
       "cloudflare-env.d.ts",
-      "public/sw.js",
       "src/global-types.d.ts",
     ],
   },

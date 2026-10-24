@@ -12,7 +12,6 @@ import { PlayerBar } from "@/components/PlayerBar";
 import { LikeFeedback } from "@/components/LikeFeedback";
 import { DiscoverQueueStager } from "@/client/DiscoverQueueStager";
 import { SongRadioController } from "@/client/SongRadioController";
-import LegacyServiceWorkerCleanup from "@/components/LegacyServiceWorkerCleanup";
 import { PageHeader, PageLayout } from "@/components/PageLayout";
 import HomePage from "@/client/pages/HomePage";
 import { usePlayerStore } from "@/store/player";
@@ -277,7 +276,6 @@ function Shell() {
 
   return (
     <>
-      <LegacyServiceWorkerCleanup />
       <header className="wf-app-header fixed top-0 inset-x-0 z-50 hidden border-b border-white/[0.08] bg-black text-white pt-[env(safe-area-inset-top)] lg:block">
         <div className="mx-auto flex h-14 w-screen max-w-none min-w-0 items-center justify-between px-4 sm:px-6 lg:grid lg:max-w-7xl lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {/* Keep the desktop logo aligned with the Library heading's inset. */}

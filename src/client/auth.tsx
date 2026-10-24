@@ -33,16 +33,12 @@ const LOCAL_OFFLINE_AUTH_USER: AuthUser = {
   emailVerified: true,
 };
 
-function defaultAuthUserImage(email: string, _name: string | null): string | null {
-  return defaultLocalOwnerImage(email);
-}
-
 function coerceAuthUser(value: unknown): AuthUser | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<Record<keyof AuthUser, unknown>>;
   if (typeof candidate.id !== "string" || typeof candidate.email !== "string") return null;
   const name = typeof candidate.name === "string" ? candidate.name : null;
-  const defaultImage = defaultAuthUserImage(candidate.email, name);
+  const defaultImage = defaultLocalOwnerImage(candidate.email);
   const storedImage = typeof candidate.image === "string" && candidate.image.trim() ? candidate.image : null;
   return {
     id: candidate.id,

@@ -90,7 +90,6 @@ import {
   listPlaylistSongs,
   listPlaylistSongsPage,
   localMediaUrlSignerFor,
-  playlistsEditableEnabled,
   registerPlaylistRoutes,
   signPlaylistArtwork,
   signSongRowMedia,
@@ -234,7 +233,7 @@ async function ensureLocalOwnerUser(db: SqlTag): Promise<void> {
 }
 
 function createD1SqlTag(d1: D1Database): SqlTag {
-  const tag = (async function d1Tag<T = SqlRow>(
+  return (async function d1Tag<T = SqlRow>(
     strings: TemplateStringsArray,
     ...values: TemplateValue[]
   ): Promise<T[]> {
@@ -247,67 +246,12 @@ function createD1SqlTag(d1: D1Database): SqlTag {
     await statement.run();
     return [];
   }) as SqlTag;
-
-  tag.end = async () => {};
-  return tag;
 }
 
 async function ensureSchema(env: CloudflareEnv): Promise<void> {
   schemaPromise ??= (async () => {
     for (const statement of D1_SCHEMA_STATEMENTS) {
       await env.DB.prepare(statement).bind().run();
-    }
-    // Columns added to the existing Playlist table after its initial CREATE.
-    // Applied on the SAME memoized path everything awaits so the folder routing
-    // gate can read source/convertedAt without ever hitting "no such column" on a
-    // cold isolate. Idempotent: swallow "duplicate column" so re-runs are no-ops.
-    for (const statement of [
-      'ALTER TABLE "Playlist" ADD COLUMN "source" TEXT',
-      'ALTER TABLE "Playlist" ADD COLUMN "convertedAt" TEXT',
-      'ALTER TABLE "Playlist" ADD COLUMN "deletedAt" TEXT',
-    ]) {
-      try {
-        await env.DB.prepare(statement).bind().run();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.toLowerCase().includes("duplicate column")) throw error;
-      }
-    }
-    // D1 ENFORCES foreign keys. The original PlaylistSong.songId FK referenced
-    // Song, but editable-playlist membership stores ids that live in SongRef (or
-    // the mini's filesystem library), never Song — so that FK rejects every
-    // add-song / folder-seed insert with SQLITE_CONSTRAINT_FOREIGNKEY. Drop it by
-    // rebuilding the table (keeping the playlistId FK). Guarded by a PRAGMA check
-    // so it runs at most once; the table is dormant so the row copy is trivial.
-    // The atomic batch + catch tolerate a concurrent isolate running the same.
-    try {
-      const fkList = await env.DB.prepare(`PRAGMA foreign_key_list("PlaylistSong")`).all<{ table?: string }>();
-      if ((fkList.results ?? []).some((row) => row.table === "Song")) {
-        await env.DB.batch([
-          env.DB.prepare(
-            `CREATE TABLE IF NOT EXISTS "PlaylistSong_new" (
-              "id" TEXT NOT NULL PRIMARY KEY,
-              "playlistId" TEXT NOT NULL,
-              "songId" TEXT NOT NULL,
-              "order" INTEGER NOT NULL DEFAULT 0,
-              UNIQUE ("playlistId", "songId"),
-              FOREIGN KEY ("playlistId") REFERENCES "Playlist"("id") ON DELETE CASCADE ON UPDATE CASCADE
-            )`,
-          ),
-          env.DB.prepare(
-            `INSERT OR IGNORE INTO "PlaylistSong_new" ("id","playlistId","songId","order")
-             SELECT "id","playlistId","songId","order" FROM "PlaylistSong"`,
-          ),
-          env.DB.prepare(`DROP TABLE "PlaylistSong"`),
-          env.DB.prepare(`ALTER TABLE "PlaylistSong_new" RENAME TO "PlaylistSong"`),
-          env.DB.prepare(
-            `CREATE INDEX IF NOT EXISTS "idx_playlistsong_playlist_order" ON "PlaylistSong" ("playlistId", "order")`,
-          ),
-        ]);
-      }
-    } catch {
-      // A concurrent isolate likely ran the same migration; the post-condition
-      // (no songId FK) is what matters and the next request re-checks.
     }
   })().catch((error) => {
     schemaPromise = null;
@@ -461,37 +405,6 @@ async function listSongs(db: SqlTag, userId: string | null) {
   return rows;
 }
 
-async function ensureLegacyLikedSongsForUser(db: SqlTag, userId: string): Promise<void> {
-  const backfilled = await db<{ userId: string }>`
-    SELECT "userId"
-    FROM "LikeBackfill"
-    WHERE "userId" = ${userId}
-    LIMIT 1
-  `;
-  if (backfilled[0]) return;
-
-  const rows = await db<{ likeCount: number }>`
-    SELECT COUNT(*) AS "likeCount"
-    FROM "Like"
-    WHERE "userId" = ${userId}
-  `;
-  if (Number(rows[0]?.likeCount ?? 0) === 0) {
-    await db`
-      INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
-      SELECT ${userId} || ':' || s."id", ${userId}, s."id", COALESCE(s."createdAt", CURRENT_TIMESTAMP)
-      FROM "Song" s
-      WHERE s."userId" = ${userId}
-      ON CONFLICT ("userId", "songId") DO NOTHING
-    `;
-  }
-
-  await db`
-    INSERT INTO "LikeBackfill" ("userId", "completedAt")
-    VALUES (${userId}, CURRENT_TIMESTAMP)
-    ON CONFLICT ("userId") DO NOTHING
-  `;
-}
-
 async function likeSong(db: SqlTag, userId: string, songId: string): Promise<void> {
   await db`
     INSERT INTO "Like" ("id", "userId", "songId", "createdAt")
@@ -502,7 +415,6 @@ async function likeSong(db: SqlTag, userId: string, songId: string): Promise<voi
 
 async function listLikedSongIds(db: SqlTag, userId: string | null): Promise<string[]> {
   if (!userId) return [];
-  await ensureLegacyLikedSongsForUser(db, userId);
   const rows = await db<{ songId: string }>`
     SELECT l."songId" AS "songId"
     FROM "Like" l
@@ -516,7 +428,6 @@ async function listLikedSongIds(db: SqlTag, userId: string | null): Promise<stri
 }
 
 async function listLikedSongs(db: SqlTag, userId: string): Promise<SongRow[]> {
-  await ensureLegacyLikedSongsForUser(db, userId);
   return db<SongRow>`
     SELECT s."id", s."title", s."artist", s."album", s."duration", s."imageUrl", s."audioUrl", s."lyricsUrl", s."audioBitDepth", s."audioSampleRate", s."userId", s."createdAt"
     FROM "Like" l
@@ -609,12 +520,6 @@ function shouldForwardMacMiniUser(c: Context<AppEnv>): boolean {
 function isMacMiniMutation(c: Context<AppEnv>): boolean {
   const method = c.req.method.toUpperCase();
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
-}
-
-async function getMacMiniProxyUser(c: Context<AppEnv>): Promise<AuthUser | null> {
-  if (isLocalPreviewHost(new URL(c.req.url).hostname)) await ensureSchema(c.env);
-  const db = createD1SqlTag(c.env.DB);
-  return (await getCurrentUser(c.req.raw, db)) ?? getLocalMacMiniAuthUser(c);
 }
 
 async function proxyToMacMini(c: Context<AppEnv>, user: AuthUser | null): Promise<Response> {
@@ -980,11 +885,11 @@ app.use("/api/*", async (c, next) => {
 });
 
 app.use("/api/*", async (c, next) => {
-  // When editable playlists are on, the worker (not the mini) owns two GET reads:
-  // the /api/library merge, and the detail read for any folder that's been
-  // converted to D1. Skip the proxy and fall through to the D1 handlers; an
-  // un-converted folder still proxies to the mini below.
-  if (playlistsEditableEnabled(c.env) && c.req.method.toUpperCase() === "GET") {
+  // The worker (not the mini) owns two GET reads: the /api/library merge, and
+  // the detail read for any folder that's been converted to D1. Skip the proxy
+  // and fall through to the D1 handlers; an unconverted folder still proxies to
+  // the mini below.
+  if (c.req.method.toUpperCase() === "GET") {
     const path = macMiniProxyPathname(c);
     if (path === "/api/library") {
       await next();
@@ -1000,7 +905,7 @@ app.use("/api/*", async (c, next) => {
   }
   if (shouldProxyMusicRequest(c)) {
     const needsUser = isMacMiniMutation(c) || shouldForwardMacMiniUser(c);
-    const user = needsUser ? (c.get("user") ?? (await getMacMiniProxyUser(c))) : null;
+    const user = needsUser ? c.get("user") : null;
     const unauthorized = authorizeMacMiniMutation(c, user);
     if (unauthorized) return unauthorized;
     return proxyToMacMini(c, user);
@@ -1026,8 +931,8 @@ app.get("/api/home", async (c) => {
   return jsonCached(c, { likedSongIds });
 });
 // Smart Shuffle: given the listening context's seeds (+ exclude sets), return a
-// batch of recommended tracks shaped exactly like /api/discover/trending so the
-// client can stream them through the existing Discover staging pipeline. The
+// batch of recommended tracks in the Discover track shape so the client can
+// stream them through the existing Discover staging pipeline. The
 // worker stays stateless — the client owns the seed/exclude/blocklist sets.
 // Recommendations come from Last.fm "similar tracks", resolved name→Spotify id.
 const SMART_SHUFFLE_DEFAULT_LIMIT = 12;
@@ -1408,7 +1313,7 @@ app.get("/api/catalog/spotify/artists/:id", async (c) => {
   try {
     const stagingStatus = readDiscoverStagingStatus(c.env, 6_000);
     const catalog = await withProviderDeadline(
-      fetchSpotifyArtistCatalog(id, envString(c.env, "SPOTIFY_SP_DC") || undefined, "US"),
+      fetchSpotifyArtistCatalog(id),
       12_000,
     );
     const tracks = applyDiscoverStaging(
@@ -2533,75 +2438,6 @@ app.get("/api/songs/:id", async (c) => {
   return jsonCached(c, songToPlayerSong(rows[0]));
 });
 
-app.patch("/api/songs/:id", async (c) => {
-  const user = requireUser(c.get("user"));
-  const payload = await readJson<{ title?: unknown; artist?: unknown }>(c.req.raw);
-  const title = toStringValue(payload?.title);
-  const artist = toStringValue(payload?.artist);
-  if (!title || !artist) return jsonError("Title and artist are required", 400);
-  const db = c.get("db");
-  const existing = await db<{ id: string; userId: string }>`
-    SELECT "id", "userId" FROM "Song" WHERE "id" = ${c.req.param("id")} LIMIT 1
-  `;
-  if (!existing[0]) return jsonError("Song not found", 404);
-  if (existing[0].userId !== user.id) return jsonError("Forbidden", 403);
-  const rows = await db<SongRow>`
-    UPDATE "Song"
-    SET "title" = ${title}, "artist" = ${artist}
-    WHERE "id" = ${c.req.param("id")}
-    RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-  `;
-  return c.json(songToPlayerSong(rows[0]));
-});
-
-app.post("/api/songs/:id/assets", async (c) => {
-  const user = requireUser(c.get("user"));
-  const db = c.get("db");
-  const songs = await db<{ id: string; title: string; artist: string; imageUrl: string; lyricsUrl: string | null; userId: string }>`
-    SELECT "id", "title", "artist", "imageUrl", "lyricsUrl", "userId"
-    FROM "Song"
-    WHERE "id" = ${c.req.param("id")}
-    LIMIT 1
-  `;
-  const song = songs[0];
-  if (!song) return jsonError("Song not found", 404);
-  if (song.userId !== user.id) return jsonError("Forbidden", 403);
-  const form = await c.req.formData();
-  const image = form.get("image");
-  const lyricsFile = form.get("lyricsFile");
-  const lyricsText = toStringValue(form.get("lyricsText"));
-  let imageUrl = song.imageUrl;
-  let lyricsUrl = song.lyricsUrl;
-  const basePath = buildOrganizedMusicBasePath(song.title, song.artist);
-  if (image instanceof File && image.size > 0) {
-    if (image.size > MAX_IMAGE_BYTES) return jsonError("Image exceeds max upload size", 413);
-    const imageBytes = await image.arrayBuffer();
-    const sniffedImage = sniffUploadMediaBytes(new Uint8Array(imageBytes));
-    if (!sniffedImage || sniffedImage.kind !== "image") return jsonError("Unsupported image content", 415);
-    const imageExt = sniffedImage.extension;
-    const imageKey = `${basePath}/cover/${song.id}-${crypto.randomUUID()}${imageExt}`;
-    await putBuffer(c.env, imageKey, imageBytes, sniffedImage.contentType);
-    imageUrl = toApiFileUrl(imageKey);
-  }
-  if (lyricsFile instanceof File && lyricsFile.size > 0) {
-    if (lyricsFile.size > MAX_LYRICS_BYTES) return jsonError("Lyrics file is too large", 413);
-    const text = await lyricsFile.text();
-    lyricsUrl = await storeLyrics(c.env, song.title, song.artist, song.id, text);
-  } else if (lyricsText) {
-    lyricsUrl = await storeLyrics(c.env, song.title, song.artist, song.id, lyricsText);
-  }
-  if (imageUrl === song.imageUrl && lyricsUrl === song.lyricsUrl) {
-    return jsonError("Provide an image, lyrics file, or lyrics text", 400);
-  }
-  const rows = await db<SongRow>`
-    UPDATE "Song"
-    SET "imageUrl" = ${imageUrl}, "lyricsUrl" = ${lyricsUrl}
-    WHERE "id" = ${song.id}
-    RETURNING "id", "title", "artist", "album", "duration", "imageUrl", "audioUrl", "lyricsUrl", "audioBitDepth", "audioSampleRate", "userId", "createdAt"
-  `;
-  return c.json(songToPlayerSong(rows[0]));
-});
-
 // Best-effort refresh of any D1 metadata copy of a local song after its file was
 // replaced on the mini (id unchanged — pinned). Covers an editable-playlist
 // SongRef / legacy Song row; a 0-row no-op when the owner's song lives only on the
@@ -2685,9 +2521,9 @@ app.post("/api/songs/:id/refetch-youtube", async (c) => {
 
 app.get("/api/likes", async (c) => {
   const user = c.get("user");
-  if (!user) return jsonCached(c, { likes: [], likedSongIds: [] });
+  if (!user) return jsonCached(c, { likedSongIds: [] });
   const likedSongIds = await listLikedSongIds(c.get("db"), user.id);
-  return jsonCached(c, { likes: likedSongIds, likedSongIds });
+  return jsonCached(c, { likedSongIds });
 });
 
 app.post("/api/likes", async (c) => {
@@ -2712,7 +2548,6 @@ app.delete("/api/likes", async (c) => {
     SELECT "id" FROM "Song" WHERE "id" = ${songId} AND "userId" = ${user.id} LIMIT 1
   `;
   if (!song[0]) return jsonError("Song not found", 404);
-  await ensureLegacyLikedSongsForUser(c.get("db"), user.id);
   await c.get("db")`
     DELETE FROM "Like"
     WHERE "userId" = ${user.id}

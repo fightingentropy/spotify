@@ -7,7 +7,6 @@ interface __BaseEnv_CloudflareEnv {
 	EMAIL: SendEmail;
 	IMAGES: ImagesBinding;
 	ASSETS: Fetcher;
-	AUTH_TRUST_HOST: "true";
 	EMAIL_FROM: "noreply@streamarena.xyz";
 	APP_ORIGIN: "https://music.streamarena.xyz";
 	LICENSED_SOURCE_PROVIDER_URL: string;
@@ -19,12 +18,9 @@ interface __BaseEnv_CloudflareEnv {
 	SPOTIFLAC_PROVIDER_ORDER: string;
 	SPOTIFLAC_TIDAL_APIS: string;
 	SPOTIFLAC_ACTIVE_TIDAL_API: string;
-	SPOTIFY_DC_COOKIE: string;
-	MUSIXMATCH_USER_TOKEN: string;
 	SPOTIFY_SP_DC: string;
 	TICKETMASTER_API_KEY: string;
 	LAST_FM_API_KEY: string;
-	PLAYLISTS_EDITABLE: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -37,7 +33,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "AUTH_TRUST_HOST" | "EMAIL_FROM" | "APP_ORIGIN" | "LICENSED_SOURCE_PROVIDER_URL" | "LICENSED_SOURCE_PROVIDER_USER_AGENT" | "MAC_MINI_ORIGIN" | "LICENSED_SOURCE_PROVIDER_RESOLVE_TIMEOUT_MS" | "QOBUZ_APP_ID" | "QOBUZ_APP_SECRET" | "SPOTIFLAC_PROVIDER_ORDER" | "SPOTIFLAC_TIDAL_APIS" | "SPOTIFLAC_ACTIVE_TIDAL_API" | "SPOTIFY_DC_COOKIE" | "MUSIXMATCH_USER_TOKEN" | "SPOTIFY_SP_DC" | "TICKETMASTER_API_KEY" | "LAST_FM_API_KEY" | "PLAYLISTS_EDITABLE">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "EMAIL_FROM" | "APP_ORIGIN" | "LICENSED_SOURCE_PROVIDER_URL" | "LICENSED_SOURCE_PROVIDER_USER_AGENT" | "MAC_MINI_ORIGIN" | "LICENSED_SOURCE_PROVIDER_RESOLVE_TIMEOUT_MS" | "QOBUZ_APP_ID" | "QOBUZ_APP_SECRET" | "SPOTIFLAC_PROVIDER_ORDER" | "SPOTIFLAC_TIDAL_APIS" | "SPOTIFLAC_ACTIVE_TIDAL_API" | "SPOTIFY_SP_DC" | "TICKETMASTER_API_KEY" | "LAST_FM_API_KEY">> {}
 }
 
 // Begin runtime types

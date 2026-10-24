@@ -107,8 +107,8 @@ export function safePodcastUrl(value: string, baseUrl?: string): string {
 }
 
 // Podcast media is served through this same-origin Worker proxy instead of the
-// third-party feed CDNs so the offline download pipeline and the service
-// worker (which both only handle same-origin URLs) work for episodes too.
+// third-party feed CDNs, which often send no CORS headers and would otherwise
+// play silently through the Web Audio graph.
 export function podcastMediaProxyUrl(showId: string, mediaUrl: string): string {
   return `/api/podcast-media/${encodeURIComponent(showId)}?url=${encodeURIComponent(mediaUrl)}`;
 }

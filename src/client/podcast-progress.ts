@@ -91,10 +91,3 @@ export function markEpisodeFinished(id: string): void {
   map[id] = { ...existing, time: existing.duration, updatedAt: Date.now() };
   writeProgressMap(map);
 }
-
-export function clearEpisodeProgress(id: string): void {
-  const map = readProgressMap();
-  if (!(id in map)) return;
-  delete map[id];
-  writeProgressMap(map);
-}

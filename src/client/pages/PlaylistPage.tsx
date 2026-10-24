@@ -264,7 +264,7 @@ function PlaylistDeleteDialog({
   );
 }
 
-// Discover playlists (Top 50 / the YouTube Music Discover Mix) aren't backed by
+// Read-through playlists (the Top 50 charts and YouTube Music playlists) aren't backed by
 // library rows — their tracks stream read-through (no library writes). The
 // payload's songs are already PlayerSongs: staged ones fully playable, the rest
 // placeholders (empty audioUrl); the whole list is loaded into the player queue

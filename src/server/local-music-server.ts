@@ -108,9 +108,7 @@ import {
 import {
   configureUploads,
   handleFetchLyrics,
-  handlePatchSong,
   handleRefetchYouTube,
-  handleSongAssets,
   handleSongUpload,
 } from "./local-uploads";
 
@@ -144,8 +142,7 @@ type PersistentLikesCache = {
   // file createdAt for ordering. NEW likes get a real timestamp so "Liked Songs"
   // can show most-recently-liked first (like Spotify's "Recently added"), instead
   // of library scan order where a song sat at the top forever. Version stays 1 on
-  // purpose — bumping it would invalidate the existing cache and trip the
-  // "everything is liked" legacy backfill, nuking real unlikes.
+  // purpose — bumping it would invalidate the existing cache and lose every like.
   likedAt?: Record<string, number>;
 };
 
@@ -167,7 +164,6 @@ const MEDIA_SCOPE_SEARCH_PARAM = "spotify_scope";
 const MEDIA_EXPIRY_SEARCH_PARAM = "spotify_exp";
 const MEDIA_SIGNATURE_SEARCH_PARAM = "spotify_sig";
 const MEDIA_SIGNATURE_TTL_SECONDS = 60 * 60;
-const LEGACY_MEDIA_SIGNATURE_TTL_SECONDS = 24 * 60 * 60;
 
 const cwd = process.cwd();
 const defaultDistDir = existsSync(resolve(cwd, "dist/client"))
@@ -193,15 +189,8 @@ const idleTimeoutSeconds = Number.isFinite(configuredIdleTimeoutSeconds)
 const remoteArtworkLookupEnabled = process.env.SPOTIFY_ARTWORK_LOOKUP !== "0";
 const artworkLookupCountry = process.env.SPOTIFY_ARTWORK_COUNTRY || "GB";
 const requestSigningSecret = process.env.SPOTIFY_REQUEST_SIGNING_SECRET || "";
-const legacyProxyToken = process.env.SPOTIFY_PROXY_TOKEN || "";
-const allowLegacyProxyToken = process.env.SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN === "1";
-const mediaSigningSecret =
-  process.env.SPOTIFY_MEDIA_SIGNING_SECRET || (allowLegacyProxyToken ? legacyProxyToken : "");
-const privateProxyAuthenticator = createPrivateProxyAuthenticator({
-  requestSigningSecret,
-  legacyToken: legacyProxyToken,
-  allowLegacyToken: allowLegacyProxyToken,
-});
+const mediaSigningSecret = process.env.SPOTIFY_MEDIA_SIGNING_SECRET || "";
+const privateProxyAuthenticator = createPrivateProxyAuthenticator({ requestSigningSecret });
 const trustLocalNetwork = process.env.SPOTIFY_TRUST_LOCAL_NETWORK === "1";
 const proxyHostnames = new Set(
   (process.env.SPOTIFY_PROXY_HOSTNAMES || "")
@@ -231,9 +220,6 @@ const OUTPUT_FORMATS = new Set<OutputFormat>(["flac", "mp3", "aac", "ogg", "opus
 // Serializes likes read-modify-write per source so concurrent toggles don't
 // lose updates (last-writer-wins). Keyed by source.key.
 const likeWriteChains = new Map<string, Promise<unknown>>();
-// Tracks sources whose one-time legacy-likes backfill has already been
-// attempted this process, so side-effect-free GETs never re-run the migration.
-const likesBackfilled = new Set<string>();
 
 function normalizeIdentityValue(value: string): string {
   return value.trim().toLowerCase();
@@ -485,14 +471,8 @@ function mediaScopeForIdentity(identity: RequestUserIdentity): "shared" | "user"
   return isLocalLibraryOwner(identity) ? "shared" : "user";
 }
 
-function mediaSignatureWithSecret(
-  secret: string,
-  userId: string,
-  scope: string,
-  pathname: string,
-  expiresAt: string,
-): string {
-  return createHmac("sha256", secret)
+function mediaSignature(userId: string, scope: string, pathname: string, expiresAt: string): string {
+  return createHmac("sha256", mediaSigningSecret)
     .update(userId)
     .update("\0")
     .update(scope)
@@ -502,10 +482,6 @@ function mediaSignatureWithSecret(
     .update(expiresAt)
     .digest("hex")
     .slice(0, 40);
-}
-
-function mediaSignature(userId: string, scope: string, pathname: string, expiresAt: string): string {
-  return mediaSignatureWithSecret(mediaSigningSecret, userId, scope, pathname, expiresAt);
 }
 
 function appendMediaSignature(mediaUrl: string | undefined, identity: RequestUserIdentity | null): string | undefined {
@@ -622,23 +598,10 @@ function hasValidMediaSignature(url: URL): boolean {
     signature
   );
   if (!structurallyValid) return false;
-  if (
+  return Boolean(
     mediaSigningSecret &&
     expirySeconds <= nowSeconds + MEDIA_SIGNATURE_TTL_SECONDS + 60 &&
     timingSafeEqualStr(signature, mediaSignature(userId, scope, url.pathname, expiresAt))
-  ) {
-    return true;
-  }
-  // Rollover-only acceptance for URLs emitted by the former 24-hour bearer-key
-  // signer. It disappears as soon as legacy proxy mode is disabled.
-  return Boolean(
-    allowLegacyProxyToken &&
-    legacyProxyToken &&
-    expirySeconds <= nowSeconds + LEGACY_MEDIA_SIGNATURE_TTL_SECONDS + 60 &&
-    timingSafeEqualStr(
-      signature,
-      mediaSignatureWithSecret(legacyProxyToken, userId, scope, url.pathname, expiresAt),
-    )
   );
 }
 
@@ -783,40 +746,13 @@ async function readPersistentLikeTimes(source: LibrarySource): Promise<Record<st
   return {};
 }
 
-// One-time migration: if a source has no likes cache yet, seed it with the
-// legacy "everything is liked" default. Serialized + write-once so GET requests
-// stay side-effect-free and concurrent callers don't double-write.
-async function backfillLegacyLikesForSource(source: LibrarySource, songs: PlayerSong[]): Promise<void> {
-  if (likesBackfilled.has(source.key)) return;
-  await withLikeWriteLock(source, async () => {
-    if (likesBackfilled.has(source.key)) return;
-    const existing = await readPersistentLikes(source);
-    if (existing === null) {
-      await writePersistentLikes(source, songs.map((song) => song.id)).catch(() => {});
-    }
-    likesBackfilled.add(source.key);
-  });
-}
-
 async function likedSongIdsForSongs(source: LibrarySource, songs: PlayerSong[]): Promise<string[]> {
   const catalogIds = (await readCatalogLikes(source)).map((song) => song.id);
-  const stored = await readPersistentLikes(source);
-  if (stored !== null) {
-    const fileIds = CANONICAL_LIKES_ENABLED
-      ? canonicalizeLikedIds(stored, songs)
-      : filterVisibleLikedSongIds(stored, songs);
-    return [...fileIds, ...catalogIds];
-  }
-  // No cache yet: report the legacy default (all songs liked) WITHOUT writing on
-  // this GET path. The shared source is backfilled at startup; per-user sources
-  // are created on demand, so kick off their one-time backfill in the
-  // background (serialized + write-once) without blocking the response.
-  if (!source.shared && !likesBackfilled.has(source.key)) {
-    void backfillLegacyLikesForSource(source, songs).catch(() => {});
-  }
+  // No likes cache yet means nothing has been liked.
+  const stored = (await readPersistentLikes(source)) ?? [];
   const fileIds = CANONICAL_LIKES_ENABLED
-    ? Array.from(new Set(songs.map(canonicalIdOf)))
-    : songs.map((song) => song.id);
+    ? canonicalizeLikedIds(stored, songs)
+    : filterVisibleLikedSongIds(stored, songs);
   return [...fileIds, ...catalogIds];
 }
 
@@ -849,8 +785,6 @@ async function setSongLikedForSource(
       ? canonicalizeLikedIds(liked, songs)
       : filterVisibleLikedSongIds(liked, songs);
     await writePersistentLikes(source, likedSongIds, likedAt);
-    // A successful explicit write satisfies the legacy backfill too.
-    likesBackfilled.add(source.key);
     return likedSongIds;
   });
 }
@@ -865,7 +799,7 @@ async function handleLikes(request: Request): Promise<Response> {
   const likedSongIds = source ? await likedSongIdsForSongs(source, visibleSongs) : [];
 
   if (request.method === "GET") {
-    return jsonCached(request, { likes: likedSongIds, likedSongIds });
+    return jsonCached(request, { likedSongIds });
   }
 
   if (request.method !== "POST" && request.method !== "DELETE") return methodNotAllowed();
@@ -888,7 +822,7 @@ async function handleLikes(request: Request): Promise<Response> {
     if (!target) return notFound("Song not found");
     await setCatalogLike(source, target, request.method === "POST");
     const ids = await likedSongIdsForSongs(source, visibleSongs);
-    return json({ ok: true, song: target, likes: ids, likedSongIds: ids });
+    return json({ ok: true, song: target, likedSongIds: ids });
   }
   const nextLikedSongIds = await setSongLikedForSource(source, visibleSongs, songId, request.method === "POST");
   if (!nextLikedSongIds) return notFound("Song not found");
@@ -905,7 +839,7 @@ async function handleLikes(request: Request): Promise<Response> {
     }
   }
   const ids = await likedSongIdsForSongs(source, visibleSongs);
-  return json({ ok: true, likes: ids, likedSongIds: ids });
+  return json({ ok: true, likedSongIds: ids });
 }
 
 async function songEntryOwnedPaths(source: LibrarySource, entry: LocalSongEntry): Promise<string[]> {
@@ -1893,12 +1827,6 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
 
   if (pathname.startsWith("/api/songs/")) {
     const rest = pathname.slice("/api/songs/".length);
-    if (rest.endsWith("/assets")) {
-      const id = safeDecode(rest.slice(0, -"/assets".length));
-      const source = librarySourceForRequest(request);
-      if (!source) return forbiddenLibraryResponse();
-      return request.method === "POST" ? handleSongAssets(source, id, request) : methodNotAllowed();
-    }
     if (rest.endsWith("/lyrics")) {
       const id = safeDecode(rest.slice(0, -"/lyrics".length));
       const source = librarySourceForRequest(request);
@@ -1919,11 +1847,6 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
       const entry = snapshot.entriesById.get(id);
       const song = entry?.song ?? await findDiscoverStagedSong(source, id);
       return song ? jsonCached(request, songForRequest(song, request)) : notFound("Song not found");
-    }
-    if (request.method === "PATCH") {
-      const source = librarySourceForRequest(request);
-      if (!source) return forbiddenLibraryResponse();
-      return handlePatchSong(source, id, request);
     }
     return methodNotAllowed();
   }
@@ -1956,13 +1879,6 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     return handleArtwork(source, id, request);
   }
 
-  if (pathname.startsWith("/api/songs/spotify")) {
-    return json(
-      { error: "Spotify download endpoints are not available in local music server mode." },
-      { status: 501 },
-    );
-  }
-
   return notFound();
 }
 
@@ -1986,13 +1902,11 @@ async function serveStaticAsset(request: Request, url: URL): Promise<Response> {
     const cacheControl =
       relativePath === "index.html"
         ? "no-store"
-        : relativePath === "sw.js"
-          ? "no-cache"
-          : relativePath === "manifest.webmanifest"
-            ? "public, max-age=3600"
-            : relativePath.startsWith("assets/")
-              ? "public, max-age=31536000, immutable"
-              : "public, max-age=3600";
+        : relativePath === "manifest.webmanifest"
+          ? "public, max-age=3600"
+          : relativePath.startsWith("assets/")
+            ? "public, max-age=31536000, immutable"
+            : "public, max-age=3600";
     return serveFile(absolutePath, request, cacheControl);
   }
 
@@ -2106,8 +2020,7 @@ async function initializeLibrary(): Promise<void> {
       `Spotify local music server listening on http://${host}:${port} with ${cachedSnapshot.songs.length} cached tracks from ${source.root}`,
     );
     void refreshLibrary(source, true)
-      .then(async (snapshot) => {
-        await backfillLegacyLikesForSource(source, snapshot.songs).catch(() => {});
+      .then((snapshot) => {
         console.log(`Spotify local music server refreshed ${snapshot.songs.length} tracks from ${source.root}`);
       })
       .catch((error) => {
@@ -2117,8 +2030,6 @@ async function initializeLibrary(): Promise<void> {
   }
 
   const snapshot = await refreshLibrary(source, true);
-  // One-time legacy likes migration at startup keeps GET handlers side-effect-free.
-  await backfillLegacyLikesForSource(source, snapshot.songs).catch(() => {});
   console.log(
     `Spotify local music server listening on http://${host}:${port} with ${snapshot.songs.length} tracks from ${source.root}`,
   );

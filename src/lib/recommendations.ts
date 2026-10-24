@@ -1,4 +1,5 @@
 import { looksNonCanonicalTrack, normalizeSongPart } from "@/lib/song-dedupe";
+import { toObject, toStringValue } from "@/lib/provider-http";
 
 const LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/";
 const LASTFM_REQUEST_TIMEOUT_MS = 8_000;
@@ -41,14 +42,6 @@ export function selectRecommendations<T extends SeedTrack & { id: string }>(
   return selected;
 }
 
-function toObject(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function toStringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 // Bare fetch() has no timeout, so a hung Last.fm endpoint would stall the
 // recommend flow. Wrap each request with an AbortController-backed timeout; on

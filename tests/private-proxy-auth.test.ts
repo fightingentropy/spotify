@@ -62,8 +62,8 @@ describe("short-lived private proxy request signing", () => {
     const auth = verifier();
     const request = new Request(target, { headers });
 
-    expect(auth.authenticate(request)).toEqual({ authenticated: true, identity, legacy: false });
-    expect(auth.authenticate(request)).toEqual({ authenticated: true, identity, legacy: false });
+    expect(auth.authenticate(request)).toEqual({ authenticated: true, identity });
+    expect(auth.authenticate(request)).toEqual({ authenticated: true, identity });
     expect(auth.replayCacheSize()).toBe(1);
     expect(auth.authenticate(new Request(target, { headers }))).toMatchObject({
       authenticated: false,
@@ -121,25 +121,6 @@ describe("short-lived private proxy request signing", () => {
     expect(headers.get("cookie")).toBeNull();
     expect(headers.get(PRIVATE_PROXY_HEADERS.legacyToken)).toBeNull();
     expect(headers.get(PRIVATE_PROXY_HEADERS.userId)).toBe(identity.id);
-  });
-
-  test("keeps the bearer-token migration path opt-in and disabled by default", () => {
-    const headers = new Headers({
-      [PRIVATE_PROXY_HEADERS.legacyToken]: "legacy-secret",
-      [PRIVATE_PROXY_HEADERS.userId]: identity.id,
-      [PRIVATE_PROXY_HEADERS.userEmail]: identity.email,
-    });
-    const request = new Request(target, { headers });
-    expect(createPrivateProxyAuthenticator({
-      requestSigningSecret: "",
-      legacyToken: "legacy-secret",
-    }).authenticate(request)).toMatchObject({ authenticated: false, reason: "not-configured" });
-
-    expect(createPrivateProxyAuthenticator({
-      requestSigningSecret: "",
-      legacyToken: "legacy-secret",
-      allowLegacyToken: true,
-    }).authenticate(request)).toMatchObject({ authenticated: true, legacy: true });
   });
 });
 

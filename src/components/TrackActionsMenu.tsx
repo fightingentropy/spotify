@@ -23,10 +23,6 @@ type TrackActionsButtonProps = {
   likePending?: boolean;
   canLike?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
-  // Gates the "Play next" + "Add to queue" items.
-  showQueue?: boolean;
-  // Gates the "Save to / Remove from Liked Songs" item.
-  showLike?: boolean;
   // Styling for the trigger button — differs between list rows and grid cards.
   className?: string;
   iconSize?: number;
@@ -40,22 +36,15 @@ export function TrackActionsButton({
   likePending = false,
   canLike = false,
   onToggleLike,
-  showQueue = true,
-  showLike = true,
   className,
   iconSize = 18,
 }: TrackActionsButtonProps) {
   const [open, setOpen] = useState(false);
-  const hasLikeAction = showLike && !!onToggleLike;
-  const hasQueueActions = showQueue;
 
   const handleOpen = useCallback((event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     setOpen(true);
   }, []);
-
-  // Nothing to surface → don't render a dead trigger.
-  if (!hasLikeAction && !hasQueueActions) return null;
 
   return (
     <>
@@ -81,8 +70,6 @@ export function TrackActionsButton({
           likePending={likePending}
           canLike={canLike}
           onToggleLike={onToggleLike}
-          showQueue={hasQueueActions}
-          showLike={hasLikeAction}
           onClose={() => setOpen(false)}
         />
       ) : null}
@@ -96,8 +83,6 @@ type TrackActionsSheetProps = {
   likePending: boolean;
   canLike: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
-  showQueue: boolean;
-  showLike: boolean;
   onClose: () => void;
 };
 
@@ -107,8 +92,6 @@ function TrackActionsSheet({
   likePending,
   canLike,
   onToggleLike,
-  showQueue,
-  showLike,
   onClose,
 }: TrackActionsSheetProps) {
   const addToQueue = usePlayerStore((state) => state.addToQueue);
@@ -239,22 +222,18 @@ function TrackActionsSheet({
         <div className="mx-5 border-t border-white/10" />
 
         <div className="px-2 py-2">
-          {showQueue ? (
-            <>
-              <ActionRow
-                icon={<ListStart size={20} />}
-                label="Play next"
-                onClick={() => runAction(() => playNext(song))}
-              />
-              <ActionRow
-                icon={<ListEnd size={20} />}
-                label="Add to queue"
-                onClick={() => runAction(() => addToQueue(song))}
-              />
-            </>
-          ) : null}
+          <ActionRow
+            icon={<ListStart size={20} />}
+            label="Play next"
+            onClick={() => runAction(() => playNext(song))}
+          />
+          <ActionRow
+            icon={<ListEnd size={20} />}
+            label="Add to queue"
+            onClick={() => runAction(() => addToQueue(song))}
+          />
 
-          {showLike && onToggleLike ? (
+          {onToggleLike ? (
             <ActionRow
               icon={
                 <Heart

@@ -19,8 +19,6 @@ type SongListItemProps = {
   likePending?: boolean;
   canLike?: boolean;
   onToggleLike?: (songId: string, nextLiked: boolean) => void | Promise<void>;
-  showLike?: boolean;
-  showQueue?: boolean;
   priority?: boolean;
 };
 
@@ -41,8 +39,6 @@ const SongListItemComponent = function SongListItem({
   likePending = false,
   canLike = false,
   onToggleLike,
-  showLike = true,
-  showQueue = true,
   priority = false,
 }: SongListItemProps) {
   const setSong = usePlayerStore((state) => state.setSong);
@@ -138,8 +134,6 @@ const SongListItemComponent = function SongListItem({
           likePending={likePending}
           canLike={canLike}
           onToggleLike={onToggleLike}
-          showLike={showLike}
-          showQueue={showQueue}
           className="h-9 w-9 text-white/55 hover:bg-white/[0.08] hover:text-white"
         />
       </div>
@@ -200,8 +194,6 @@ const SongListItemComponent = function SongListItem({
         likePending={likePending}
         canLike={canLike}
         onToggleLike={onToggleLike}
-        showLike={showLike}
-        showQueue={showQueue}
         className="h-9 w-9 text-foreground/70 hover:bg-black/10 hover:dark:bg-white/10"
       />
     </div>
@@ -216,8 +208,6 @@ export const SongListItem = memo(SongListItemComponent, (prevProps, nextProps) =
     prevProps.liked === nextProps.liked &&
     prevProps.likePending === nextProps.likePending &&
     prevProps.canLike === nextProps.canLike &&
-    prevProps.showLike === nextProps.showLike &&
-    prevProps.showQueue === nextProps.showQueue &&
     prevProps.priority === nextProps.priority &&
     prevProps.onPlayAt === nextProps.onPlayAt &&
     prevProps.onToggleLike === nextProps.onToggleLike

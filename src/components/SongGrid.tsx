@@ -27,9 +27,6 @@ type SongGridProps = {
   likedSongIds?: string[] | null;
   hideIfUnliked?: boolean;
   canLike?: boolean;
-  showLikeControls?: boolean;
-  // When false, hides the per-row "add to queue" button.
-  showQueueButton?: boolean;
   emptyLabel?: string;
 };
 
@@ -128,8 +125,6 @@ export function SongGrid({
   likedSongIds = null,
   hideIfUnliked = false,
   canLike = false,
-  showLikeControls = true,
-  showQueueButton = true,
   emptyLabel,
 }: SongGridProps) {
   const playlistPresentation = variant === "playlist";
@@ -497,8 +492,6 @@ export function SongGrid({
         liked={!!likedMap[songLikeId(song, likedMap)]}
         likePending={!!pendingLookup[songLikeId(song, pendingLookup)]}
         canLike={canLike}
-        showLike={showLikeControls}
-        showQueue={showQueueButton}
         onToggleLike={handleToggleLike}
         hideIfUnliked={hideIfUnliked}
         priority={index < 6}
@@ -580,8 +573,6 @@ export function SongGrid({
                       liked={!!likedMap[songLikeId(song, likedMap)]}
                       likePending={!!pendingLookup[songLikeId(song, pendingLookup)]}
                       canLike={canLike}
-                      showLike={showLikeControls}
-                      showQueue={showQueueButton}
                       onToggleLike={handleToggleLike}
                       priority={index < 6}
                     />
@@ -601,8 +592,6 @@ export function SongGrid({
                   liked={!!likedMap[songLikeId(song, likedMap)]}
                   likePending={!!pendingLookup[songLikeId(song, pendingLookup)]}
                   canLike={canLike}
-                  showLike={showLikeControls}
-                  showQueue={showQueueButton}
                   onToggleLike={handleToggleLike}
                   priority={index < 6}
                 />
@@ -615,7 +604,7 @@ export function SongGrid({
   }, [
     canLike, clearFilter, enableVirtualGrid, enableVirtualList, handleToggleLike,
     hideIfUnliked, likedMap, onPlayAt, pendingLookup, playlistPresentation,
-    showLikeControls, showQueueButton, variant, viewMode, virtualGridHeight,
+    variant, viewMode, virtualGridHeight,
     virtualGridRange.end, virtualGridRange.start, virtualGridTop, virtualRange.end,
     virtualRange.start, visibleSongs,
   ]);

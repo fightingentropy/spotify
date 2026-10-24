@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
@@ -302,29 +302,9 @@ async function ensureApiSession(options: Options): Promise<CookieJar> {
     const payload = (await session.json().catch(() => ({}))) as { user?: unknown };
     if (payload.user) return jar;
   }
-
-  const password = `Bulk-${randomBytes(12).toString("hex")}`;
-  const email = `bulk-${Date.now()}-${randomBytes(3).toString("hex")}@local.test`;
-  const register = await apiFetch(jar, options.baseUrl, "/api/register", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "Bulk Downloader", email, password }),
-  });
-  if (!register.ok) {
-    const data = (await register.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `Register failed with ${register.status}`);
-  }
-
-  const signin = await apiFetch(jar, options.baseUrl, "/api/auth/signin", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!signin.ok) {
-    const data = (await signin.json().catch(() => ({}))) as { error?: string };
-    throw new Error(data.error || `Sign in failed with ${signin.status}`);
-  }
-  return jar;
+  // Local dev signs requests in as the library owner. Registration is disabled,
+  // so there is no other way to get a session from a script.
+  throw new Error(`${options.baseUrl} did not sign this script in as the library owner. Run it against local dev.`);
 }
 
 async function fetchTrackMetadata(

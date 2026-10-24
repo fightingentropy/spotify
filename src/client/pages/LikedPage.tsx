@@ -41,12 +41,7 @@ export default function LikedPage() {
   // trigger a session refresh.
   const isAuthError = !!error && (/\b401\b/.test(error) || /unauthor/i.test(error));
   const songs = Array.isArray(data.songs) ? data.songs : [];
-  const legacyLikes = (data as unknown as { likes?: unknown }).likes;
-  const likedSongIds = Array.isArray(data.likedSongIds)
-    ? data.likedSongIds
-    : Array.isArray(legacyLikes)
-      ? legacyLikes.filter((id): id is string => typeof id === "string")
-      : [];
+  const likedSongIds = Array.isArray(data.likedSongIds) ? data.likedSongIds : [];
 
   useEffect(() => {
     if (isAuthError) void refresh();

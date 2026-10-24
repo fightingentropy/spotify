@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { createDiscoverCardCache, type DiscoverPlaylistCard } from "../src/worker/discover-card-cache";
 
 const top = { id: "discover-top50", name: "Top 50", imageUrl: "", songsCount: 0 };
-const mix = { id: "yt-mix-test", name: "Discover Mix", imageUrl: "", songsCount: 0 };
+const uk = { id: "discover-top50-uk", name: "Top 50 - United Kingdom", imageUrl: "", songsCount: 0 };
 const resolvedTop = { ...top, imageUrl: "https://art.example/top.jpg", songsCount: 50 };
-const resolvedMix = { ...mix, imageUrl: "https://art.example/personalized.jpg", songsCount: 25 };
+const resolvedUk = { ...uk, imageUrl: "https://art.example/uk.jpg", songsCount: 50 };
 
 function deferred() {
   let resolve!: (card: DiscoverPlaylistCard | null) => void;
@@ -33,7 +33,7 @@ function setup() {
     privateOrigin: "https://mini.example",
     sources: [
       { fallback: top, load: async () => resolvedTop },
-      { fallback: mix, authenticatedOnly: true, load: async () => resolvedMix },
+      { fallback: uk, load: async () => resolvedUk },
     ],
     openCache: async () => cache,
     waitUntil: (work: Promise<unknown>) => { jobs.push(work); },
@@ -45,18 +45,18 @@ describe("Discover card metadata cache", () => {
   test("cold Home returns fallback cards while both providers remain unresolved", async () => {
     const { read, options, jobs, drain } = setup();
     const slowTop = deferred();
-    const slowMix = deferred();
+    const slowUk = deferred();
     const readOptions = { ...options, sources: [
       { fallback: top, load: () => slowTop.promise },
-      { fallback: mix, authenticatedOnly: true, load: () => slowMix.promise },
+      { fallback: uk, load: () => slowUk.promise },
     ] };
     const result = await read(readOptions);
-    expect(result).toEqual({ playlists: [top, mix], fresh: false });
+    expect(result).toEqual({ playlists: [top, uk], fresh: false });
     expect(jobs).toHaveLength(1);
     slowTop.resolve(resolvedTop);
-    slowMix.resolve(resolvedMix);
+    slowUk.resolve(resolvedUk);
     await drain();
-    expect(await read(readOptions)).toEqual({ playlists: [resolvedTop, resolvedMix], fresh: true });
+    expect(await read(readOptions)).toEqual({ playlists: [resolvedTop, resolvedUk], fresh: true });
   }, 1_000);
 
   test("stale cards return immediately and concurrent readers start only one refresh", async () => {
@@ -72,7 +72,7 @@ describe("Discover card metadata cache", () => {
     ] };
     const first = await read(staleOptions);
     const second = await read(staleOptions);
-    expect(first).toEqual({ playlists: [resolvedTop, resolvedMix], fresh: false });
+    expect(first).toEqual({ playlists: [resolvedTop, resolvedUk], fresh: false });
     expect(second).toEqual(first);
     expect(calls).toBe(1);
     expect(jobs).toHaveLength(1);
@@ -89,11 +89,11 @@ describe("Discover card metadata cache", () => {
     const nextTop = { ...resolvedTop, imageUrl: "https://art.example/new-top.jpg" };
     const failedOptions = { ...options, sources: [
       { fallback: top, load: async () => nextTop },
-      { fallback: mix, authenticatedOnly: true, load: async () => { throw new Error("mini unavailable"); } },
+      { fallback: uk, load: async () => { throw new Error("catalog unavailable"); } },
     ] };
     await read(failedOptions);
     await drain();
-    expect((await read(failedOptions)).playlists).toEqual([nextTop, resolvedMix]);
+    expect((await read(failedOptions)).playlists).toEqual([nextTop, resolvedUk]);
     expect(jobs).toHaveLength(0);
     advance(30_001);
     await read(failedOptions);
@@ -108,10 +108,10 @@ describe("Discover card metadata cache", () => {
     advance(600_001);
     await read({ ...options, sources: options.sources.map((source) => ({ ...source, load: async () => null })) });
     await drain();
-    expect((await read(options)).playlists).toEqual([resolvedTop, resolvedMix]);
+    expect((await read(options)).playlists).toEqual([resolvedTop, resolvedUk]);
   });
 
-  test("exact users, private origins and anonymous sessions cannot share personalized cache entries", async () => {
+  test("exact users, private origins and anonymous sessions never share cache entries", async () => {
     const { read, options, drain, stored } = setup();
     await read(options);
     await drain();
@@ -119,18 +119,14 @@ describe("Discover card metadata cache", () => {
       { userId: "user-two" }, { userId: "anonymous" }, { privateOrigin: "https://other-mini.example" },
     ]) {
       const result = await read({ ...options, ...changed });
-      expect(result.playlists).toEqual([top, mix]);
+      expect(result.playlists).toEqual([top, uk]);
       expect(result.fresh).toBe(false);
       await drain();
     }
-    let privateCalls = 0;
-    const anonymous = { ...options, userId: null, sources: [options.sources[0]!, {
-      fallback: mix, authenticatedOnly: true, load: async () => { privateCalls++; return resolvedMix; },
-    }] };
-    expect((await read(anonymous)).playlists).toEqual([top]);
+    const anonymous = { ...options, userId: null };
+    expect((await read(anonymous)).playlists).toEqual([top, uk]);
     await drain();
-    expect((await read(anonymous)).playlists).toEqual([resolvedTop]);
-    expect(privateCalls).toBe(0);
+    expect((await read(anonymous)).playlists).toEqual([resolvedTop, resolvedUk]);
     expect(stored.size).toBe(5);
     expect([...stored.keys()].every((url) => !url.includes("user-one") && !url.includes("auth="))).toBe(true);
   });

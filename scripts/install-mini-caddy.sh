@@ -220,17 +220,6 @@ https://{domain} {{
 \t\timport spotify_local_trusted
 \t}}
 
-\t# Migration-only routing: the Bun service still validates the legacy token
-\t# and rejects it unless SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN=1. Caddy never
-\t# injects the token, and this matcher can remain harmless after cutover.
-\t@legacy_worker_proxy {{
-\t\tpath /api/*
-\t\theader x-spotify-proxy-token *
-\t}}
-\thandle @legacy_worker_proxy {{
-\t\timport spotify_local_trusted
-\t}}
-
 \t@direct_spotify_media {{
 \t\tpath /api/files/local/* /api/artwork/local/*
 \t}}
@@ -256,7 +245,7 @@ https://{domain} {{
 \t# The sign-in shell and only the static files needed to render it stay public.
 \t# Every application page below is authorized against the Worker's D1 session
 \t# before the local SPA can be served.
-\t@spotify_public_web path /signin /signin/ /assets/* /favicon.ico /icon.svg /icon-512.png /apple-icon.png /logo.png /music-placeholder.svg /manifest.webmanifest /sw.js /robots.txt
+\t@spotify_public_web path /signin /signin/ /assets/* /favicon.ico /icon.svg /icon-512.png /apple-icon.png /logo.png /music-placeholder.svg /manifest.webmanifest /robots.txt
 \thandle @spotify_public_web {{
 \t\timport spotify_local_static
 \t}}

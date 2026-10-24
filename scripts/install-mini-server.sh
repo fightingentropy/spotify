@@ -179,14 +179,12 @@ read_env_var() {
 
 request_secret="$(read_env_var SPOTIFY_REQUEST_SIGNING_SECRET)"
 media_secret="$(read_env_var SPOTIFY_MEDIA_SIGNING_SECRET)"
-legacy_token="$(read_env_var SPOTIFY_PROXY_TOKEN)"
-allow_legacy="$(read_env_var SPOTIFY_ALLOW_LEGACY_PROXY_TOKEN)"
 
-if [[ -z "$request_secret" && ! ( "$allow_legacy" == "1" && -n "$legacy_token" ) ]]; then
+if [[ -z "$request_secret" ]]; then
   echo "Set SPOTIFY_REQUEST_SIGNING_SECRET in $env_file before installing the server" >&2
   exit 1
 fi
-if [[ -z "$media_secret" && ! ( "$allow_legacy" == "1" && -n "$legacy_token" ) ]]; then
+if [[ -z "$media_secret" ]]; then
   echo "Set SPOTIFY_MEDIA_SIGNING_SECRET in $env_file before installing the server" >&2
   exit 1
 fi

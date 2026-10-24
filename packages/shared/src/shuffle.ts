@@ -54,14 +54,3 @@ export function getNextShufflePool(
   const validRemaining = validShuffleRemaining(queueLength, currentIndex, remaining);
   return validRemaining.length > 0 ? validRemaining : createShuffleRemaining(queueLength, currentIndex, random);
 }
-
-export function chooseNextShuffleIndex(
-  queueLength: number,
-  currentIndex: number,
-  remaining: number[],
-  random: () => number = Math.random,
-): number {
-  const pool = getNextShufflePool(queueLength, currentIndex, remaining, random);
-  if (pool.length === 0) return clampQueueIndex(queueLength, currentIndex);
-  return pool[0] ?? clampQueueIndex(queueLength, currentIndex);
-}

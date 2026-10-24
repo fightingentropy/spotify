@@ -143,16 +143,12 @@ export function patchLikeApiCache(
   }
 }
 
-export function invalidateApiCache(match?: string | RegExp | ((url: string) => boolean)): void {
+export function invalidateApiCache(match?: string | ((url: string) => boolean)): void {
   // Sign-in/out clears every entry even when the same account signs in again.
   // A 401 from the previous session must not undo that successful sign-in.
   if (match === undefined) authRequestGuard.invalidate();
   apiCache.invalidate(match === undefined ? undefined : (url) => (
-    typeof match === "string"
-      ? url === match || url.startsWith(match)
-      : match instanceof RegExp
-        ? match.test(url)
-        : match(url)
+    typeof match === "string" ? url === match || url.startsWith(match) : match(url)
   ));
 }
 
@@ -179,11 +175,10 @@ export function invalidateLibraryApiCache(accountScope?: string): void {
 export function useApiData<T>(
   url: string,
   initialValue: T,
-  options?: { enabled?: boolean; keepPreviousData?: boolean; refreshOnReconnect?: boolean },
+  options?: { enabled?: boolean; keepPreviousData?: boolean },
 ) {
   const enabled = options?.enabled ?? true;
   const keepPreviousData = options?.keepPreviousData ?? false;
-  const refreshOnReconnect = options?.refreshOnReconnect ?? true;
   const cachedInitial = apiCache.get<T>(url)?.data;
   const [data, setDataState] = useState<T>(cachedInitial ?? initialValue);
   const [loading, setLoading] = useState(enabled && cachedInitial === undefined);
@@ -275,7 +270,7 @@ export function useApiData<T>(
   }, [url]);
 
   useEffect(() => {
-    if (!enabled || !refreshOnReconnect || typeof window === "undefined") return;
+    if (!enabled || typeof window === "undefined") return;
     let cancelReconnectLoad: (() => void) | undefined;
     const handleOnline = () => {
       cancelReconnectLoad?.();
@@ -286,16 +281,12 @@ export function useApiData<T>(
       window.removeEventListener("online", handleOnline);
       cancelReconnectLoad?.();
     };
-  }, [enabled, startLoad, refreshOnReconnect]);
+  }, [enabled, startLoad]);
 
   return { data, loading, error, retry };
 }
 
 export type HomePayload = {
-  // /api/home now returns only likedSongIds — the song list was dropped because
-  // nothing renders it (kept optional for backward compatibility with old cached
-  // snapshots that still carry it).
-  songs?: PlayerSong[];
   likedSongIds: string[];
 };
 
@@ -314,12 +305,7 @@ export type ListeningWeek = {
 
 export type ListeningStatsPayload = { weeks: ListeningWeek[] };
 
-// A globally-trending track from the Discover row. Not in the library. When
-// `staged` is true it's already pre-downloaded into the Mac-mini's hidden
-// .discover cache and plays instantly from `audioUrl` (with stable library id
-// `audioId`); otherwise a tap materializes it on demand via /api/discover/stage.
-// The Home "Discover" row: clickable, auto-updating playlists (Top 50 + the
-// YouTube Music Discover Mix) instead of a scroll of individual tracks. Each
+// The Home "Discover" row: the Spotify Top 50 charts as playlist cards. Each
 // opens /api/playlist/:id like any other playlist.
 export type DiscoverPlaylistsPayload = {
   playlists: PlaylistEntry[];
@@ -374,8 +360,8 @@ export type LibraryPlaylistPayload = {
   likedSongIds: string[] | null;
 };
 
-// An auto-updating playlist streamed read-through (Top 50 / the YouTube Music
-// Discover Mix). Its songs aren't library rows — already-staged tracks arrive
+// An auto-updating playlist streamed read-through (a Top 50 chart or a YouTube
+// Music playlist). Its songs aren't library rows — already-staged tracks arrive
 // fully playable, the rest are placeholders (empty audioUrl + discoverTrackId)
 // that DiscoverQueueStager materializes on demand.
 export type CuratedPlaylistPayload = {

@@ -36,9 +36,8 @@ export type LyricsState = {
 };
 
 /**
- * Fetches lyrics for the given (offline-resolved) song. Callers should pass the
- * song id and lyrics URL from the offline-resolved playback song so cached
- * downloads resolve correctly. The fetch only runs while `enabled` is true.
+ * Fetches lyrics for the given song from its lyrics URL. The fetch only runs
+ * while `enabled` is true.
  */
 export function useLyrics(
   songId: string | null | undefined,
@@ -76,8 +75,7 @@ export function useLyrics(
         // Lyrics files are served from /api/files with an immutable cache
         // header, so the browser HTTP cache is the right layer to rely on.
         const response = await fetch(safeLyricsUrl, { signal: controller.signal });
-        // WKWebView's scheme handler reports local offline files as status 0.
-        if (!response.ok && response.status !== 0) {
+        if (!response.ok) {
           throw new Error("Lyrics unavailable");
         }
         const text = (await response.text()).trim();

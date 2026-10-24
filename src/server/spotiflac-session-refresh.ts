@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, link, lstat, mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, rename, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -67,19 +67,14 @@ export async function readDesktopSpotiflacSession(
   try {
     return await readSessionRecord(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      if (path === desktopSpotiflacSessionPath() && !process.env.SPOTIFLAC_SESSION_FILE?.trim()) {
-        return migrateProviderSession(path);
-      }
-      return {};
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw new Error(`Could not read the SpotiFLAC session: ${error instanceof Error ? error.message : "invalid file"}`, {
       cause: error,
     });
   }
 }
 
-async function writePrivateFile(path: string, contents: string, replace = true): Promise<void> {
+async function writePrivateFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const directory = await lstat(dirname(path));
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Invalid provider session directory");
@@ -88,42 +83,11 @@ async function writePrivateFile(path: string, contents: string, replace = true):
   try {
     await writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600, flag:"wx" });
     await chmod(temporaryPath, 0o600);
-    if (replace) await rename(temporaryPath, path);
-    else {
-      // link is an atomic create-if-absent; a racing renewal must never lose its newer session.
-      await link(temporaryPath,path);
-      await unlink(temporaryPath);
-    }
+    await rename(temporaryPath, path);
   } catch (error) {
     await unlink(temporaryPath).catch(() => undefined);
     throw error;
   }
-}
-
-export async function migrateProviderSession(
-  destination: string,
-  legacyPath = join(homedir(), ".spotiflac", "community_session.json"),
-): Promise<DesktopSpotiflacSessionRecord> {
-  // Migrate once, keeping the old record intact until the replacement is verified.
-  try {
-    return await readSessionRecord(destination);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  let record: DesktopSpotiflacSessionRecord;
-  try {
-    record = await readSessionRecord(legacyPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw new Error("Could not migrate the provider session", { cause:error });
-  }
-  if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("Invalid provider session");
-  try {
-    await writePrivateFile(destination, `${JSON.stringify(record, null, 2)}\n`,false);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  return readSessionRecord(destination);
 }
 
 async function boundedJson(response: Response): Promise<Record<string, unknown>> {

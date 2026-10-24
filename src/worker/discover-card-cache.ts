@@ -5,7 +5,7 @@ export type DiscoverPlaylistCard = {
   songsCount: number;
 };
 
-type CardSource = { fallback: DiscoverPlaylistCard; authenticatedOnly?: boolean; load: () => Promise<DiscoverPlaylistCard | null> };
+type CardSource = { fallback: DiscoverPlaylistCard; load: () => Promise<DiscoverPlaylistCard | null> };
 type CardSnapshot = { refreshAfter: number; complete: boolean; playlists: DiscoverPlaylistCard[] };
 type CardCache = Pick<Cache, "match" | "put">;
 const FRESH_MS = 10 * 60_000;
@@ -40,7 +40,7 @@ export function createDiscoverCardCache(now: () => number = Date.now) {
     openCache: () => Promise<CardCache>;
     waitUntil: (work: Promise<unknown>) => void;
   }): Promise<{ playlists: DiscoverPlaylistCard[]; fresh: boolean }> {
-    const sources = options.sources.filter((source) => !source.authenticatedOnly || options.userId !== null);
+    const { sources } = options;
     const ids = sources.map(({ fallback }) => fallback.id);
     // Exact identities and configured private origins are isolated. In
     // particular, a real user named "anonymous" is not the anonymous scope.

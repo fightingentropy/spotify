@@ -5,7 +5,6 @@ import {
   PODCAST_PROGRESS_STORAGE_KEY,
   PODCAST_SHORT_EPISODE_FINISHED_RATIO,
   PODCAST_SHORT_EPISODE_SECONDS,
-  clearEpisodeProgress,
   isEpisodeFinished,
   markEpisodeFinished,
   readAllEpisodeProgress,
@@ -123,12 +122,6 @@ describe("podcast progress", () => {
     const progress = readEpisodeProgress("podcast:show:ep-1");
     expect(progress?.time).toBe(600);
     expect(progress ? isEpisodeFinished(progress) : false).toBe(true);
-  });
-
-  test("clearEpisodeProgress removes the entry", () => {
-    writeEpisodeProgress("podcast:show:ep-1", 30, 600);
-    clearEpisodeProgress("podcast:show:ep-1");
-    expect(readEpisodeProgress("podcast:show:ep-1")).toBeNull();
   });
 
   test("caps the map to the newest entries", () => {
