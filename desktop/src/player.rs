@@ -92,9 +92,7 @@ pub struct LocalState {
     pub volume: u16,
     pub shuffle: bool,
     pub repeat: RepeatMode,
-    /// The librespot engine's Spotify session is alive. Connect device
-    /// activity is separate: Spotify may make this device inactive while the
-    /// session remains ready to be activated by the next load.
+    /// The music player is running for the signed-in account.
     pub connected: bool,
     pub username: String,
     pub active_client: String,
@@ -140,10 +138,9 @@ pub struct LoadSpec {
     pub play: bool,
     pub shuffle: Option<bool>,
     /// Explicit repeat preference for a new load. Otherwise retain the
-    /// engine's current preference instead of librespot's default (off).
+    /// player's current preference.
     pub repeat: Option<RepeatMode>,
-    /// Play what Spotify would follow `context_uri` with, its autoplay
-    /// station, rather than the context itself.
+    /// Play what would follow `context_uri` rather than the context itself.
     pub autoplay: bool,
 }
 
@@ -159,16 +156,14 @@ pub enum PlayerCommand {
     /// Queue a track or episode after the ones already queued.
     AddToQueue(String),
     Seek(u32),
-    /// The volume to keep: applied at once and told to Spotify Connect.
+    /// The volume to keep.
     Volume(u16),
-    /// The slider mid-drag: applied at once, nothing sent. Every Connect
-    /// update costs a round trip to Spotify, and librespot makes them one
-    /// after another, so dragging through fifty values lagged by seconds.
+    /// The slider mid-drag: applied at once, not kept yet.
     VolumePreview(u16),
     Shuffle(bool),
     Repeat(RepeatMode),
     Load(LoadSpec),
-    /// Take over the active Connect session, including its queue and position.
+    /// Report the player's state again, as when playback moves here.
     Transfer,
 }
 

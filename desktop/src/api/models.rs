@@ -824,23 +824,6 @@ pub struct SnapshotId {
     pub snapshot_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct ApiErrorBody {
-    #[serde(default)]
-    pub error: ApiErrorDetail,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub struct ApiErrorDetail {
-    #[serde(default)]
-    pub status: u16,
-    #[serde(default)]
-    #[serde(deserialize_with = "null_default")]
-    pub message: String,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

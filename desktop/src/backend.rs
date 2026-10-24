@@ -1,10 +1,11 @@
 //! Bridge between the UI thread and asynchronous work.
 //!
 //! egui runs on the main thread and must never block. A dedicated tokio
-//! runtime hosts the librespot engine, the Web API client, sign-in, and
-//! artwork fetches; the two sides talk through channels. Every event wakes
-//! the interface with `request_repaint`, so the app stays event-driven and
-//! idle when nothing is happening.
+//! runtime hosts the music backend (`music_backend.rs`): the music API,
+//! sign-in, the music player, downloads, and artwork fetches. The two sides
+//! talk through channels. Every event wakes the interface with
+//! `request_repaint`, so the app stays event-driven and idle when nothing is
+//! happening.
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,4 +1,5 @@
-// Native StreamArena desktop entry point.
+//! The desktop app's entry point: the command line, the single-instance
+//! guard, logging, and the window loop.
 
 use spotifast::{app, backend, paths, settings, single_instance, util};
 
@@ -255,10 +256,10 @@ fn missing_pulseaudio_properties(
         .filter(move |(key, _)| !is_set(key))
 }
 
-/// Gives the librespot PulseAudio backend useful stream metadata.
+/// Gives the player's PulseAudio stream useful metadata.
 ///
-/// That backend leaves both names empty unless its caller provides them. An
-/// unnamed stream cannot be identified reliably by mixers and audio processors.
+/// The names stay empty unless the process provides them. An unnamed stream
+/// cannot be identified reliably by mixers and audio processors.
 #[cfg(target_os = "linux")]
 fn configure_pulseaudio_properties() {
     for (key, value) in missing_pulseaudio_properties(|key| std::env::var_os(key).is_some()) {
