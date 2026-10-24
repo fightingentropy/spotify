@@ -52,7 +52,7 @@ fn personal_playlist(
 fn collections(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let mut playlists = Vec::new();
-    if app.settings.home.made_for_you.visible {
+    if app.settings.home.discover.visible {
         if let Some(featured) = app.home.discover.get() {
             playlists.extend(featured.iter().cloned());
         }
@@ -99,7 +99,7 @@ fn collections(app: &mut App, ui: &mut egui::Ui) {
         for playlist in &playlists {
             collection_card(app, ui, playlist, false);
         }
-        if app.settings.home.made_for_you.visible
+        if app.settings.home.discover.visible
             && matches!(app.home.discover, Loadable::NotLoaded | Loadable::Loading)
         {
             for _ in 0..3 {
@@ -107,7 +107,7 @@ fn collections(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
-    if app.settings.home.made_for_you.visible {
+    if app.settings.home.discover.visible {
         if let Loadable::Failed(message) = app.home.discover.clone() {
             widgets::error_row(ui, app, &message, Some(Page::Home));
         }
@@ -175,10 +175,10 @@ fn collection_card(app: &mut App, ui: &mut egui::Ui, playlist: &Playlist, menu: 
     }
 }
 
-/// The owner's YouTube Music Home shelves, in YouTube's order. They are made
-/// for the listener, so they follow the Made for you setting.
+/// The owner's YouTube Music Home shelves, in YouTube's order. They follow
+/// the Discover setting.
 fn youtube_shelves(app: &mut App, ui: &mut egui::Ui) {
-    if !app.settings.home.made_for_you.visible {
+    if !app.settings.home.discover.visible {
         return;
     }
     let Some(shelves) = app.home.youtube_shelves.get().cloned() else {

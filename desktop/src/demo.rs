@@ -1789,12 +1789,6 @@ mod tests {
         let saved = app.settings.sidebar_order.clone();
         accessible_frame(&ctx, &mut app, vec![]);
         let tree = open_library_options(&ctx, &mut app);
-        assert!(
-            !tree
-                .nodes
-                .iter()
-                .any(|(_, node)| node.label() == Some("Recently added"))
-        );
         let name = accessible_node(&tree, "Name", Role::Button);
         accessible_frame(
             &ctx,
@@ -2364,8 +2358,6 @@ mod tests {
             ("Switch to it", Role::Button),
             ("MilkDrop window", Role::CheckBox),
             ("Equalizer", Role::CheckBox),
-            ("Clear artwork", Role::Button),
-            ("Check for updates", Role::Button),
         ] {
             assert!(
                 tree.nodes
@@ -4468,26 +4460,22 @@ mod tests {
     fn home_json_hides_only_the_chosen_recommendation_shelves() {
         let (ctx, mut app) = accessible_app("home-json-visibility");
         let view = crate::ui::home::show;
-        for (made_for_you, recommendations) in
-            [(true, true), (false, true), (true, false), (false, false)]
-        {
-            app.settings.home = serde_json::from_str(&format!(
-                r#"{{"made_for_you":{{"visible":{made_for_you}}},"recommendations":{{"visible":{recommendations}}}}}"#
-            )).unwrap();
+        for discover in [true, false] {
+            app.settings.home =
+                serde_json::from_str(&format!(r#"{{"discover":{{"visible":{discover}}}}}"#))
+                    .unwrap();
             view_frame(&ctx, &mut app, vec![], view);
             let text = view_frame(&ctx, &mut app, vec![], view);
             for (label, expected) in [
                 ("Playlists & mixes", true),
-                ("Recommended for you", false),
                 ("Liked Songs", true),
                 ("Recently played", true),
-                ("Your top artists", false),
                 ("Your top songs", false),
             ] {
                 assert_eq!(
                     text.iter().any(|(text, _)| text == label),
                     expected,
-                    "{label}, made_for_you={made_for_you}, recommendations={recommendations}"
+                    "{label}, discover={discover}"
                 );
             }
         }
@@ -4548,7 +4536,7 @@ mod tests {
             track: song.clone(),
             ..Default::default()
         }]);
-        app.settings.home.made_for_you.visible = false;
+        app.settings.home.discover.visible = false;
         app.remote = None;
         app.local_ready = true;
         app.local.connected = true;

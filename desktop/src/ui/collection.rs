@@ -1980,20 +1980,6 @@ fn contributors_text(locale: Locale, named: &[String], others: usize) -> String 
     }
 }
 
-#[allow(dead_code)]
-fn rect_after(ui: &egui::Ui, height: f32) -> Rect {
-    let cursor = ui.cursor();
-    Rect::from_min_size(
-        pos2(cursor.left(), cursor.top()),
-        vec2(ui.available_width(), height),
-    )
-}
-
-#[allow(dead_code)]
-fn palette_of(app: &App) -> Palette {
-    app.palette
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

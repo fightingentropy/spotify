@@ -65,8 +65,10 @@ impl Default for HomeShelfSettings {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HomeSettings {
-    pub made_for_you: HomeShelfSettings,
-    pub recommendations: HomeShelfSettings,
+    /// The Discover playlists and the YouTube Music shelves. Older files
+    /// call it `made_for_you`.
+    #[serde(alias = "made_for_you")]
+    pub discover: HomeShelfSettings,
 }
 
 /// Mini-player visualizer mode.
@@ -188,12 +190,6 @@ impl DisplayDensity {
         match self {
             Self::Comfortable => 14.0,
             Self::Compact => 10.0,
-        }
-    }
-    pub fn page_gap(self) -> f32 {
-        match self {
-            Self::Comfortable => 24.0,
-            Self::Compact => 16.0,
         }
     }
 }
@@ -639,28 +635,24 @@ mod tests {
 
     #[test]
     fn partial_home_preferences_keep_defaults_and_survive_a_settings_round_trip() {
-        for (home, made_for_you, recommendations) in [
-            ("{}", true, true),
-            (r#"{"made_for_you":{"visible":false}}"#, false, true),
-            (r#"{"recommendations":{"visible":false}}"#, true, false),
-            (
-                r#"{"made_for_you":{"visible":false},"recommendations":{"visible":false}}"#,
-                false,
-                false,
-            ),
+        for (home, discover) in [
+            ("{}", true),
+            (r#"{"discover":{"visible":false}}"#, false),
+            // The setting's older name, and a shelf Home no longer has.
+            (r#"{"made_for_you":{"visible":false}}"#, false),
+            (r#"{"recommendations":{"visible":false}}"#, true),
         ] {
             let settings: Settings =
                 serde_json::from_str(&format!(r#"{{"volume":12345,"home":{home}}}"#)).unwrap();
-            assert_eq!(settings.home.made_for_you.visible, made_for_you);
-            assert_eq!(settings.home.recommendations.visible, recommendations);
+            assert_eq!(settings.home.discover.visible, discover);
             assert_eq!(settings.volume, 12345);
-            let restored: Settings =
-                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            let saved = serde_json::to_string(&settings).unwrap();
+            assert!(!saved.contains("made_for_you") && !saved.contains("recommendations"));
+            let restored: Settings = serde_json::from_str(&saved).unwrap();
             assert_eq!(restored, settings);
         }
         let old: Settings = serde_json::from_str(r#"{"volume":12345}"#).unwrap();
-        assert!(old.home.made_for_you.visible);
-        assert!(old.home.recommendations.visible);
+        assert!(old.home.discover.visible);
         assert_eq!(old.volume, 12345);
     }
 
@@ -680,7 +672,7 @@ mod tests {
         let settings = Settings::load(&path);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(settings.volume, 12345);
-        assert!(!settings.home.made_for_you.visible);
+        assert!(!settings.home.discover.visible);
     }
 
     /// Settings the app no longer has are skipped, not a reason to start
