@@ -13,9 +13,7 @@ export type OfflineMutation =
         previousLiked?: boolean;
         song?: PlayerSong;
       };
-    }
-  | { type: "playlist-reorder"; payload: { playlistId: string; songIds: string[] } }
-  | { type: "song-edit"; payload: Record<string, unknown> };
+    };
 
 export type StoredOfflineMutation = OfflineMutation & {
   scope?: string;
@@ -112,17 +110,8 @@ export function createStoredOfflineMutation(
 }
 
 export function offlineMutationTarget(mutation: OfflineMutation): string | null {
-  if (mutation.type === "like") {
-    const songId = mutation.payload.logicalSongId || mutation.payload.songId;
-    return songId ? `like:${songId}` : null;
-  }
-  if (mutation.type === "playlist-reorder") {
-    return mutation.payload.playlistId
-      ? `playlist-reorder:${mutation.payload.playlistId}`
-      : null;
-  }
-  const songId = mutation.payload.songId;
-  return typeof songId === "string" && songId ? `song-edit:${songId}` : null;
+  const songId = mutation.payload.logicalSongId || mutation.payload.songId;
+  return songId ? `like:${songId}` : null;
 }
 
 export function settleAppliedOfflineMutation(

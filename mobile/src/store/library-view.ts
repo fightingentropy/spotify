@@ -28,16 +28,11 @@ function writeView(view: LibraryViewMode): void {
 
 type LibraryViewState = {
   view: LibraryViewMode;
-  setView: (view: LibraryViewMode) => void;
   toggleView: () => void;
 };
 
 export const useLibraryViewStore = create<LibraryViewState>((set, get) => ({
   view: readView(),
-  setView: (view) => {
-    writeView(view);
-    set({ view });
-  },
   toggleView: () => {
     const next = get().view === "grid" ? "list" : "grid";
     writeView(next);

@@ -44,10 +44,6 @@ class BackgroundDownloadsModule : Module() {
       requireCoordinator().cancelAccount(accountScope)
     }
 
-    AsyncFunction("cancelAll") {
-      requireCoordinator().cancelAll()
-    }
-
     AsyncFunction("snapshot") { accountScope: String? ->
       requireCoordinator().snapshot(accountScope)
     }

@@ -173,14 +173,6 @@ class BackgroundDownloadCoordinator private constructor(
     }
   }
 
-  fun cancelAll() {
-    synchronized(lock) {
-      for (key in jobs.keys.toList()) cancelWork(key)
-      jobs.clear()
-      persistLedgerLocked()
-    }
-  }
-
   fun snapshot(accountScope: String?): List<Map<String, Any?>> {
     synchronized(lock) {
       return jobs.values

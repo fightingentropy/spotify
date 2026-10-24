@@ -32,14 +32,12 @@ function writePins(pinned: string[]): void {
 
 type LibraryPinsState = {
   pinned: string[];
-  isPinned: (key: string) => boolean;
   togglePin: (key: string) => void;
   removePin: (key: string) => void;
 };
 
 export const useLibraryPinsStore = create<LibraryPinsState>((set, get) => ({
   pinned: readPins(),
-  isPinned: (key) => get().pinned.includes(key),
   togglePin: (key) => {
     if (!key) return;
     void impactLight();

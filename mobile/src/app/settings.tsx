@@ -1,4 +1,4 @@
-import { ScrollView, Switch, Text, View } from "react-native";
+import { Platform, ScrollView, Switch, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
 import { ArrowDownToLine, ChevronRight, Info, Languages, Plus, User, Volume2 } from "lucide-react-native";
@@ -88,7 +88,10 @@ export default function SettingsScreen() {
           subtitle={user?.email ?? "Manage your account"}
           onPress={() => router.push("/settings/account")}
         />
-        <SettingsRow Icon={Volume2} title="Playback" subtitle="Crossfade" onPress={() => router.push("/settings/playback")} />
+        {/* Playback settings are only crossfade, which only the iOS engine does. */}
+        {Platform.OS === "ios" ? (
+          <SettingsRow Icon={Volume2} title="Playback" subtitle="Crossfade" onPress={() => router.push("/settings/playback")} />
+        ) : null}
         <SettingsRow
           Icon={Languages}
           title="Lyrics"

@@ -64,7 +64,6 @@ function isPersistableApiUrl(url: string): boolean {
   if (isProviderReadThroughRequest(url)) return false;
   return (
     path === "/api/home" ||
-    path === "/api/discover/trending" ||
     path === "/api/discover/playlists" ||
     path === "/api/discover/youtube-home" ||
     path === "/api/search-index" ||
@@ -494,7 +493,6 @@ export type HomePayload = {
 
 export type StatsHomePayload = {
   recentlyPlayed: PlayerSong[];
-  mostPlayed: { song: PlayerSong; playCount: number }[];
 };
 
 export type ListeningWeek = {
@@ -506,7 +504,8 @@ export type ListeningWeek = {
 };
 export type ListeningStatsPayload = { weeks: ListeningWeek[] };
 
-// A globally-trending track from the Discover row. Not in the library. When
+// A track from a read-through playlist (a Top 50 chart or a recommendation).
+// Not in the library. When
 // `staged` is true it's already pre-downloaded into the Mac-mini's hidden
 // .discover cache and plays instantly from `audioUrl` (with stable library id
 // `audioId`); otherwise a tap materializes it on demand via /api/discover/stage.
@@ -523,8 +522,7 @@ export type DiscoverTrack = {
   audioUrl?: string;
 };
 
-// The Home "Discover" first row as clickable, auto-updating playlists (Top 50 +
-// the YouTube Music Discover Mix) instead of a scroll of individual tracks. Each
+// The Home "Discover" row: the Spotify Top 50 charts as playlist cards. Each
 // opens /api/playlist/:id like any other playlist.
 export type DiscoverPlaylistsPayload = {
   playlists: PlaylistEntry[];

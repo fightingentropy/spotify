@@ -1,9 +1,4 @@
-import TrackPlayer, {
-  AppKilledPlaybackBehavior,
-  Capability,
-  IOSCategory,
-  IOSCategoryMode,
-} from "react-native-track-player";
+import TrackPlayer, { AppKilledPlaybackBehavior, Capability } from "react-native-track-player";
 
 let setupPromise: Promise<void> | null = null;
 
@@ -17,8 +12,6 @@ export async function setupTrackPlayer(): Promise<void> {
         // We handle interruptions via the RemoteDuck event so the Zustand store
         // stays in sync (auto-pause on call/Siri, auto-resume after).
         autoHandleInterruptions: false,
-        iosCategory: IOSCategory.Playback, // background audio (UIBackgroundModes: audio)
-        iosCategoryMode: IOSCategoryMode.Default,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

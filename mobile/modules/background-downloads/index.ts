@@ -61,7 +61,6 @@ type NativeBackgroundDownloadsModule = {
   enqueue(jobs: NativeBackgroundDownloadJob[]): Promise<void>;
   cancel(jobs: NativeBackgroundDownloadRef[]): Promise<void>;
   cancelAccount(accountScope: string): Promise<void>;
-  cancelAll(): Promise<void>;
   protectOfflineMediaStorage?(): Promise<{
     directories: number;
     files: number;
@@ -109,10 +108,6 @@ export async function cancelNativeBackgroundDownloadAccount(
   accountScope: string,
 ): Promise<void> {
   await nativeModule()?.cancelAccount(accountScope);
-}
-
-export async function cancelAllNativeBackgroundDownloads(): Promise<void> {
-  await nativeModule()?.cancelAll();
 }
 
 export async function protectNativeOfflineMediaStorage(): Promise<{

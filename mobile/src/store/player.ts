@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { moveUpcomingSong, rememberQueueRemoval, restoreQueueRemoval, type QueueRemoval } from "@spotify/shared/queue-editing";
 import { markPlaybackEngaged } from "@/audio/publish-gate";
 import {
+  clampQueueIndex,
   createShuffleRemaining,
   getNextShufflePool,
   validShuffleRemaining,
@@ -65,8 +66,6 @@ type PlayerState = {
   // to defer the otherwise-immediate full queue snapshot until hydration ends.
   queueAppendToken: number;
   isPlaying: boolean;
-  volume: number; // 0..1
-  isMuted: boolean;
   shuffle: boolean;
   repeatMode: "off" | "one" | "all";
   crossfadeEnabled: boolean;
@@ -136,8 +135,6 @@ type PlayerState = {
   // cross-device resume can still persist/restore the full queue. Reuses
   // advanceToIndex's shuffle/history bookkeeping.
   skipToPlayable: (canPlay: (song: PlayerSong) => boolean, direction?: 1 | -1) => boolean;
-  setVolume: (v: number) => void;
-  toggleMute: () => void;
   toggleShuffle: () => void;
   cycleRepeatMode: () => void;
   setCrossfadeEnabled: (enabled: boolean) => void;
@@ -199,8 +196,6 @@ type AdvanceToIndexOptions = {
 const MAX_PLAY_HISTORY = 200;
 const SHUFFLE_STORAGE_KEY = "spotify_shuffle_enabled";
 const SMART_SHUFFLE_STORAGE_KEY = "spotify_smart_shuffle_enabled";
-const VOLUME_STORAGE_KEY = "spotify_volume";
-const MUTED_STORAGE_KEY = "spotify_muted";
 const REPEAT_MODE_STORAGE_KEY = "spotify_repeat_mode";
 const CROSSFADE_ENABLED_STORAGE_KEY = "spotify_crossfade_enabled";
 const CROSSFADE_SECONDS_STORAGE_KEY = "spotify_crossfade_seconds";
@@ -231,37 +226,6 @@ function readStoredSmartShuffle(): boolean {
 function writeStoredSmartShuffle(enabled: boolean): void {
   try {
     storage.setItem(SMART_SHUFFLE_STORAGE_KEY, enabled ? "1" : "0");
-  } catch {}
-}
-
-function readStoredVolume(): number {
-  try {
-    const raw = storage.getItem(VOLUME_STORAGE_KEY);
-    if (raw === null) return 0.9;
-    const value = Number(raw);
-    return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.9;
-  } catch {
-    return 0.9;
-  }
-}
-
-function writeStoredVolume(value: number): void {
-  try {
-    storage.setItem(VOLUME_STORAGE_KEY, String(value));
-  } catch {}
-}
-
-function readStoredMuted(): boolean {
-  try {
-    return storage.getItem(MUTED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeStoredMuted(muted: boolean): void {
-  try {
-    storage.setItem(MUTED_STORAGE_KEY, muted ? "1" : "0");
   } catch {}
 }
 
@@ -324,12 +288,6 @@ export const MIN_SEEDS = 2;
 function pushHistory(history: number[], index: number): number[] {
   if (!Number.isInteger(index) || index < 0) return history;
   return [...history, index].slice(-MAX_PLAY_HISTORY);
-}
-
-function clampQueueIndex(queueLength: number, index: number): number {
-  if (queueLength <= 0) return -1;
-  if (!Number.isInteger(index)) return 0;
-  return Math.max(0, Math.min(queueLength - 1, index));
 }
 
 function removeQueueIndex(indices: number[], indexToRemove: number): number[] {
@@ -492,8 +450,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   queueToken: 0,
   queueAppendToken: 0,
   isPlaying: false,
-  volume: readStoredVolume(),
-  isMuted: readStoredMuted(),
   shuffle: readStoredShuffle(),
   repeatMode: readStoredRepeatMode(),
   crossfadeEnabled: readStoredCrossfadeEnabled(),
@@ -1021,17 +977,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       return { ...s, currentIndex: idx, currentSong: s.queue[idx], isPlaying: true };
     });
   },
-  setVolume: (v) => {
-    const volume = Math.max(0, Math.min(1, v));
-    writeStoredVolume(volume);
-    set({ volume });
-  },
-  toggleMute: () =>
-    set((s) => {
-      const isMuted = !s.isMuted;
-      writeStoredMuted(isMuted);
-      return { isMuted };
-    }),
   toggleShuffle: () =>
     set((s) => {
       const shuffle = !s.shuffle;

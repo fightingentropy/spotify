@@ -2,9 +2,9 @@ import { apiFetchWithTimeout } from "@/lib/http";
 import type { DiscoverTrack } from "@/lib/api";
 import type { PlayerSong } from "@/types/player";
 
-// Player-queue support for Discover. A whole Discover row can now be queued (not
-// just the one tapped track), so there's a real "up next". Tracks play
-// read-through like before — nothing is written to the library. A track that's
+// Player-queue support for read-through playlists (the Top 50 charts and YouTube
+// Music playlists). Tracks play read-through — nothing is written to the
+// library. A track that's
 // already staged becomes a fully playable queue entry; one that isn't becomes a
 // PLACEHOLDER (empty audioUrl) carrying the metadata the stager needs to
 // materialize it on demand when it becomes the current track. See the

@@ -20,7 +20,7 @@ export function BatchDownloadButton({
   scope: DownloadScope;
   size?: number;
 }) {
-  // Discover tracks (Top 50 / YouTube Discover Mix) can't be downloaded directly —
+  // Read-through tracks (Top 50 charts, YouTube Music playlists) can't be downloaded directly —
   // they stream from the .discover staging cache and must be promoted into the
   // library first (see DownloadButton). Drop them so "Download all" never queues a
   // broken empty-URL / lossy-staging download; if the whole playlist is Discover,

@@ -93,7 +93,7 @@ export default function HomeScreen() {
   const collectionHistory = useCollectionHistory(scope);
   const stats = useApiData<StatsHomePayload>(
     withAccountScope("/api/stats/home", scope),
-    { recentlyPlayed: [], mostPlayed: [] },
+    { recentlyPlayed: [] },
     { enabled: status !== "loading", keepPreviousData: true },
   );
   const library = useApiData<LibraryPayload>(
@@ -136,8 +136,8 @@ export default function HomeScreen() {
     if (Array.isArray(homeData.likedSongIds)) mergeInitialLikes(homeData.likedSongIds);
   }, [mergeInitialLikes, homeData.likedSongIds]);
 
-  // The Discover first row is now auto-updating PLAYLISTS (Top 50 + the YouTube
-  // Music Discover Mix), not individual tracks. Each card opens its detail screen.
+  // The Discover row: the Spotify Top 50 charts as playlist cards. Each card
+  // opens its detail screen.
   const { data: discoverData } = useApiData<DiscoverPlaylistsPayload>(
     withAccountScope("/api/discover/playlists", scope),
     { playlists: [] },

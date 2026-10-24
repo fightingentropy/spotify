@@ -6,7 +6,6 @@ const homeScreen = await Bun.file(
 
 describe("home content layout", () => {
   test("keeps YouTube Music shelves between listening history and Discover", () => {
-    expect(homeScreen).not.toContain("Made for you");
     expect(homeScreen).toContain("/api/stats/home");
     const history = homeScreen.indexOf('<SectionTitle title="Continue listening"');
     const shelves = homeScreen.indexOf("youtubeHome.shelves.map");

@@ -390,17 +390,6 @@ public final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDe
     }
   }
 
-  func cancelAll() throws {
-    try stateQueue.sync {
-      let keys = Set(jobs.keys)
-      try appendLedgerLocked(deletes: Array(keys))
-      jobs.removeAll()
-      lastNotifiedProgress.removeAll()
-      lastNotifiedAt.removeAll()
-      cancelTasksLocked(keys: keys)
-    }
-  }
-
   func protectOfflineMediaStorage() throws -> [String: Int] {
     try stateQueue.sync {
       guard

@@ -1,7 +1,7 @@
 import { requireNativeModule, EventEmitter, type EventSubscription } from "expo-modules-core";
 
-// JS bridge for the native AudioEngine Expo module. Mirrors the 14 native
-// AsyncFunctions and the 9 native events 1:1. The JS player (PlayerBar) owns all
+// JS bridge for the native AudioEngine Expo module. Mirrors the 12 native
+// AsyncFunctions and the 9 native events 1:1. src/audio/engine-native.ts owns all
 // orchestration (queue, scrobble, crossfade timing); this module owns audio
 // output so playback survives a locked screen. See docs/native-audio-engine.md
 // for the current platform architecture and validation checklist.

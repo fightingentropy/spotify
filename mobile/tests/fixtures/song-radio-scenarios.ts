@@ -235,7 +235,8 @@ await scenario("service failures stop cleanly, do not loop, and allow explicit r
   try {
     toggleSearchSong(seed); await tick();
     assert.equal(state().songRadio?.status, "unavailable");
-    state().setVolume(0.5); await tick();
+    // An unrelated store change must not retry the failed request.
+    state().setPlaybackRate(1.25); await tick();
     state().next(); await tick();
     assert.equal(state().isPlaying, false);
     assert.equal(requests, 1);

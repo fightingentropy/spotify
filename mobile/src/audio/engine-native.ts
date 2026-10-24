@@ -188,10 +188,9 @@ function startPreferredLocalSwitch(): boolean {
   return true;
 }
 
-function currentVolume(): number {
-  const { volume, isMuted } = usePlayerStore.getState();
-  return isMuted ? 0 : volume;
-}
+// The app has no volume control; decks play at full volume and the phone's own
+// volume does the rest.
+const FULL_VOLUME = 1;
 
 function currentRate(song: PlayerSong | null): number {
   return song && isPodcastSong(song) ? usePlayerStore.getState().playbackRate : 1;
@@ -323,7 +322,7 @@ async function hardLoad(song: PlayerSong | null, isPlaying: boolean): Promise<vo
   if (seq !== loadSeq) return;
   deckSong[target] = song;
   deckKey[target] = key;
-  await AudioEngine.setVolume(target, currentVolume());
+  await AudioEngine.setVolume(target, FULL_VOLUME);
   await AudioEngine.setRate(target, currentRate(song));
   setNowPlayingFor(song);
   // Read isPlaying LIVE (not the captured param). This load is a long async chain,
@@ -352,18 +351,13 @@ async function abortCrossfade(): Promise<void> {
   if (!crossfading && prefetchDeck == null) return;
   const idle = prefetchDeck ?? other(activeDeck);
   if (crossfading) {
-    await AudioEngine.setVolume(activeDeck, currentVolume());
+    await AudioEngine.setVolume(activeDeck, FULL_VOLUME);
   }
   await AudioEngine.releaseDeck(idle);
   deckSong[idle] = null;
   deckKey[idle] = null;
   crossfading = false;
   clearPrefetch();
-}
-
-async function applyVolume(): Promise<void> {
-  if (crossfading) return; // don't cancel an in-flight ramp
-  await AudioEngine.setVolume(activeDeck, currentVolume());
 }
 
 async function applyRate(song: PlayerSong | null): Promise<void> {
@@ -482,7 +476,7 @@ async function startCrossfade(fade: number): Promise<void> {
   const to = prefetchDeck;
   crossfading = true;
   try {
-    await AudioEngine.crossfade(from, to, Math.max(1, Math.round(fade * 1000)), currentVolume());
+    await AudioEngine.crossfade(from, to, Math.max(1, Math.round(fade * 1000)), FULL_VOLUME);
   } catch {
     // A rejected native ramp must not strand the state machine in "crossfading".
     crossfading = false;
@@ -732,7 +726,6 @@ function subscribeToStore(): void {
       }
       void publishPlaybackState(true);
     }
-    if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume().catch(() => {});
     if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong).catch(() => {});
     // A brand-new queue (user started a different list) re-evaluates offline
     // inference from scratch, and is persisted IMMEDIATELY rather than only at the
@@ -773,7 +766,6 @@ export async function initNativeAudio(): Promise<void> {
       // native configure rejection must be retryable, and concurrent callers
       // share this promise so listeners can never be registered twice.
       await AudioEngine.configure(); // idempotent (OnCreate also runs it)
-      await applyVolume();
 
       AudioEngine.addListener("time", onTime);
       AudioEngine.addListener("ended", (e) => void onEnded(e).catch(() => {}));

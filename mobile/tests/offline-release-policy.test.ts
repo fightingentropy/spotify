@@ -286,44 +286,20 @@ describe("offline mutation dead letters and account scope", () => {
     expect(settled.mutations).toEqual([queue[0]]);
   });
 
-  test("superseded cleanup is target-specific for reorder and edit mutations", () => {
-    const queue: StoredOfflineMutation[] = [
-      {
-        type: "playlist-reorder",
-        payload: { playlistId: "playlist-1", songIds: ["old"] },
-        attempts: OFFLINE_MUTATION_MAX_ATTEMPTS,
-      },
-      {
-        type: "playlist-reorder",
-        payload: { playlistId: "playlist-2", songIds: ["keep"] },
-        attempts: OFFLINE_MUTATION_MAX_ATTEMPTS,
-      },
-      {
-        type: "playlist-reorder",
-        payload: { playlistId: "playlist-1", songIds: ["new"] },
-        attempts: 0,
-      },
+  test("superseded cleanup is target-specific", () => {
+    const like = (songId: string, nextLiked: boolean, attempts: number): StoredOfflineMutation => ({
+      type: "like",
+      payload: { songId, nextLiked },
+      attempts,
+    });
+    const queue = [
+      like("song-1", true, OFFLINE_MUTATION_MAX_ATTEMPTS),
+      like("song-2", true, OFFLINE_MUTATION_MAX_ATTEMPTS),
+      like("song-1", false, 0),
     ];
     const settled = settleAppliedOfflineMutation(queue, 2);
     expect(settled.mutations).toHaveLength(1);
-    expect(settled.mutations[0]).toMatchObject({
-      type: "playlist-reorder",
-      payload: { playlistId: "playlist-2" },
-    });
-
-    const edits: StoredOfflineMutation[] = [
-      {
-        type: "song-edit",
-        payload: { songId: "song-1", title: "Old" },
-        attempts: OFFLINE_MUTATION_MAX_ATTEMPTS,
-      },
-      {
-        type: "song-edit",
-        payload: { songId: "song-1", title: "Final" },
-        attempts: 0,
-      },
-    ];
-    expect(settleAppliedOfflineMutation(edits, 1).mutations).toEqual([]);
+    expect(settled.mutations[0]).toMatchObject({ type: "like", payload: { songId: "song-2" } });
   });
 
   test("dead letters remain visible and manual retry resets only the active account", () => {

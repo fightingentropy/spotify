@@ -222,46 +222,16 @@ export async function queueOfflineMutation(
 // Replay one queued mutation against the same endpoints the live stores use.
 // `like` matches store/likes.ts exactly (POST/DELETE /api/likes with { songId }).
 // Throws with a `.status` on a non-OK response so the caller can branch on 401/403.
+// Likes are the only change queued while offline. An entry of any other type
+// (none were ever created) is dropped as a no-op success.
 async function performMutation(mutation: OfflineMutation): Promise<void> {
-  if (mutation.type === "like") {
-    const res = await apiFetchWithTimeout(
-      "/api/likes",
-      {
-        method: mutation.payload.nextLiked ? "POST" : "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ songId: mutation.payload.songId }),
-        cache: "no-store",
-      },
-      OFFLINE_MUTATION_TIMEOUT_MS,
-    );
-    if (!res.ok) throw Object.assign(new Error(`Request failed with ${res.status}`), { status: res.status });
-    return;
-  }
-  if (mutation.type === "playlist-reorder") {
-    const res = await apiFetchWithTimeout(
-      `/api/playlist/${encodeURIComponent(mutation.payload.playlistId)}/reorder`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ songIds: mutation.payload.songIds }),
-        cache: "no-store",
-      },
-      OFFLINE_MUTATION_TIMEOUT_MS,
-    );
-    if (!res.ok) throw Object.assign(new Error(`Request failed with ${res.status}`), { status: res.status });
-    return;
-  }
-  // song-edit: the RN outbox stores an opaque field bag; forward the id as the
-  // path and the rest as the PATCH body, matching the web performMutation shape.
-  const payload = mutation.payload as Record<string, unknown>;
-  const songId = typeof payload.songId === "string" ? payload.songId : "";
-  if (!songId) return; // nothing actionable; treat as a no-op success
+  if (mutation.type !== "like") return;
   const res = await apiFetchWithTimeout(
-    `/api/songs/${encodeURIComponent(songId)}`,
+    "/api/likes",
     {
-      method: "PATCH",
+      method: mutation.payload.nextLiked ? "POST" : "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ songId: mutation.payload.songId }),
       cache: "no-store",
     },
     OFFLINE_MUTATION_TIMEOUT_MS,

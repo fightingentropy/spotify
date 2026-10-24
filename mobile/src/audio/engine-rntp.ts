@@ -215,11 +215,6 @@ async function syncPlayState(isPlaying: boolean): Promise<void> {
   else await TrackPlayer.pause();
 }
 
-async function applyVolume(): Promise<void> {
-  const { volume, isMuted } = usePlayerStore.getState();
-  await TrackPlayer.setVolume(isMuted ? 0 : volume);
-}
-
 async function applyRate(song: PlayerSong | null): Promise<void> {
   const rate = song && isPodcastSong(song) ? usePlayerStore.getState().playbackRate : 1;
   await TrackPlayer.setRate(rate);
@@ -360,7 +355,6 @@ function subscribeToStore(): void {
       }
       void publishPlaybackState(true);
     }
-    if (state.volume !== prev.volume || state.isMuted !== prev.isMuted) void applyVolume().catch(() => {});
     if (state.playbackRate !== prev.playbackRate) void applyRate(state.currentSong).catch(() => {});
     // Persist newly-started/user-edited queues immediately. Catalog hydration
     // appends are marked separately and receive one trailing publish from the
@@ -390,7 +384,6 @@ export async function initRntpAudio(): Promise<void> {
       // Setup can fail transiently while the native service/session comes up.
       // Keep it retryable and coalesce concurrent bootstrap calls.
       await setupTrackPlayer();
-      await applyVolume();
 
       TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
         void onEnded().catch(() => {});
