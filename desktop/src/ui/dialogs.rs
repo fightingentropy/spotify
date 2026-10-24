@@ -370,7 +370,6 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
     let locale = app.locale;
     let busy = app.playlist_busy;
     let Some(Dialog::EditPlaylist {
-        cover,
         id,
         name,
         description,
@@ -407,7 +406,6 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
         });
     ui.add_space(20.0);
     let id = id.clone();
-    let busy = busy || cover.uploading.is_some() || cover.request.is_some();
     let name_value = name.trim().to_string();
     let description_value = description.trim().to_string();
     let public_value = *public;

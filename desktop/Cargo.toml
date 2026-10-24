@@ -109,7 +109,6 @@ rustls-native-certs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
 sha1 = "0.10"
 sha2 = "0.10"
-base64 = "0.22"
 # Native asynchronous file selection on macOS, Windows and Linux desktop portals.
 rfd = "0.17.2"
 rand = "0.9"

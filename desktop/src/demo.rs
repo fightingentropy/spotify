@@ -12,7 +12,7 @@ use jiff::{SignedDuration, Timestamp};
 use crate::api::models::{
     Album, Artist, ArtistRef, Context, Copyright, Device, Episode, Followers, Image, Owner,
     Page as ApiPage, PlayHistory, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue,
-    ResumePoint, SavedAlbum, SavedEpisode, SavedShow, SavedTrack, SearchResults, Show, Track,
+    ResumePoint, SavedShow, SavedTrack, SearchResults, Show, Track,
     TrackCount, User,
 };
 use crate::app::{App, RemoteSnapshot};
@@ -396,20 +396,6 @@ pub fn populate(app: &mut App) {
                 .collect(),
         ),
     );
-    app.library.albums.absorb(
-        0,
-        page(
-            (0..8)
-                .map(|index| SavedAlbum {
-                    added_at: None,
-                    album: album(index),
-                })
-                .collect(),
-        ),
-    );
-    app.library.artists.items = (0..8).map(artist).collect();
-    app.library.artists.loaded_once = true;
-    app.library.artists.complete = true;
     app.library.shows.absorb(
         0,
         page(
@@ -417,17 +403,6 @@ pub fn populate(app: &mut App) {
                 .map(|index| SavedShow {
                     added_at: None,
                     show: show(index),
-                })
-                .collect(),
-        ),
-    );
-    app.library.episodes.absorb(
-        0,
-        page(
-            (0..6)
-                .map(|index| SavedEpisode {
-                    added_at: None,
-                    episode: episode(index, index % 4),
                 })
                 .collect(),
         ),
@@ -779,7 +754,6 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     name: "Long Way Home".into(),
                     description: "Songs for the road".into(),
                     public: Some(false),
-                    cover: Default::default(),
                 });
             }
             "create" => {
@@ -868,28 +842,6 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             }
             "presets" => app.winamp.open_presets = true,
             "art" => app.settings.art_expanded = true,
-            "folders" => {
-                use crate::player::RootlistEntry;
-                let uri = |index: usize| format!("spotify:playlist:pl{index}");
-                app.rootlist = vec![
-                    RootlistEntry::FolderStart {
-                        id: "f1".into(),
-                        name: "Focus".into(),
-                    },
-                    RootlistEntry::Playlist(uri(1)),
-                    RootlistEntry::Playlist(uri(2)),
-                    RootlistEntry::FolderEnd,
-                    RootlistEntry::FolderStart {
-                        id: "f2".into(),
-                        name: "Weekend".into(),
-                    },
-                    RootlistEntry::Playlist(uri(3)),
-                    RootlistEntry::FolderEnd,
-                    RootlistEntry::Playlist(uri(4)),
-                    RootlistEntry::Playlist(uri(5)),
-                ];
-                app.collapsed_folders = vec!["f2".into()];
-            }
             "small" => app.settings.skin_scale = Some(1),
             "windows-taskbar" => app.demo_windows_controls = true,
             "compact" => {
@@ -1179,24 +1131,20 @@ mod tests {
     }
 
     #[test]
-    fn cover_editing_fits_large_and_narrow_windows_in_both_themes() {
+    fn editing_details_fits_large_and_narrow_windows_in_both_themes() {
         for (width, height) in [(1240.0, 800.0), (760.0, 520.0)] {
             for light in [false, true] {
-                let (ctx, mut app) = accessible_app("cover-dialog");
+                let (ctx, mut app) = accessible_app("edit-dialog");
                 app.open(Page::Playlist("pl1".into()));
                 app.dialog = Some(Dialog::EditPlaylist {
                     id: "pl1".into(),
                     name: "Test".into(),
                     description: String::new(),
                     public: Some(false),
-                    cover: Default::default(),
                 });
                 if light {
                     app.settings.theme = crate::settings::ThemeChoice::Light;
                     app.actions.push(Action::SettingsChanged);
-                }
-                if let Some(Dialog::EditPlaylist { cover, .. }) = &mut app.dialog {
-                    cover.error = Some("Spotify refused this cover. Check that you own the playlist, then sign in again to grant image upload permission.".into());
                 }
                 for _ in 0..3 {
                     let mut output = ctx.run_ui(
@@ -1833,7 +1781,7 @@ mod tests {
 
     #[test]
     fn library_sort_menu_preserves_saved_order_and_keyboard_activation() {
-        use crate::settings::{LibraryShelf, LibrarySort};
+        use crate::settings::LibrarySort;
         use egui::accesskit::{Action as AccessibleAction, Role};
         let (ctx, mut app) = accessible_app("library-sort");
         app.settings.sidebar_order =
@@ -1858,10 +1806,7 @@ mod tests {
             &mut app,
             vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
         );
-        assert_eq!(
-            app.settings.library_sort.get(&LibraryShelf::Playlists),
-            Some(&LibrarySort::Name)
-        );
+        assert_eq!(app.settings.library_sort, Some(LibrarySort::Name));
         assert_eq!(app.settings.sidebar_order, saved);
         let tree = open_library_options(&ctx, &mut app);
         let local = accessible_node(&tree, "Local custom order", Role::Button);
@@ -1870,10 +1815,7 @@ mod tests {
             &mut app,
             vec![accessible_action(local, AccessibleAction::Click, None)],
         );
-        assert_eq!(
-            app.settings.library_sort.get(&LibraryShelf::Playlists),
-            Some(&LibrarySort::Local)
-        );
+        assert_eq!(app.settings.library_sort, Some(LibrarySort::Local));
         assert_eq!(app.settings.sidebar_order, saved);
         let restored: Settings =
             serde_json::from_str(&serde_json::to_string(&app.settings).unwrap()).unwrap();
@@ -1906,34 +1848,6 @@ mod tests {
             vec![accessible_action(list, AccessibleAction::Click, None)],
         );
         assert!(!app.settings.sidebar_grid);
-        app.backend.shutdown();
-    }
-
-    #[test]
-    fn library_folder_accessibility_labels_follow_the_locale() {
-        use crate::i18n::Locale;
-        use crate::player::RootlistEntry::{FolderEnd, FolderStart};
-        use egui::accesskit::Role;
-        let (ctx, mut app) = accessible_app("library-folder-labels");
-        app.locale = Locale::German;
-        app.settings.sidebar_grid = true;
-        app.rootlist = vec![
-            FolderStart {
-                id: "focus".into(),
-                name: "Focus".into(),
-            },
-            FolderEnd,
-            FolderStart {
-                id: "weekend".into(),
-                name: "Weekend".into(),
-            },
-            FolderEnd,
-        ];
-        app.collapsed_folders = vec!["weekend".into()];
-
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, "Focus, Ordner, ausgeklappt", Role::Button);
-        accessible_node(&tree, "Weekend, Ordner, eingeklappt", Role::Button);
         app.backend.shutdown();
     }
 
@@ -3912,8 +3826,6 @@ mod tests {
         app.artist_pages.remove("art0");
         app.show_pages.remove("sh0");
         app.library.playlists = Loadable::Loaded(Vec::new());
-        app.library.albums.items.clear();
-        app.library.artists.items.clear();
         app.library.shows.items.clear();
         app.search.results.get_mut().unwrap().albums = None;
         for (title, detail, view) in [
@@ -5492,10 +5404,7 @@ mod tests {
             Page::TopSongs,
             Page::Search,
             Page::LikedSongs,
-            Page::Albums,
-            Page::Artists,
             Page::Podcasts,
-            Page::Episodes,
             Page::Playlist("pl1".into()),
             Page::Playlist("missing".into()),
             Page::Album("alb0".into()),
@@ -5541,7 +5450,6 @@ mod tests {
                 add_uris: vec![],
             },
             Dialog::EditPlaylist {
-                cover: Default::default(),
                 id: "pl1".into(),
                 name: "x".into(),
                 description: String::new(),
@@ -5616,15 +5524,15 @@ mod tests {
         for _ in 0..3 {
             frame(&ctx, &mut app);
         }
-        app.library.albums.items = (0..80)
-            .map(|index| SavedAlbum {
+        app.library.shows.items = (0..80)
+            .map(|index| SavedShow {
                 added_at: None,
-                album: album(index % 8),
+                show: show(index % 4),
             })
             .collect();
-        app.library.albums.next_offset = Some(80);
-        app.library.albums.loaded_once = true;
-        app.open(Page::Albums);
+        app.library.shows.next_offset = Some(80);
+        app.library.shows.loaded_once = true;
+        app.open(Page::Podcasts);
         app.actions.clear();
         for _ in 0..3 {
             frame(&ctx, &mut app);
@@ -5974,31 +5882,6 @@ mod tests {
         view_frame(&ctx, &mut app, first, view);
         view_frame(&ctx, &mut app, second, view);
         assert_eq!(played_contexts(&app), ["spotify:user:demo:collection"]);
-        app.backend.shutdown();
-    }
-
-    #[test]
-    fn double_clicking_a_sidebar_folder_plays_nothing() {
-        use crate::player::RootlistEntry;
-        let (ctx, mut app) = accessible_app("sidebar-double-click-folder");
-        app.rootlist = vec![
-            RootlistEntry::FolderStart {
-                id: "f1".into(),
-                name: "Focus".into(),
-            },
-            RootlistEntry::Playlist("spotify:playlist:pl1".into()),
-            RootlistEntry::Playlist("spotify:playlist:pl2".into()),
-            RootlistEntry::FolderEnd,
-        ];
-        let view = crate::ui::sidebar::show;
-        view_frame(&ctx, &mut app, vec![], view);
-        let painted = view_frame(&ctx, &mut app, vec![], view);
-        let name = sidebar_text(&painted, "Focus").center();
-        app.actions.clear();
-        let [first, second] = double_click(name);
-        view_frame(&ctx, &mut app, first, view);
-        view_frame(&ctx, &mut app, second, view);
-        assert!(played_contexts(&app).is_empty(), "folders must not play");
         app.backend.shutdown();
     }
 
@@ -7144,7 +7027,6 @@ mod tests {
         for compact in [false, true] {
             let (ctx, mut app) = accessible_app(&format!("liked-drag-{compact}"));
             app.settings.sidebar_compact = compact;
-            app.rootlist.clear();
             app.settings.pinned_contexts = vec!["spotify:playlist:pl2".into()];
             app.settings.sidebar_order = (0..PLAYLISTS.len())
                 .filter(|index| *index != 2)
@@ -7764,7 +7646,6 @@ mod tests {
         for compact in [false, true] {
             let (ctx, mut app) = accessible_app(&format!("sidebar-drag-scroll-{compact}"));
             app.settings.sidebar_compact = compact;
-            app.rootlist.clear();
             app.settings.pinned_contexts.clear();
             let playlists: Vec<_> = (0..60)
                 .map(|index| {

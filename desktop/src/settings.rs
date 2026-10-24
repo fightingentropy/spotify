@@ -7,34 +7,36 @@ use serde::{Deserialize, Serialize};
 /// Local Library identity only. Never sent to Spotify as a context URI.
 pub const LIKED_SONGS_KEY: &str = "spotifast:liked-songs";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LibraryShelf {
-    #[default]
-    Playlists,
-    Albums,
-    Artists,
-    Podcasts,
-}
-
+/// How the Library orders its playlists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LibrarySort {
-    Library,
     RecentlyPlayed,
     Name,
-    RecentlyAdded,
     Local,
-    Spotify,
 }
 
-impl LibrarySort {
-    pub fn supports(self, shelf: LibraryShelf) -> bool {
-        match self {
-            Self::RecentlyPlayed | Self::Name | Self::Library => true,
-            Self::RecentlyAdded => matches!(shelf, LibraryShelf::Albums | LibraryShelf::Podcasts),
-            Self::Local | Self::Spotify => shelf == LibraryShelf::Playlists,
-        }
+/// The Library's order, kept in the shape older files used: one order per
+/// shelf. The Library shows only playlists now, so the other shelves'
+/// orders, and orders this version no longer offers, are dropped.
+mod library_sort {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::LibrarySort;
+
+    const PLAYLISTS: &str = "playlists";
+
+    pub fn serialize<S: Serializer>(sort: &Option<LibrarySort>, to: S) -> Result<S::Ok, S::Error> {
+        BTreeMap::from_iter(sort.map(|sort| (PLAYLISTS, sort))).serialize(to)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<Option<LibrarySort>, D::Error> {
+        let shelves = BTreeMap::<String, serde_json::Value>::deserialize(from)?;
+        Ok(shelves
+            .get(PLAYLISTS)
+            .and_then(|sort| LibrarySort::deserialize(sort).ok()))
     }
 }
 
@@ -254,9 +256,10 @@ pub struct Settings {
     /// The sidebar's own playlist order, set by dragging rows. Kept while
     /// another sort is selected; empty means no saved local arrangement.
     pub sidebar_order: Vec<String>,
-    /// Explicit order per Library shelf. Missing shelves keep their previous
-    /// behaviour; selecting another order never deletes the local arrangement.
-    pub library_sort: std::collections::BTreeMap<LibraryShelf, LibrarySort>,
+    /// The Library's chosen order, if any. Selecting another order never
+    /// deletes the local arrangement.
+    #[serde(with = "library_sort")]
+    pub library_sort: Option<LibrarySort>,
     /// Interface zoom, egui's zoom factor; Ctrl+plus/minus changes it.
     pub zoom: f32,
     /// The Winamp window is open.
@@ -354,7 +357,7 @@ impl Default for Settings {
             pinned_contexts: Vec::new(),
             liked_songs_pinned: true,
             sidebar_order: Vec::new(),
-            library_sort: std::collections::BTreeMap::new(),
+            library_sort: None,
             zoom: 1.0,
             winamp_window: false,
             winamp_show_taskbar: true,
@@ -725,6 +728,27 @@ mod tests {
         }
     }
 
+    /// Older files kept an order for each Library shelf. The playlists'
+    /// order survives; the others, and the Spotify order, are dropped
+    /// without losing the rest of the file.
+    #[test]
+    fn the_library_keeps_its_playlist_order_from_older_files() {
+        for (sorts, kept) in [
+            (r#"{"playlists": "name", "albums": "recently_added"}"#, Some(super::LibrarySort::Name)),
+            (r#"{"playlists": "spotify", "podcasts": "library"}"#, None),
+            ("{}", None),
+        ] {
+            let settings: Settings =
+                serde_json::from_str(&format!(r#"{{"volume": 37, "library_sort": {sorts}}}"#))
+                    .unwrap();
+            assert_eq!(settings.volume, 37);
+            assert_eq!(settings.library_sort, kept);
+            let saved: Settings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(saved.library_sort, kept);
+        }
+    }
+
     #[test]
     fn older_settings_keep_the_sidebar_visible() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
@@ -868,16 +892,6 @@ mod tests {
 
 }
 
-/// The last playlist tree received for one account.
-///
-/// Only folder order is cached. Edit grants must always come from the live
-/// session because they can be revoked.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CachedRootlist {
-    pub account_id: String,
-    pub entries: Vec<crate::player::RootlistEntry>,
-}
-
 /// The profile of the account last signed in to a music server. The next
 /// launch opens onto it while that server restores the saved session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -907,11 +921,6 @@ pub struct SessionState {
     /// Queue rows displayed on the next start. Playback restores manual rows
     /// from `last_added_queue`; it does not enqueue this list.
     pub last_queue_rows: Vec<crate::api::models::PlayableItem>,
-    /// Sidebar folders rolled up, by their rootlist ids.
-    pub collapsed_folders: Vec<String>,
-    /// Last good playlist tree, scoped to the account that supplied it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rootlist: Option<CachedRootlist>,
     /// The signed-in account, cleared when it signs out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<CachedAccount>,
@@ -976,14 +985,15 @@ impl SessionState {
 
 #[cfg(test)]
 mod session_tests {
-    use super::{CachedAccount, CachedRootlist, SessionState};
-    use crate::player::RootlistEntry;
+    use super::{CachedAccount, SessionState};
 
     #[test]
-    fn old_sessions_without_a_playlist_tree_remain_readable() {
-        let state: SessionState = serde_json::from_str(r#"{"last_page":"home"}"#).unwrap();
+    fn old_sessions_with_a_playlist_tree_remain_readable() {
+        let state: SessionState = serde_json::from_str(
+            r#"{"last_page":"home","collapsed_folders":["f1"],"rootlist":{"account_id":"listener","entries":[{"Playlist":"spotify:playlist:one"}]}}"#,
+        )
+        .unwrap();
         assert_eq!(state.last_page.as_deref(), Some("home"));
-        assert_eq!(state.rootlist, None);
         assert_eq!(state.account, None);
     }
 
@@ -997,27 +1007,6 @@ mod session_tests {
                     display_name: Some("Listener".into()),
                     ..Default::default()
                 },
-            }),
-            ..SessionState::default()
-        };
-
-        let json = serde_json::to_string(&state).unwrap();
-        assert_eq!(serde_json::from_str::<SessionState>(&json).unwrap(), state);
-    }
-
-    #[test]
-    fn the_playlist_tree_round_trips_with_its_account() {
-        let state = SessionState {
-            rootlist: Some(CachedRootlist {
-                account_id: "listener".into(),
-                entries: vec![
-                    RootlistEntry::FolderStart {
-                        id: "folder".into(),
-                        name: "Favorites".into(),
-                    },
-                    RootlistEntry::Playlist("spotify:playlist:one".into()),
-                    RootlistEntry::FolderEnd,
-                ],
             }),
             ..SessionState::default()
         };

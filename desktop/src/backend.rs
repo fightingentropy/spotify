@@ -108,12 +108,6 @@ pub enum ApiRequest {
         public: bool,
         description: String,
     },
-    UploadPlaylistCover {
-        id: String,
-        request: u64,
-        previous_urls: Vec<String>,
-        cover: crate::playlist_cover::Cover,
-    },
     UpdatePlaylist {
         id: String,
         name: Option<String>,
@@ -151,16 +145,7 @@ pub enum ApiRequest {
         offset: u32,
         generation: u64,
     },
-    SavedAlbums {
-        offset: u32,
-    },
-    FollowedArtists {
-        after: Option<String>,
-    },
     SavedShows {
-        offset: u32,
-    },
-    SavedEpisodes {
         offset: u32,
     },
     SetSaved {
@@ -302,13 +287,6 @@ pub enum ApiResponse {
         result: ApiResult<Page<PlaylistItem>>,
     },
     PlaylistCreated(ApiResult<Playlist>),
-    PlaylistCoverUploaded {
-        id: String,
-        request: u64,
-        previous_urls: Vec<String>,
-        cover: crate::playlist_cover::Cover,
-        result: ApiResult<()>,
-    },
     PlaylistUpdated {
         id: String,
         result: ApiResult<()>,
@@ -336,21 +314,9 @@ pub enum ApiResponse {
         account_id: Option<String>,
         result: ApiResult<Page<SavedTrack>>,
     },
-    SavedAlbums {
-        offset: u32,
-        result: ApiResult<Page<SavedAlbum>>,
-    },
-    FollowedArtists {
-        after: Option<String>,
-        result: ApiResult<CursorPage<Artist>>,
-    },
     SavedShows {
         offset: u32,
         result: ApiResult<Page<SavedShow>>,
-    },
-    SavedEpisodes {
-        offset: u32,
-        result: ApiResult<Page<SavedEpisode>>,
     },
     SavedChanged {
         uris: Vec<String>,
@@ -451,26 +417,12 @@ pub enum Command {
         password: String,
     },
     OpenThemesFolder,
-    CheckPlaylistCover {
-        id: String,
-        request: u64,
-        cover: crate::playlist_cover::Cover,
-        images: Vec<crate::api::models::Image>,
-    },
-    ChoosePlaylistCover {
-        id: String,
-        request: u64,
-        selected:
-            std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>>,
-    },
     SignOut,
     Player(PlayerCommand),
     Api(ApiRequest),
     Shutdown,
     /// The words of a track, from the music server.
     Lyrics(Box<LyricsRequest>),
-    /// The account's playlist tree, folders and all, from the session.
-    Rootlist,
     /// Read a playlist's cached items from disk.
     LoadPlaylistCache {
         id: String,
@@ -500,17 +452,6 @@ pub struct LyricsRequest {
 
 pub enum Event {
     Downloads(Box<crate::download_tasks::Response>),
-    PlaylistCoverChecked {
-        id: String,
-        request: u64,
-        images: Vec<crate::api::models::Image>,
-        result: Result<bool, String>,
-    },
-    PlaylistCoverChosen {
-        id: String,
-        request: u64,
-        result: Result<Option<crate::playlist_cover::Cover>, String>,
-    },
     Auth(AuthStatus),
     Playback(LocalPlayback),
     Local(Box<LocalState>),
@@ -520,11 +461,6 @@ pub enum Event {
     Lyrics {
         uri: String,
         result: Result<Option<crate::lyrics::Lyrics>, String>,
-    },
-    /// The account's playlist tree, folders and all, and which of its
-    /// playlists take songs from this account.
-    Rootlist {
-        result: Result<crate::player::Rootlist, String>,
     },
     /// The result of reading a playlist cache for this load generation.
     PlaylistCache {
@@ -691,23 +627,6 @@ impl Backend {
             return;
         }
         let _ = self.commands.send(command);
-    }
-
-    /// Construct the native dialog on the UI thread, then await and read it
-    /// on the runtime. AppKit requires its window lookup on the main thread.
-    pub fn choose_playlist_cover(&self, id: String, request: u64) {
-        if self.offline {
-            return;
-        }
-        let selected = rfd::AsyncFileDialog::new()
-            .set_title("Choose playlist cover")
-            .add_filter("JPEG or PNG image", &["jpg", "jpeg", "png"])
-            .pick_file();
-        self.send(Command::ChoosePlaylistCover {
-            id,
-            request,
-            selected: Box::pin(selected),
-        });
     }
 
     pub fn api(&self, request: ApiRequest) {

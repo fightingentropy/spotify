@@ -9,7 +9,7 @@ use crate::api::models::{Album, Image, PlayableItem, Playlist, pick_image};
 use crate::app::App;
 use crate::i18n::{Locale, gettext, ngettext};
 use crate::model::{
-    Action, Dialog, DragTrack, Loadable, Page, PagedList, RowContext, RowPick, SortColumn,
+    Action, DragTrack, Loadable, Page, PagedList, RowContext, RowPick, SortColumn,
     TableItem, TableRowsCache, TableSort,
 };
 use crate::theme::{self, Icon, Palette};
@@ -1981,17 +1981,6 @@ fn contributors_text(locale: Locale, named: &[String], others: usize) -> String 
 }
 
 #[allow(dead_code)]
-fn playlist_dialog(app: &mut App, playlist: &Playlist) {
-    app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
-        cover: Default::default(),
-        id: playlist.id.clone(),
-        name: playlist.name.clone(),
-        description: playlist.description.clone().unwrap_or_default(),
-        public: playlist.public,
-    }));
-}
-
-#[allow(dead_code)]
 fn rect_after(ui: &egui::Ui, height: f32) -> Rect {
     let cursor = ui.cursor();
     Rect::from_min_size(
@@ -2009,7 +1998,7 @@ fn palette_of(app: &App) -> Palette {
 mod tests {
     use super::*;
     use crate::api::models::{Album, ArtistRef, Image, Track};
-    use crate::model::PlaylistPage;
+    use crate::model::{Dialog, PlaylistPage};
 
     #[test]
     fn hero_images_keep_the_previous_art_until_the_new_cover_is_ready() {

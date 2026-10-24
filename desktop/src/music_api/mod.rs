@@ -1586,18 +1586,6 @@ impl MusicApi {
                     result,
                 }
             }
-            Q::UploadPlaylistCover {
-                id,
-                request,
-                previous_urls,
-                cover,
-            } => R::PlaylistCoverUploaded {
-                id,
-                request,
-                previous_urls,
-                cover,
-                result: Err(unsupported()),
-            },
             Q::Devices => R::Devices(Err(unsupported())),
             Q::PlaybackState { seq } => R::PlaybackState {
                 seq,
@@ -1607,21 +1595,9 @@ impl MusicApi {
                 seq,
                 result: Err(unsupported()),
             },
-            Q::SavedAlbums { offset } => R::SavedAlbums {
-                offset,
-                result: Err(unsupported()),
-            },
-            Q::FollowedArtists { after } => R::FollowedArtists {
-                after,
-                result: Err(unsupported()),
-            },
             Q::SavedShows { offset } => R::SavedShows {
                 result: self.podcast_shows(offset).await,
                 offset,
-            },
-            Q::SavedEpisodes { offset } => R::SavedEpisodes {
-                offset,
-                result: Err(unsupported()),
             },
             Q::Show { id } => R::Show {
                 result: self.podcast_show(&id).await,

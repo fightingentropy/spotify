@@ -243,7 +243,7 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                                 Page::Search => search::show(app, ui),
                                 Page::Downloads => downloads::draw(ui, app),
                                 Page::LikedSongs => collection::liked(app, ui),
-                                Page::Albums | Page::Artists | Page::Podcasts | Page::Episodes => {
+                                Page::Podcasts => {
                                     library::show(app, ui, page)
                                 }
                                 Page::Playlist(id) => collection::playlist(app, ui, &id),

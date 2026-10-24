@@ -1021,7 +1021,6 @@ pub fn context_menu_items(
             &gettext(locale, "Edit details"),
         ) {
             app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
-                cover: Default::default(),
                 id: playlist.id.clone(),
                 name: playlist.name.clone(),
                 description: playlist
@@ -3849,12 +3848,12 @@ mod tests {
             virtual_rows(ui, 5, 40.0, |ui, _| {
                 ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
             });
-            load_more_when_near_end(ui, &mut app, Page::Albums, true);
+            load_more_when_near_end(ui, &mut app, Page::Podcasts, true);
         });
         assert!(
             app.actions
                 .iter()
-                .any(|action| matches!(action, Action::LoadMore(Page::Albums))),
+                .any(|action| matches!(action, Action::LoadMore(Page::Podcasts))),
             "a short list must request the next page: {:?}",
             app.actions
         );
@@ -3867,7 +3866,7 @@ mod tests {
         let clip = Rect::from_min_size(pos2(0.0, 0.0), size);
         run(size, clip, Vec::new(), |ui| {
             virtual_rows(ui, 10_000, 40.0, |_, _| {});
-            load_more_when_near_end(ui, &mut app, Page::Albums, true);
+            load_more_when_near_end(ui, &mut app, Page::Podcasts, true);
         });
         assert!(
             app.actions.is_empty(),
@@ -3881,13 +3880,13 @@ mod tests {
             Vec::new(),
             |ui| {
                 virtual_rows(ui, 10_000, 40.0, |_, _| {});
-                load_more_when_near_end(ui, &mut app, Page::Albums, true);
+                load_more_when_near_end(ui, &mut app, Page::Podcasts, true);
             },
         );
         assert!(
             app.actions
                 .iter()
-                .any(|action| matches!(action, Action::LoadMore(Page::Albums))),
+                .any(|action| matches!(action, Action::LoadMore(Page::Podcasts))),
             "scrolling near the end must page: {:?}",
             app.actions
         );

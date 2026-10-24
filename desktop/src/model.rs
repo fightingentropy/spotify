@@ -112,10 +112,7 @@ pub enum Page {
     Search,
     Downloads,
     LikedSongs,
-    Albums,
-    Artists,
     Podcasts,
-    Episodes,
     Playlist(String),
     Album(String),
     Artist(String),
@@ -132,10 +129,7 @@ impl Page {
             Page::Search => "search".into(),
             Page::Downloads => "downloads".into(),
             Page::LikedSongs => "liked".into(),
-            Page::Albums => "albums".into(),
-            Page::Artists => "artists".into(),
             Page::Podcasts => "podcasts".into(),
-            Page::Episodes => "episodes".into(),
             Page::Playlist(id) => format!("playlist:{id}"),
             Page::Album(id) => format!("album:{id}"),
             Page::Artist(id) => format!("artist:{id}"),
@@ -152,10 +146,7 @@ impl Page {
             "search" => Page::Search,
             "downloads" => Page::Downloads,
             "liked" => Page::LikedSongs,
-            "albums" => Page::Albums,
-            "artists" => Page::Artists,
             "podcasts" => Page::Podcasts,
-            "episodes" => Page::Episodes,
             "queue" => Page::Queue,
             "settings" => Page::Settings,
             other => {
@@ -567,10 +558,7 @@ pub struct Library {
     /// already taken adds nothing.
     pub playlists_asked: Option<u32>,
     pub liked: PagedList<SavedTrack>,
-    pub albums: PagedList<SavedAlbum>,
-    pub artists: CursorList<Artist>,
     pub shows: PagedList<SavedShow>,
-    pub episodes: PagedList<SavedEpisode>,
     pub filter: String,
 }
 
@@ -811,7 +799,6 @@ pub enum Dialog {
         add_uris: Vec<String>,
     },
     EditPlaylist {
-        cover: crate::playlist_cover::Draft,
         id: String,
         name: String,
         description: String,
@@ -954,8 +941,6 @@ pub enum Action {
         public: bool,
         add_uris: Vec<String>,
     },
-    ChoosePlaylistCover(String),
-    UploadPlaylistCover(String),
     UpdatePlaylist {
         id: String,
         name: String,
@@ -1011,12 +996,8 @@ pub enum Action {
     OpenThemesFolder,
     SetCustomTheme(String),
     ReloadThemes,
-    SetLibrarySort {
-        shelf: crate::settings::LibraryShelf,
-        sort: crate::settings::LibrarySort,
-    },
+    SetLibrarySort(crate::settings::LibrarySort),
     SetLibraryGrid(bool),
-    ToggleLibraryFolder(String),
     ArrangeLibrary {
         pinned: Vec<String>,
         /// A drag outside the pin block selects this local playlist order.
@@ -1089,8 +1070,10 @@ mod page_uri_tests {
     use super::Page;
 
     #[test]
-    fn a_saved_radio_page_no_longer_opens() {
-        assert_eq!(Page::decode("radio:spotify:track:abc"), None);
+    fn a_saved_page_the_app_no_longer_has_opens_home_instead() {
+        for page in ["radio:spotify:track:abc", "albums", "artists", "episodes"] {
+            assert_eq!(Page::decode(page), None, "{page}");
+        }
     }
 
     #[test]
