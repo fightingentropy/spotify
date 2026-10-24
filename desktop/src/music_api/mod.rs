@@ -1607,14 +1607,6 @@ impl MusicApi {
                 seq,
                 result: Err(unsupported()),
             },
-            Q::TopArtists { generation } => R::TopArtists {
-                generation,
-                result: Err(unsupported()),
-            },
-            Q::Recommendations { generation, .. } => R::Recommendations {
-                generation,
-                result: Err(unsupported()),
-            },
             Q::SavedAlbums { offset } => R::SavedAlbums {
                 offset,
                 result: Err(unsupported()),
@@ -1631,16 +1623,6 @@ impl MusicApi {
                 offset,
                 result: Err(unsupported()),
             },
-            Q::ArtistAlbums { id, groups, offset } => R::ArtistAlbums {
-                id,
-                groups,
-                offset,
-                result: Err(unsupported()),
-            },
-            Q::RelatedArtists { id } => R::RelatedArtists {
-                id,
-                result: Err(unsupported()),
-            },
             Q::Show { id } => R::Show {
                 result: self.podcast_show(&id).await,
                 id,
@@ -1649,10 +1631,6 @@ impl MusicApi {
                 result: self.podcast_episodes(&id, offset).await,
                 id,
                 offset,
-            },
-            Q::HomeEpisodes { generation, .. } => R::HomeEpisodes {
-                generation,
-                result: Err(unsupported()),
             },
             Q::Episode { id } => R::Episode {
                 result: self.podcast_episode(&id).await,

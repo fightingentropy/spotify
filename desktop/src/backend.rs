@@ -12,15 +12,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::api::models::*;
-use crate::api::{ApiError, ApiSource, NetActivity, PlayRequest};
-use crate::credentials::Lease as CredentialLease;
-use crate::credentials::Slot as CredentialSlot;
+use crate::api::{ApiError, NetActivity, PlayRequest};
 use crate::http::Http;
 use crate::images::ArtLoader;
 use crate::model::PlaylistCache;
 use crate::paths::AppDirs;
-use crate::player::{Engine, EngineConfig, LocalState, PlayerCommand};
-use crate::settings::ProxyConfig;
+use crate::player::{EngineConfig, LocalState, PlayerCommand};
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
@@ -30,7 +27,6 @@ pub const PLAYLIST_PAGE_SIZE: u32 = 50;
 pub enum AuthStatus {
     Starting,
     SignedOut,
-    WaitingForBrowser { url: String },
     Connecting,
     Connected { username: String },
     Failed(String),
@@ -77,14 +73,6 @@ pub enum ApiRequest {
     TopTracks {
         offset: u32,
         full: bool,
-        generation: u64,
-    },
-    TopArtists {
-        generation: u64,
-    },
-    Recommendations {
-        seed_tracks: Vec<String>,
-        seed_artists: Vec<String>,
         generation: u64,
     },
     Discover {
@@ -200,14 +188,6 @@ pub enum ApiRequest {
     ArtistTopTracks {
         id: String,
     },
-    ArtistAlbums {
-        id: String,
-        groups: String,
-        offset: u32,
-    },
-    RelatedArtists {
-        id: String,
-    },
     Album {
         id: String,
     },
@@ -227,12 +207,6 @@ pub enum ApiRequest {
     ShowEpisodes {
         id: String,
         offset: u32,
-    },
-    /// The newest episodes of a few saved podcasts, for Home. The shows
-    /// are read one after another, not all at once.
-    HomeEpisodes {
-        shows: Vec<Show>,
-        generation: u64,
     },
     Track {
         id: String,
@@ -296,14 +270,6 @@ pub enum ApiResponse {
         full: bool,
         generation: u64,
         result: ApiResult<Page<Track>>,
-    },
-    TopArtists {
-        generation: u64,
-        result: ApiResult<Vec<Artist>>,
-    },
-    Recommendations {
-        generation: u64,
-        result: ApiResult<Vec<Track>>,
     },
     Discover {
         term: String,
@@ -418,16 +384,6 @@ pub enum ApiResponse {
         id: String,
         result: ApiResult<Vec<Track>>,
     },
-    ArtistAlbums {
-        id: String,
-        groups: String,
-        offset: u32,
-        result: ApiResult<Page<Album>>,
-    },
-    RelatedArtists {
-        id: String,
-        result: ApiResult<Vec<Artist>>,
-    },
     Album {
         id: String,
         result: ApiResult<Album>,
@@ -451,11 +407,6 @@ pub enum ApiResponse {
         id: String,
         offset: u32,
         result: ApiResult<Page<Episode>>,
-    },
-    /// Each show with its newest episodes, in the order asked for.
-    HomeEpisodes {
-        generation: u64,
-        result: ApiResult<Vec<(Show, Vec<Episode>)>>,
     },
     Track {
         id: String,
@@ -500,15 +451,6 @@ pub enum Command {
         password: String,
     },
     OpenThemesFolder,
-    ProxyRestored {
-        lease: CredentialLease,
-        result: Result<crate::credentials::Loaded, crate::credentials::Error>,
-    },
-    CredentialsRestored {
-        slot: CredentialSlot,
-        lease: CredentialLease,
-        result: Result<crate::credentials::Loaded, crate::credentials::Error>,
-    },
     CheckPlaylistCover {
         id: String,
         request: u64,
@@ -521,109 +463,14 @@ pub enum Command {
         selected:
             std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>>,
     },
-    /// Start (or restart) the Web API sign-in in the browser.
-    SignIn {
-        request: u64,
-        config: ProxyConfig,
-    },
-    CancelSignIn,
     SignOut,
-    /// Authorize local playback on this computer (a separate browser grant).
-    AuthorizePlayback,
-    /// Reload the engine config (audio settings changed).
-    RestartEngine(EngineConfig),
-    /// Rebuild the HTTP client. Restart local playback only when its HTTP
-    /// proxy changed; Off, System, and SOCKS5 share a direct engine connection.
-    ApplyProxy {
-        request: u64,
-        config: ProxyConfig,
-    },
     Player(PlayerCommand),
     Api(ApiRequest),
-    ApiFinished {
-        generation: u64,
-        response: Box<ApiResponse>,
-        expired: Option<ApiSource>,
-        shared_lease: CredentialLease,
-        personal_lease: CredentialLease,
-    },
     Shutdown,
-    /// Internal: the Web API browser flow produced a grant.
-    WebSignedIn {
-        source: ApiSource,
-        token: Box<crate::auth::StoredToken>,
-        lease: CredentialLease,
-        attempt: u64,
-    },
-    WebVerified {
-        source: ApiSource,
-        token: Box<crate::auth::StoredToken>,
-        user: Box<User>,
-        lease: CredentialLease,
-        attempt: u64,
-    },
-    WebVerificationFailed {
-        source: ApiSource,
-        lease: CredentialLease,
-        attempt: u64,
-        error: ApiError,
-    },
-    /// Internal: a Web API browser flow or verification ended (success or not).
-    SignInEnded {
-        source: ApiSource,
-        attempt: u64,
-    },
-    /// Internal: the playback browser flow ended without a credential.
-    PlaybackAuthEnded {
-        attempt: u64,
-    },
-    /// Internal: the playback grant produced a streaming access token.
-    PlaybackAuthorized {
-        access_token: String,
-        lease: CredentialLease,
-        attempt: u64,
-    },
-    /// Internal: an engine connection attempt finished.
-    EngineConnected {
-        session_generation: u64,
-        engine: Box<Option<Engine>>,
-        error: Option<String>,
-        lease: CredentialLease,
-    },
-    /// Internal: librespot's session ended on its own.
-    Reconnect,
-    /// Look for Spotify Connect receivers on the local network.
-    DiscoverReceivers,
-    /// Send the account to a receiver so it joins Spotify Connect.
-    ActivateReceiver(Box<crate::zeroconf::Receiver>),
-    /// Ask GitHub whether a newer release exists. Manual checks report every
-    /// outcome; the daily check only announces a new release.
-    CheckForUpdates {
-        manual: bool,
-        source: crate::updates::Source,
-    },
-    InspectUpdate,
-    DownloadUpdate {
-        release: crate::updates::Release,
-        source: crate::updates::Source,
-    },
-    InstallUpdate {
-        prepared: Box<crate::updates::Prepared>,
-        arguments: Vec<String>,
-    },
-    /// The words of a track, from LRCLIB.
+    /// The words of a track, from the music server.
     Lyrics(Box<LyricsRequest>),
     /// The account's playlist tree, folders and all, from the session.
     Rootlist,
-    /// Internal: a rootlist read completed for this signed-in session.
-    RootlistFinished {
-        generation: u64,
-        result: Result<crate::player::Rootlist, String>,
-    },
-    /// Check that a reconnect's pickup really started, and try again if not.
-    VerifyResume,
-    /// Add, replace, or remove the optional personal Web API application.
-    ConfigurePersonalWebApp(Option<String>),
     /// Read a playlist's cached items from disk.
     LoadPlaylistCache {
         id: String,
@@ -644,62 +491,15 @@ pub enum Command {
         generation: u64,
     },
     StoreLikedSongsCache(crate::liked::Cache),
-    /// Resolve the precise type of Web API singles through the streaming session.
-    AlbumTypes(Vec<String>),
-    /// Ask the streaming session which saved shows are audiobooks.
-    AudiobookShows(Vec<String>),
-    /// Resolve Spotify's radio seeded by `seed` through the streaming session.
-    Radio {
-        seed: String,
-        generation: u64,
-    },
-    /// Internal: a radio finished resolving for the session it started in.
-    RadioResolved {
-        session_generation: u64,
-        seed: String,
-        generation: u64,
-        result: Result<Vec<crate::api::models::Track>, String>,
-    },
-    /// Internal: an audiobook lookup finished for the session it started in.
-    AudiobookShowsResolved {
-        session_generation: u64,
-        audiobooks: Vec<String>,
-    },
-    /// Internal: one precise album type lookup finished.
-    AlbumTypeResolved {
-        uri: String,
-        session_generation: u64,
-        engine_generation: u64,
-        result: Result<bool, String>,
-    },
 }
 
 pub struct LyricsRequest {
     /// The track the answer is for, so a stale one is ignored.
     pub uri: String,
-    pub query: crate::lyrics::Query,
 }
 
 pub enum Event {
     Downloads(Box<crate::download_tasks::Response>),
-    ProxyRestored {
-        config: ProxyConfig,
-        password: Option<crate::credentials::ProxyPassword>,
-    },
-    ProxyPasswordStored,
-    ProxyStorageFailed(crate::credentials::Error),
-    ProxyApplied {
-        request: u64,
-        config: ProxyConfig,
-        result: Result<bool, String>,
-    },
-    UpdateSupport(Result<crate::updates::Installation, String>),
-    UpdateProgress {
-        received: u64,
-        total: u64,
-    },
-    UpdateDownloaded(Result<Box<crate::updates::Prepared>, String>),
-    UpdateInstalling(Result<(), String>),
     PlaylistCoverChecked {
         id: String,
         request: u64,
@@ -713,20 +513,9 @@ pub enum Event {
     },
     Auth(AuthStatus),
     Playback(LocalPlayback),
-    /// Receivers seen on the local network that Spotify has not listed.
-    Receivers(Vec<crate::zeroconf::Receiver>),
-    ReceiverActivated {
-        name: String,
-        result: Result<(), String>,
-    },
     Local(Box<LocalState>),
     Api(Box<ApiResponse>),
     Error(String),
-    /// GitHub answered an update check, or the request failed.
-    UpdateChecked {
-        manual: bool,
-        result: Result<Option<crate::updates::Release>, String>,
-    },
     /// Track lyrics, or `None` when unavailable.
     Lyrics {
         uri: String,
@@ -756,24 +545,6 @@ pub enum Event {
         id: String,
         name: Option<String>,
     },
-    /// Saved shows that Spotify's metadata marks as audiobooks. librespot
-    /// cannot play them, so the Podcasts shelf leaves them out.
-    AudiobookShows(Vec<String>),
-    /// The songs of the radio seeded by `seed`, for the request `generation`.
-    Radio {
-        seed: String,
-        generation: u64,
-        result: Result<Vec<crate::api::models::Track>, String>,
-    },
-    /// Whether Spotify's internal metadata positively identifies an album as an EP.
-    AlbumType {
-        uri: String,
-        result: Result<bool, String>,
-    },
-    /// The verified personal Web API app, or `None` when it is disabled.
-    WebApp {
-        client_id: Option<String>,
-    },
     LikedSongsCache {
         account_id: String,
         generation: u64,
@@ -784,13 +555,9 @@ pub enum Event {
 /// The state of playback on this computer, independent of Web API sign-in.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LocalPlayback {
-    /// Not authorized; local playback is unavailable but the app still works.
+    /// Not signed in; local playback is unavailable but the app still works.
     Unavailable,
-    /// The browser is open for the playback grant.
-    Authorizing,
-    /// Connecting the librespot engine.
-    Connecting,
-    /// This computer is a ready Spotify Connect device.
+    /// The music player is ready on this computer.
     Ready {
         device_id: String,
     },
@@ -827,17 +594,12 @@ pub struct Backend {
     queued_tracks: std::sync::Mutex<Vec<String>>,
     #[cfg(test)]
     player_commands: std::sync::Mutex<Vec<PlayerCommand>>,
-    #[cfg(test)]
-    album_type_requests: std::sync::Mutex<Vec<Vec<String>>>,
-    #[cfg(test)]
-    home_episode_requests: std::sync::Mutex<Vec<(Vec<String>, u64)>>,
 }
 
 impl Backend {
     pub fn spawn(
         dirs: AppDirs,
         engine_config: EngineConfig,
-        _web_client_id: Option<String>,
         waker: Waker,
         restore_sign_in: bool,
     ) -> Self {
@@ -852,7 +614,7 @@ impl Backend {
         let http = {
             let event_tx = event_tx.clone();
             let waker = waker.clone();
-            Http::build_in_background(engine_config.proxy.clone(), move |error| {
+            Http::build_in_background(move |error| {
                 let _ = event_tx.send(Event::Error(format!(
                     "Network configuration failed: {error}"
                 )));
@@ -881,7 +643,7 @@ impl Backend {
                     )
                     .await;
                 });
-                // Give librespot's own threads a moment to release the audio device.
+                // Give the player's threads a moment to release the audio device.
                 runtime.shutdown_timeout(Duration::from_secs(2));
             })
             .expect("unable to start the backend thread");
@@ -909,10 +671,6 @@ impl Backend {
             queued_tracks: std::sync::Mutex::new(Vec::new()),
             #[cfg(test)]
             player_commands: std::sync::Mutex::new(Vec::new()),
-            #[cfg(test)]
-            album_type_requests: std::sync::Mutex::new(Vec::new()),
-            #[cfg(test)]
-            home_episode_requests: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -929,16 +687,7 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
-        if self.offline
-            && !matches!(
-                command,
-                Command::Shutdown
-                    | Command::CheckForUpdates { .. }
-                    | Command::InspectUpdate
-                    | Command::DownloadUpdate { .. }
-                    | Command::InstallUpdate { .. }
-            )
-        {
+        if self.offline && !matches!(command, Command::Shutdown) {
             return;
         }
         let _ = self.commands.send(command);
@@ -1033,27 +782,7 @@ impl Backend {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push((id.clone(), *offset, *generation));
         }
-        #[cfg(test)]
-        if let ApiRequest::HomeEpisodes { shows, generation } = &request {
-            self.home_episode_requests
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push((
-                    shows.iter().map(|show| show.id.clone()).collect(),
-                    *generation,
-                ));
-        }
         self.send(Command::Api(request));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn take_home_episode_requests(&self) -> Vec<(Vec<String>, u64)> {
-        std::mem::take(
-            &mut *self
-                .home_episode_requests
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
     }
 
     #[cfg(test)]
@@ -1124,25 +853,6 @@ impl Backend {
             self.queued_tracks.lock().unwrap().push(uri.clone());
         }
         self.send(Command::Player(command));
-    }
-
-    pub(crate) fn album_types(&self, uris: Vec<String>) {
-        #[cfg(test)]
-        self.album_type_requests
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(uris.clone());
-        self.send(Command::AlbumTypes(uris));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn take_album_type_requests(&self) -> Vec<Vec<String>> {
-        std::mem::take(
-            &mut *self
-                .album_type_requests
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
     }
 
     pub fn poll(&self) -> Vec<Event> {

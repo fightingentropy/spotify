@@ -22,9 +22,6 @@ const SPINNER_SIZE: f32 = 15.0;
 /// the padding its own label needs.
 const BADGE_PADDING_Y: f32 = 12.0;
 const DEVICE_BADGE_PADDING: f32 = 28.0;
-/// The text starts 24 px in; leave 8 px after it to match the space before
-/// the icon.
-const UPDATE_BADGE_PADDING: f32 = 32.0;
 /// The width the search field aims for, the most it ever takes, and the
 /// least it shrinks to before the badges give up their labels instead.
 const SEARCH_IDEAL: f32 = 320.0;
@@ -285,23 +282,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 ui.painter()
                     .layout_no_wrap(label, theme::medium(12.5), palette.accent)
             });
-            let update = app.update.clone();
-            let update_galley = update.as_ref().map(|update| {
-                let label = match &app.update_download {
-                    crate::updates::DownloadState::Ready(_) => {
-                        gettext(locale, "Update ready").into_owned()
-                    }
-                    crate::updates::DownloadState::Downloading { .. } => {
-                        gettext(locale, "Downloading update…").into_owned()
-                    }
-                    _ => {
-                        // Translators: {version} is a version number such as 1.2.0.
-                        gettext(locale, "Update to {version}").replace("{version}", &update.version)
-                    }
-                };
-                ui.painter()
-                    .layout_no_wrap(label, theme::medium(12.5), palette.accent)
-            });
             // Ask once, so the bar reserves room for exactly the spinner it
             // then draws.
             let busy = app
@@ -310,7 +290,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 .busy(std::time::Duration::from_millis(1000));
             let badges = |labels: bool| {
                 badge_width(device_galley.as_ref(), DEVICE_BADGE_PADDING, labels)
-                    + badge_width(update_galley.as_ref(), UPDATE_BADGE_PADDING, labels)
             };
             let controls = RIGHT_CONTROLS_WIDTH
                 + if busy {
@@ -547,26 +526,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if response.clicked() {
                         app.actions.push(Action::ToggleDevicesPopup);
                     }
-                }
-                // A newer release. Most people never visit a releases page,
-                // so the app says so, quietly, until they do.
-                if let (Some(galley), Some(update)) = (update_galley, update)
-                    && badge(
-                        ui,
-                        &palette,
-                        Icon::Info,
-                        galley,
-                        UPDATE_BADGE_PADDING,
-                        fit.labels,
-                    )
-                    .on_hover_text(
-                        // Translators: {version} is a version number such as 1.2.0.
-                        gettext(locale, "Version {version} is available.")
-                            .replace("{version}", &update.version),
-                    )
-                    .clicked()
-                {
-                    app.actions.push(Action::ShowUpdate);
                 }
             });
         },

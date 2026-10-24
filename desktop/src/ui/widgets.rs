@@ -3334,33 +3334,6 @@ pub fn proxy_manual_form(
     changed
 }
 
-pub fn proxy_scope_note(
-    ui: &mut Ui,
-    palette: &Palette,
-    locale: Locale,
-    mode: crate::settings::ProxyMode,
-) {
-    let note = match mode {
-        crate::settings::ProxyMode::Http => gettext(
-            locale,
-            "Proxy login applies to Web requests. Local playback uses this proxy only without a login.",
-        ),
-        crate::settings::ProxyMode::Socks => gettext(
-            locale,
-            "Spotify hostnames are resolved by the proxy. Local playback connects directly.",
-        ),
-        crate::settings::ProxyMode::Off | crate::settings::ProxyMode::System => return,
-    };
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(note)
-                .font(theme::regular(13.0))
-                .color(palette.secondary),
-        )
-        .wrap(),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

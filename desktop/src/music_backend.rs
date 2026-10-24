@@ -274,23 +274,6 @@ pub async fn run(
                             Err(error) => { emit(&events, &waker, Event::Auth(AuthStatus::Failed(error))); continue; }
                         };
                     }
-                    Command::CancelSignIn => {
-                        downloads.cancel_all();
-                        tasks.abort_all();
-                        restoring = false;
-                        held.clear();
-                        while tasks.join_next().await.is_some() {}
-                        player = None;
-                        history.finish();
-                        account.clear();
-                        let _ = tokio::fs::create_dir_all(&dirs.state).await;
-                        let _ = tokio::fs::write(&revoked, b"sign in cancelled").await;
-                        let _deletion = sessions.request_delete();
-                        if let Ok(fresh) = MusicApi::new(&origin, http.clone()) { api = fresh; http.replace(api.client()); }
-                        emit(&events, &waker, Event::Playback(LocalPlayback::Unavailable));
-                        emit(&events, &waker, Event::Local(Box::default()));
-                        emit(&events, &waker, Event::Auth(AuthStatus::SignedOut));
-                    }
                     Command::SignOut => {
                         downloads.cancel_all();
                         tasks.abort_all();
@@ -369,10 +352,8 @@ pub async fn run(
                     Command::OpenThemesFolder => { let _ = open::that(dirs.config.join("themes")); }
                     Command::Rootlist => emit(&events, &waker, Event::Rootlist { result: Ok(Default::default()) }),
                     Command::UserNames(ids) => { for id in ids { emit(&events, &waker, Event::UserName { id, name: None }); } }
-                    Command::AlbumTypes(_) | Command::AudiobookShows(_) => {},
-                    // Spotify auth, network discovery, self-updates and remote control are
-                    // intentionally unreachable: this application talks only to our service.
-                    _ => {},
+                    // Playlist covers can't be changed on our service.
+                    Command::CheckPlaylistCover { .. } | Command::ChoosePlaylistCover { .. } => {},
                 }
             }
         }
@@ -425,7 +406,6 @@ mod tests {
         assert!(waits_for_session(&Command::Api(ApiRequest::Devices)));
         assert!(waits_for_session(&Command::Rootlist));
         assert!(!waits_for_session(&Command::SignOut));
-        assert!(!waits_for_session(&Command::CancelSignIn));
         assert!(!waits_for_session(&Command::Shutdown));
     }
     #[test]

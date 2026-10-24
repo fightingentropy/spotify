@@ -90,13 +90,6 @@ impl History {
         self.dirty = true;
     }
 
-    pub fn clear(&mut self) {
-        if self.plays.is_empty() {
-            return;
-        }
-        self.plays.clear();
-        self.dirty = true;
-    }
 }
 
 /// Converts the playing track into a history record.

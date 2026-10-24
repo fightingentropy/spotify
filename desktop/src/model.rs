@@ -1,6 +1,5 @@
 //! UI state, loaded data, and pending actions.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -121,9 +120,6 @@ pub enum Page {
     Album(String),
     Artist(String),
     Show(String),
-    /// Spotify's radio seeded by a song, playlist, album, or artist, by the
-    /// seed's URI.
-    Radio(String),
     Queue,
     Settings,
 }
@@ -144,7 +140,6 @@ impl Page {
             Page::Album(id) => format!("album:{id}"),
             Page::Artist(id) => format!("artist:{id}"),
             Page::Show(id) => format!("show:{id}"),
-            Page::Radio(seed) => format!("radio:{seed}"),
             Page::Queue => "queue".into(),
             Page::Settings => "settings".into(),
         }
@@ -170,7 +165,6 @@ impl Page {
                     "album" => Page::Album(id.into()),
                     "artist" => Page::Artist(id.into()),
                     "show" => Page::Show(id.into()),
-                    "radio" if crate::util::station_uri(id).is_some() => Page::Radio(id.into()),
                     _ => return None,
                 }
             }
@@ -583,23 +577,16 @@ pub struct Library {
 #[derive(Default)]
 pub struct HomeData {
     pub recently_played: Loadable<Vec<PlayHistory>>,
-    pub top_artists: Loadable<Vec<Artist>>,
     /// Most-played metadata used by Home's On repeat collection card.
     pub top_tracks: Loadable<Vec<Track>>,
     /// The separately loaded, complete ranking shown by the Top Songs page.
     pub top_songs: Loadable<Vec<Track>>,
     pub top_songs_loading: bool,
     pub top_songs_complete: bool,
-    pub recommendations: Loadable<Vec<Track>>,
     /// Curated playlists returned by our music API, including charts and mixes.
     pub discover: Loadable<Vec<Playlist>>,
     /// The account owner's YouTube Music Home, reduced to playlist shelves.
     pub youtube_shelves: Loadable<Vec<HomeShelf>>,
-    /// Saved podcasts with their newest episodes, in library order, for the
-    /// podcast shelf. A refresh replaces them only once it answers.
-    pub podcasts: Vec<(Show, Vec<Episode>)>,
-    /// The Home generation whose podcast episodes were last asked for.
-    pub podcasts_generation: u64,
     pub generation: u64,
     pub top_songs_generation: u64,
     pub requested: bool,
@@ -732,62 +719,11 @@ pub struct AlbumPage {
     pub tracks: PagedList<Track>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DiscographyFilter {
-    #[default]
-    All,
-    Albums,
-    Singles,
-    AppearsOn,
-}
-
-impl DiscographyFilter {
-    pub const ALL: [DiscographyFilter; 4] =
-        [Self::All, Self::Albums, Self::Singles, Self::AppearsOn];
-
-    pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
-        use crate::i18n::{gettext, pgettext};
-        match self {
-            Self::All => pgettext(locale, "filter", "All"),
-            Self::Albums => gettext(locale, "Albums"),
-            Self::Singles => gettext(locale, "Singles & EPs"),
-            Self::AppearsOn => gettext(locale, "Appears On"),
-        }
-    }
-
-    pub fn groups(self) -> &'static str {
-        match self {
-            Self::All => "album,single,compilation",
-            Self::Albums => "album",
-            Self::Singles => "single",
-            Self::AppearsOn => "appears_on",
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct ArtistPage {
     pub artist: Loadable<Artist>,
     pub top_tracks: Loadable<Vec<Track>>,
-    pub albums: HashMap<String, PagedList<Album>>,
-    pub related: Loadable<Vec<Artist>>,
-    pub filter: DiscographyFilter,
     pub show_all_top: bool,
-}
-
-/// A radio page: the songs Spotify mixed for its seed, which are the songs
-/// its Play button plays.
-#[derive(Default)]
-pub struct RadioPage {
-    pub songs: Loadable<Vec<Track>>,
-    /// The name and artwork known when the page opened, kept should the
-    /// seed's own details be let go while the page stays.
-    pub name: Option<String>,
-    pub images: Vec<crate::api::models::Image>,
-    /// Identifies the request whose answer may fill `songs`.
-    pub generation: u64,
-    /// A new mix is on its way; the songs shown stay until it arrives.
-    pub refreshing: bool,
 }
 
 #[derive(Default)]
@@ -896,10 +832,6 @@ pub enum Dialog {
         duplicate_uris: Vec<String>,
     },
     Shortcuts,
-    /// The signed-in account is not Premium, so nothing will play.
-    PremiumNeeded,
-    /// Introduce personal Spotify apps to eligible listeners once.
-    PersonalAppIntro,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1032,17 +964,11 @@ pub enum Action {
     },
     DeletePlaylist(String),
     Transfer(String),
-    /// Send the account to a receiver found on the local network.
-    ActivateReceiver(Box<crate::zeroconf::Receiver>),
     RefreshDevices,
     /// Empty Next up of its queued songs, keeping the context's own.
     ClearQueue,
     /// Save the current and upcoming queue as a playlist.
     SaveQueueAsPlaylist,
-    /// Save a radio page's songs to a new playlist, by the seed's URI.
-    SaveRadio(String),
-    RefreshQueue,
-    CopyLink(String),
     /// Copy picked songs' links, one per line, and remember the songs so a
     /// paste of the same links can show their rows at once.
     CopySongs(Vec<PlayableItem>),
@@ -1053,7 +979,6 @@ pub enum Action {
     },
     /// Open a web page in the browser.
     OpenUrl(String),
-    OpenInSpotify(String),
     Search(String),
     ForgetSearch(String),
     SetSearchFilter(SearchFilter),
@@ -1067,19 +992,9 @@ pub enum Action {
     LoadMoreRecents,
     ReloadRecents,
     SetQueueTab(QueueTab),
-    LoadMoreArtistAlbums(String),
-    SetDiscographyFilter {
-        artist_id: String,
-        filter: DiscographyFilter,
-    },
     ToggleShowAllTop(String),
     Reload(Page),
-    SignIn,
-    CancelSignIn,
     SignOut,
-    /// Add, replace, or remove the optional personal Web API app.
-    ConfigurePersonalWebApp,
-    OpenPersonalAppSetup,
     ToggleSidebar,
     ToggleQueuePanel,
     ToggleLyricsPanel,
@@ -1089,11 +1004,6 @@ pub enum Action {
     PauseLyricsFollow,
     RetryLyrics,
     ToggleDevicesPopup,
-    /// Ask GitHub for the latest release and report the result to the user.
-    CheckForUpdates,
-    ShowUpdate,
-    DownloadUpdate,
-    InstallUpdate,
     SettingsChanged,
     SetTheme(crate::settings::ThemeChoice),
     /// Draw the interface in this language from the next frame on.
@@ -1112,17 +1022,9 @@ pub enum Action {
         /// A drag outside the pin block selects this local playlist order.
         playlist_order: Option<Vec<String>>,
     },
-    RestartEngine,
-    /// Rebuild the HTTP client with the proxy in settings. Local playback
-    /// restarts only when its HTTP proxy changed.
-    ApplyProxy,
-    ProxyEdited,
     EnablePlayback,
     ShowWindow,
     HideWindow,
-    ClearArtCache,
-    /// Clear local play history.
-    ClearPlayHistory,
     /// Open or close the Winamp window.
     ToggleWinampWindow,
     /// Keep playback in the macOS menu bar, without a window or Dock icon.
@@ -1185,6 +1087,11 @@ pub enum Action {
 #[cfg(test)]
 mod page_uri_tests {
     use super::Page;
+
+    #[test]
+    fn a_saved_radio_page_no_longer_opens() {
+        assert_eq!(Page::decode("radio:spotify:track:abc"), None);
+    }
 
     #[test]
     fn downloads_survives_navigation_restore() {
