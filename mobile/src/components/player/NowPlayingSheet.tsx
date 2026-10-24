@@ -25,6 +25,7 @@ import { PressableScale } from "@/components/ui/PressableScale";
 import { MarqueeText } from "@/components/ui/MarqueeText";
 import { Sheet } from "@/components/ui/Sheet";
 import { Scrubber } from "@/components/player/Scrubber";
+import { previousOrRestart } from "@/audio/actions";
 import { useIsAwaitingAudio } from "@/audio/buffering";
 import { LyricsView } from "@/components/player/LyricsView";
 import { DownloadProgressRing } from "@/components/song/DownloadProgressRing";
@@ -443,7 +444,7 @@ export function NowPlayingSheet({ visible, onClose }: { visible: boolean; onClos
               </PlainIconButton>
 
               <View className="flex-row items-center" style={{ gap: 18 }}>
-                <PlainIconButton onPress={previous} accessibilityLabel="Previous" size={48}>
+                <PlainIconButton onPress={() => void previousOrRestart()} accessibilityLabel="Previous" size={48}>
                   <SkipBack size={27} color={MONO_ACTIVE} fill={MONO_ACTIVE} />
                 </PlainIconButton>
                 <PressableScale

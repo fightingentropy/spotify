@@ -1,6 +1,5 @@
 import TrackPlayer, { Event } from "react-native-track-player";
-import { seekTo } from "@/audio/actions";
-import { previousRestartsSong } from "@/audio/previous-command";
+import { previousOrRestart } from "@/audio/actions";
 import { usePlayerStore } from "@/store/player";
 
 // The RNTP playback service: registered at app entry and run in a background-
@@ -15,8 +14,7 @@ export async function PlaybackService(): Promise<void> {
   TrackPlayer.addEventListener(Event.RemoteNext, () => usePlayerStore.getState().next());
   TrackPlayer.addEventListener(Event.RemotePrevious, async () => {
     const { position } = await TrackPlayer.getProgress().catch(() => ({ position: 0 }));
-    if (previousRestartsSong(position)) await seekTo(0);
-    else usePlayerStore.getState().previous();
+    await previousOrRestart(position);
   });
 
   TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }) => {

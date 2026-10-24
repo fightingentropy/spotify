@@ -32,6 +32,7 @@ import { getUpcomingPlaybackIndices, usePlayerStore } from "@/store/player";
 import { lockScreenArtwork } from "@/audio/track";
 import { isOwnHandledSong, MAX_CONSECUTIVE_AUDIO_ERRORS, refreshCurrentSong } from "@/audio/refresh";
 import { enforceSleepTimer } from "@/audio/sleep";
+import { previousRestartsSong } from "@/audio/previous-command";
 import { publishPlaybackState, setLastPosition, takePendingResumeSeek } from "@/audio/playback-sync";
 import { resetAudioProgress, setAudioProgress, useAudioProgressStore } from "@/audio/progress";
 import { setBufferingSong } from "@/audio/buffering";
@@ -697,7 +698,13 @@ function onRemote(e: RemoteEvent): void {
       s.next();
       break;
     case "prev":
-      s.previous();
+      // The same rule as the Now Playing button. actions.previousOrRestart can't
+      // be used here: actions imports this engine.
+      if (previousRestartsSong(useAudioProgressStore.getState().position, !!s.currentSong && isRadioSong(s.currentSong))) {
+        void seekNative(0);
+      } else {
+        s.previous();
+      }
       break;
     case "seek":
       if (typeof e.value === "number") void seekNative(e.value);

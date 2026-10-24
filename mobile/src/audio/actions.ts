@@ -3,8 +3,10 @@ import { useOfflineStore } from "@/store/offline";
 import { usePlayerStore } from "@/store/player";
 import { markPlaybackEngaged } from "@/audio/publish-gate";
 import { seek } from "@/audio/engine";
+import { previousRestartsSong } from "@/audio/previous-command";
+import { useAudioProgressStore } from "@/audio/progress";
 import { resolvePlaybackStartIndex } from "@/lib/playback-continuity";
-import { songKind } from "@/lib/player-song";
+import { isRadioSong, songKind } from "@/lib/player-song";
 import { isSameLogicalPlaybackSong } from "@/lib/staged-song-replacement";
 import type { PlayerSong } from "@/types/player";
 
@@ -85,4 +87,15 @@ export function toggleSongInList(songs: PlayerSong[], startIndex: number, contex
 export async function seekTo(seconds: number): Promise<void> {
   markPlaybackEngaged();
   await seek(Math.max(0, seconds));
+}
+
+// The Now Playing Previous button and Android's headphone "previous". Android
+// passes the player's own position, which stays exact while the UI is asleep.
+export async function previousOrRestart(
+  positionSeconds = useAudioProgressStore.getState().position,
+): Promise<void> {
+  const state = usePlayerStore.getState();
+  const live = state.currentSong ? isRadioSong(state.currentSong) : false;
+  if (previousRestartsSong(positionSeconds, live)) await seekTo(0);
+  else state.previous();
 }
