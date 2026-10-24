@@ -952,7 +952,6 @@ impl MusicApi {
         decode(
             value
                 .get("likedSongIds")
-                .or_else(|| value.get("likes"))
                 .cloned()
                 .unwrap_or_else(|| json!([])),
         )
