@@ -14,6 +14,6 @@ The fork uses its own application profile, credential-store service, process
 control port, and app bundle identifier. Upstream self-updates are disabled so an
 update cannot replace the StreamArena build with the Spotify client.
 
-Upstream compatibility modules and regression tests remain with the source to
-make future upstream fixes reviewable. They are not a second active provider.
+The upstream Spotify worker and its regression tests have been removed. To port
+an upstream fix, compare against the commit above.
 No upstream deployment workflows, release notes, or installation docs are used.
