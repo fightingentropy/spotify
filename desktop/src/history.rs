@@ -88,7 +88,6 @@ impl History {
         self.plays.truncate(KEPT);
         self.dirty = true;
     }
-
 }
 
 /// Converts the playing track into a history record.

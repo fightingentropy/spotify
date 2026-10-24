@@ -49,9 +49,8 @@ impl Http {
         std::thread::Builder::new()
             .name("http-client".into())
             .spawn(move || {
-                let built =
-                    std::panic::catch_unwind(build_client)
-                        .unwrap_or_else(|_| Err("The network client could not be built.".into()));
+                let built = std::panic::catch_unwind(build_client)
+                    .unwrap_or_else(|_| Err("The network client could not be built.".into()));
                 let error = built.as_ref().err().cloned();
                 let _ = first.first.set(built);
                 if let Some(error) = error {

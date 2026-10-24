@@ -400,7 +400,9 @@ mod tests {
     #[test]
     fn account_work_waits_for_a_restoring_session() {
         assert!(waits_for_session(&Command::Api(ApiRequest::Devices)));
-        assert!(waits_for_session(&Command::LoadLikedSongsCache { generation: 1 }));
+        assert!(waits_for_session(&Command::LoadLikedSongsCache {
+            generation: 1
+        }));
         assert!(!waits_for_session(&Command::SignOut));
         assert!(!waits_for_session(&Command::Shutdown));
     }

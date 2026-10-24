@@ -19969,9 +19969,7 @@ mod tests {
     /// playback chooses its own starting track.
     #[test]
     fn a_shuffled_play_does_not_start_at_track_one() {
-        use crate::api::models::{
-            PlayableItem, Playlist, PlaylistItem, Track, TrackCount,
-        };
+        use crate::api::models::{PlayableItem, Playlist, PlaylistItem, Track, TrackCount};
         let track = |uri: &str| {
             Some(PlayableItem::Track(Track {
                 uri: uri.into(),

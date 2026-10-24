@@ -288,9 +288,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 .backend
                 .activity()
                 .busy(std::time::Duration::from_millis(1000));
-            let badges = |labels: bool| {
-                badge_width(device_galley.as_ref(), DEVICE_BADGE_PADDING, labels)
-            };
+            let badges =
+                |labels: bool| badge_width(device_galley.as_ref(), DEVICE_BADGE_PADDING, labels);
             let controls = RIGHT_CONTROLS_WIDTH
                 + if busy {
                     SPINNER_SIZE + ITEM_SPACING

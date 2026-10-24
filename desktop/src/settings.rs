@@ -32,7 +32,9 @@ mod library_sort {
         BTreeMap::from_iter(sort.map(|sort| (PLAYLISTS, sort))).serialize(to)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<Option<LibrarySort>, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        from: D,
+    ) -> Result<Option<LibrarySort>, D::Error> {
         let shelves = BTreeMap::<String, serde_json::Value>::deserialize(from)?;
         Ok(shelves
             .get(PLAYLISTS)
@@ -715,7 +717,12 @@ mod tests {
         assert_eq!(settings.volume, 12345);
         assert_eq!(settings.theme, super::ThemeChoice::Light);
         let saved = serde_json::to_value(&settings).unwrap();
-        for retired in ["bitrate", "proxy_mode", "web_client_id", "check_for_updates"] {
+        for retired in [
+            "bitrate",
+            "proxy_mode",
+            "web_client_id",
+            "check_for_updates",
+        ] {
             assert!(saved.get(retired).is_none(), "{retired} is written again");
         }
     }
@@ -726,7 +733,10 @@ mod tests {
     #[test]
     fn the_library_keeps_its_playlist_order_from_older_files() {
         for (sorts, kept) in [
-            (r#"{"playlists": "name", "albums": "recently_added"}"#, Some(super::LibrarySort::Name)),
+            (
+                r#"{"playlists": "name", "albums": "recently_added"}"#,
+                Some(super::LibrarySort::Name),
+            ),
             (r#"{"playlists": "spotify", "podcasts": "library"}"#, None),
             ("{}", None),
         ] {
@@ -881,7 +891,6 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert!(restored.middle_click_autoscroll);
     }
-
 }
 
 /// The profile of the account last signed in to a music server. The next

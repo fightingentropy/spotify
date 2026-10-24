@@ -9,8 +9,8 @@ use crate::api::models::{Album, Image, PlayableItem, Playlist, pick_image};
 use crate::app::App;
 use crate::i18n::{Locale, gettext, ngettext};
 use crate::model::{
-    Action, DragTrack, Loadable, Page, PagedList, RowContext, RowPick, SortColumn,
-    TableItem, TableRowsCache, TableSort,
+    Action, DragTrack, Loadable, Page, PagedList, RowContext, RowPick, SortColumn, TableItem,
+    TableRowsCache, TableSort,
 };
 use crate::theme::{self, Icon, Palette};
 use crate::util;

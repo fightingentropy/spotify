@@ -12,8 +12,7 @@ use jiff::{SignedDuration, Timestamp};
 use crate::api::models::{
     Album, Artist, ArtistRef, Context, Copyright, Device, Episode, Followers, Image, Owner,
     Page as ApiPage, PlayHistory, PlayableItem, PlaybackState, Playlist, PlaylistItem, Queue,
-    ResumePoint, SavedShow, SavedTrack, SearchResults, Show, Track,
-    TrackCount, User,
+    ResumePoint, SavedShow, SavedTrack, SearchResults, Show, Track, TrackCount, User,
 };
 use crate::app::{App, RemoteSnapshot};
 use crate::backend::AuthStatus;
@@ -380,7 +379,6 @@ pub fn populate(app: &mut App) {
         .episodes
         .absorb(0, page((0..15).map(|index| episode(index, 0)).collect()));
     app.show_pages.insert("sh0".into(), show_page);
-
 
     // Library.
     app.library.liked.absorb(

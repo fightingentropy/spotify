@@ -236,12 +236,7 @@ impl Presets {
     }
 
     /// Downloads one preset pack on a worker thread.
-    pub fn download(
-        &mut self,
-        pack: &'static Pack,
-        folder: PathBuf,
-        ctx: egui::Context,
-    ) {
+    pub fn download(&mut self, pack: &'static Pack, folder: PathBuf, ctx: egui::Context) {
         if self.download.is_some() {
             return;
         }
@@ -260,11 +255,7 @@ impl Presets {
 
     /// Fetches every pack in one go, for a first open with nothing
     /// there; failures after the first pack still land what arrived.
-    pub fn download_missing(
-        &mut self,
-        folder: PathBuf,
-        ctx: egui::Context,
-    ) {
+    pub fn download_missing(&mut self, folder: PathBuf, ctx: egui::Context) {
         if self.download.is_some() {
             return;
         }
@@ -355,8 +346,8 @@ pub fn is_preset(path: &Path) -> bool {
 /// the packs keep theirs in folders by style and the names do not clash.
 /// Returns how many were written.
 pub fn fetch_pack(pack: &Pack, folder: &Path) -> Result<usize, String> {
-    let http = crate::http::build_blocking(Duration::from_secs(300))
-        .map_err(|error| error.to_string())?;
+    let http =
+        crate::http::build_blocking(Duration::from_secs(300)).map_err(|error| error.to_string())?;
     let bytes = http
         .get(pack.url)
         .send()

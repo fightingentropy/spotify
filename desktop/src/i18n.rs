@@ -197,7 +197,6 @@ impl Locale {
         )
         .replace("{count}", &count.to_string())
     }
-
 }
 
 /// Every bundled language, in the order the Settings picker lists them: by

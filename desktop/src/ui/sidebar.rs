@@ -1801,9 +1801,7 @@ mod ordering_tests {
     fn name_and_recent_sorts_keep_pins_and_do_not_rewrite_library_data() {
         let mut app = app("sorts");
         let mut entries = rows(&app);
-        order_entries(&app, LibrarySort::RecentlyPlayed,
-            &mut entries,
-        );
+        order_entries(&app, LibrarySort::RecentlyPlayed, &mut entries);
         assert_eq!(ids(&entries), ["d", "a", "b", "c"]);
         order_entries(&app, LibrarySort::Name, &mut entries);
         assert_eq!(ids(&entries), ["b", "c", "d", "a"]);

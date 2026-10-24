@@ -727,4 +727,3 @@ fn episodes(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: us
         super::show::episode_row(app, ui, episode, None);
     }
 }
-

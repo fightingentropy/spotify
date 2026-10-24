@@ -50,7 +50,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.add_space(8.0);
                     let body = if owned {
                         // Translators: {name} is a playlist name.
-                        gettext(locale, "Delete “{name}”? This removes the playlist from your library.")
+                        gettext(
+                            locale,
+                            "Delete “{name}”? This removes the playlist from your library.",
+                        )
                     } else {
                         // Translators: {name} is a playlist name.
                         gettext(locale, "“{name}” will no longer appear in Your Library.")
@@ -80,7 +83,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         {
                             app.actions.push(Action::DeletePlaylist(id.clone()));
                         }
-                        if theme::pill_button(ui, &palette, &gettext(locale, "Cancel"), false).clicked() {
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Cancel"), false)
+                            .clicked()
+                        {
                             app.actions.push(Action::CloseDialog);
                         }
                     });
@@ -115,7 +120,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     );
                     ui.add_space(20.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, &gettext(locale, "Add anyway"), true).clicked() {
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Add anyway"), true)
+                            .clicked()
+                        {
                             app.actions.push(Action::ConfirmAddToPlaylist {
                                 playlist_id: playlist_id.clone(),
                                 playlist_name: playlist_name.clone(),
@@ -123,13 +130,20 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 position,
                             });
                         }
-                        if theme::pill_button(ui, &palette, &gettext(locale, "Cancel"), false).clicked() {
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Cancel"), false)
+                            .clicked()
+                        {
                             app.actions.push(Action::CloseDialog);
                         }
                     });
                 }
                 Dialog::Shortcuts => {
-                    theme::text(ui, gettext(locale, "Keyboard shortcuts"), theme::bold(20.0), palette.text);
+                    theme::text(
+                        ui,
+                        gettext(locale, "Keyboard shortcuts"),
+                        theme::bold(20.0),
+                        palette.text,
+                    );
                     ui.add_space(12.0);
                     // `theme::text` truncates, which in a grid makes each cell
                     // claim almost no width and turns "Ctrl+Shift+A" into
@@ -149,8 +163,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     crate::autoscroll::show(
                         ui,
                         egui::ScrollArea::vertical()
-                        .max_height(room.max(120.0))
-                        .auto_shrink([false, true]),
+                            .max_height(room.max(120.0))
+                            .auto_shrink([false, true]),
                         egui::Vec2b::new(false, true),
                         |ui| {
                             egui::Grid::new("shortcuts")
@@ -172,7 +186,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     );
                     ui.add_space(16.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::pill_button(ui, &palette, &gettext(locale, "Done"), true).clicked() {
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Done"), true)
+                            .clicked()
+                        {
                             app.actions.push(Action::CloseDialog);
                         }
                     });
